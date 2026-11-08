@@ -412,6 +412,48 @@ class FieldSolver {
     }
     return {emag: m, ix, iy, xm: (ix + 0.5) * this.dx, ym: (iy + 0.5) * this.dy};
   }
+
+  /** k strongest-|E| cells, descending. Ground rows and top padding excluded. */
+  topFieldCells(k) {
+    const cand = [];
+    for (let x = 0; x < this.nx; x++) {
+      const g = this.groundRow[x];
+      for (let y = g + 1; y < this.ny - 1; y++) {
+        const v = this.emag[x * this.ny + y];
+        cand.push({emag: v, ix: x, iy: y, xm: (x + 0.5) * this.dx, ym: (y + 0.5) * this.dy});
+      }
+    }
+    cand.sort((a, b) => b.emag - a.emag);
+    return cand.slice(0, Math.max(1, k));
+  }
+
+  /**
+   * Normalized spatial gradient of charge density, seen through the sign of
+   * a leader tip: unit vector pointing toward INCREASING (−sign·rho), i.e.
+   * toward the opposite-charge region the tip seeks. Zero when rho is
+   * locally flat/neutral.
+   */
+  chargeSeekDir(xm, ym, sign, probeM) {
+    const nx = this.nx, ny = this.ny;
+    const fx = clampNum(xm / this.dx - 0.5, 0, nx - 1.001);
+    const fy = clampNum(ym / this.dy - 0.5, 0, ny - 1.001);
+    const ix = Math.floor(fx), iy = Math.floor(fy);
+    const h = Math.max(1, Math.round(probeM / ((this.dx + this.dy) * 0.5)));
+    const xp = Math.min(ix + h, nx - 1), xm_ = Math.max(ix - h, 0);
+    const yp = Math.min(iy + h, ny - 1), ym_ = Math.max(iy - h, 0);
+    const R = (x, y) => this.rho[x * ny + y];
+    const signed = (q) => -sign * q;
+    const gx = (signed(R(xp, iy)) - signed(R(xm_, iy)));
+    const gy = (signed(R(ix, yp)) - signed(R(ix, ym_)));
+    const m = Math.hypot(gx, gy);
+    if (m < 1e-15) return {x: 0, y: 0, strength: 0};
+    // scale-free strength: local gradient vs local mean |rho|, so the
+    // steering weight stays meaningful at any absolute charge level
+    const meanAbs = (Math.abs(R(xp, iy)) + Math.abs(R(xm_, iy)) +
+                     Math.abs(R(ix, yp)) + Math.abs(R(ix, ym_)) + Math.abs(R(ix, iy))) / 5;
+    const rel = clampNum(m / (meanAbs * 2 + 1e-14), 0, 1);
+    return {x: gx / m, y: gy / m, strength: rel};
+  }
 }
 
 /* ============================ particle pool ========================== */
@@ -1327,34 +1369,82 @@ class StormSim {
    * Scan for breakdown; if triggered, create a channel and immediately
    * develop its leaders. Returns the channel or null.
    */
+  /**
+   * Probe whether a tip of polarity `sign` starting at (xm,ym) can actually
+   * REACH an opposite-charge pocket by following the field: march along the
+   * propagation direction up to `maxDistM` and look for rho of opposite sign
+   * exceeding `level` relative to the charges seen en route.
+   */
+  _oppositeChargeReach(xm, ym, sign, dxn, dyn, maxDistM) {
+    const f = this.field;
+    const step = Math.min(f.dx, f.dy) * 0.8;
+    const probes = Math.max(2, Math.round(maxDistM / step));
+    const out = this._fOut2 || (this._fOut2 = {});
+    let best = null;
+    for (let k = 2; k < probes; k++) {
+      const px = xm + dxn * step * k, py = ym + dyn * step * k;
+      if (py <= 0 || py >= f.dy * f.ny - 1) break;
+      f.fieldAt(px, py, out);
+      const rho = out.rho;
+      if (Math.sign(rho) === -sign && Math.abs(rho) > 0.35e-9) {
+        best = {xm: px, ym: py, rho};
+        break;
+      }
+    }
+    return best;
+  }
+
   _maybeInitiateLightning() {
     if (!this.enableLightning) return null;
     const f = this.field;
-    const mf = f.maxField();
-    this.maxFieldNow = mf.emag;
-    const bx = mf.xm, by = mf.ym;
-    // local humidity for breakdown correction (env-relative)
-    const out = this._envOut;
-    this.env.sample(bx / this.env.cellSizeM, by / this.env.cellSizeM, out, this.wrapX);
-    const satW = Math.max(satVaporDensityWater(out.tK), 1e-6);
-    const rh = clampNum(out.vapor / satW, 0, 1.2);
+    this.maxFieldNow = f.maxField().emag;
+
+    // Candidate breakdown sites: strongest field cells, ranked. Prefer sites
+    // from which an opposite-charge region is reachable along the field —
+    // flashes then genuinely connect the simulated charge pattern (IC), or
+    // reach ground/space (CG/CA), rather than triggering inside one blob.
+    const cands = f.topFieldCells(10);
+    let chosen = null;
     // Hydrometeor- and turbulence-assisted initiation: observed in-cloud
     // initiation fields are ~150-400 kV/m, well below the dry-air 3 MV/m
-    // conventional breakdown. The 0.22 factor reflects that correction.
-    const Ebd = f.breakdownField(by, rh) * (this.breakdownScale || 0.22);
-    if (mf.emag < Ebd) return null;
+    // conventional breakdown. The ~0.2 factor reflects that correction.
+    const Ebd0 = (this.breakdownScale || 0.22);
+    const out2 = this._envOut2 || (this._envOut2 = {});
+    for (const c of cands) {
+      // local humidity-corrected breakdown level
+      this.env.sample(c.xm / this.env.cellSizeM, c.ym / this.env.cellSizeM, out2, this.wrapX);
+      const satWc = Math.max(satVaporDensityWater(out2.tK), 1e-6);
+      const rhc = clampNum(out2.vapor / satWc, 0, 1.2);
+      const EbdC = f.breakdownField(c.ym, rhc) * Ebd0;
+      if (c.emag < EbdC) continue;
+      const rhoC = f.fieldAt(c.xm, c.ym).rho;
+      const signC = rhoC <= 0 ? -1 : 1;
+      // march along expected leader direction for the opposite pocket
+      f.fieldAt(c.xm, c.ym, out2);
+      const dirE = signC < 0 ? 1 : -1;
+      const em = Math.max(out2.emag, 1e-9);
+      const reach = this._oppositeChargeReach(c.xm, c.ym, signC,
+        dirE * out2.ex / em, dirE * out2.ey / em, 3200);
+      chosen = {x: c.xm, y: c.ym, emag: c.emag, Ebd: EbdC, connectedness: reach ? 1.0 : 0.35, rho: rhoC};
+      if (reach) break; // strongly preferred: opposite-charge pocket reachable
+    }
+    if (!chosen) return null;
+    const bx = chosen.x, by = chosen.y;
+    const Ebd = chosen.Ebd;
     // Initiation is a stochastic streamer-runaway process: probability rises
-    // with field overdrive. Even in an over-critical storm only a few flashes
-    // start per second; each flash then collapses its local charge reservoir.
-    const overdrive = mf.emag / Ebd - 1.0;
-    if (this.rng() > Math.min(0.65, overdrive * 0.9)) return null;
+    // with field overdrive and with charge-structure connectedness. Each
+    // flash then collapses its local charge reservoir (relaxation cadence).
+    const overdrive = chosen.emag / Ebd - 1.0;
+    if (this.rng() > Math.min(0.65, overdrive * 0.9) * chosen.connectedness) return null;
 
     // determine polarity & kind from local charge structure
-    const rhoHere = f.fieldAt(bx, by).rho;
+    const rhoHere = chosen.rho;
     const groundDist = by - (this.env.groundAt(bx / this.env.cellSizeM, this.wrapX) * this.env.cellSizeM);
     const heightM = this.env.hCells * this.env.cellSizeM;
+    const out = this._envOut;
+    this.env.sample(bx / this.env.cellSizeM, by / this.env.cellSizeM, out, this.wrapX);
     let kind;
-    if (groundDist < 0.30 * heightM && mf.emag > Ebd * 1.02) kind = 'CG';
+    if (groundDist < 0.30 * heightM && chosen.emag > Ebd * 1.02) kind = 'CG';
     else if (out.cloud < 0.05 && Math.abs(rhoHere) > 0) kind = 'CA';
     else kind = 'IC'; // inside cloud (CC within-column flashes look like IC in 2D)
 
@@ -1407,9 +1497,24 @@ class StormSim {
       // move along E if sign<0 (electrons drift against E but leaders extend
       // toward opposite charge => conventional direction)
       const dirE = sign < 0 ? 1 : -1;
+      const inv = emag > 0 ? dirE / emag : 0;
+      let dxx = ex * inv, dyy = ey * inv;
+      // --- charge-pattern seeking: steer toward increasing opposite charge ---
+      // (E already encodes the field of the charge distribution; this explicit
+      //  gradient bias makes tips reliably thread into opposite-charge pockets,
+      //  which is also what channels physically discharge)
+      const seek = this.field.chargeSeekDir(x, y, sign, Math.max(f.dx, f.dy) * 2.2);
+      if (seek.strength > 0.02) {
+        const w = 0.55 * seek.strength; // 0..0.55 guided by charge organization
+        dxx = dxx * (1 - w) + seek.x * w;
+        dyy = dyy * (1 - w) + seek.y * w;
+        const nm = Math.hypot(dxx, dyy) || 1;
+        dxx /= nm; dyy /= nm;
+      }
       // stochastic angular jitter (branchy, lightning-like)
       const jitter = 0.55 * (Eprop / Math.max(emag, Eprop));
-      const ang = Math.atan2(ey * dirE, ex * dirE) + (this.rng() - 0.5) * 2.4 * jitter;
+      const baseAng = Math.atan2(dyy, dxx);
+      const ang = baseAng + (this.rng() - 0.5) * 2.4 * jitter;
       const bias = kind === 'CG' && sign < 0 ? -0.35 : 0; // CG negative leads earthward
       const dx = Math.cos(ang) * stepBase;
       const dy = Math.sin(ang) * stepBase * (1 + 0.15 * (this.rng() - 0.5)) + (bias * stepBase * this.rng());

@@ -243,6 +243,22 @@ function run() {
           `|dqTotal|=${Math.abs(st3.qTotal - beforeQ).toExponential(3)}`);
   }
 
+  /* --- 10. lightning connects the charge pattern --- */
+  {
+    const f = sim.field;
+    const cells = f.topFieldCells(6);
+    const sortedOK = cells.every((c, i, a) => i === 0 || a[i - 1].emag >= c.emag);
+    check('breakdown candidates ranked by field strength', sortedOK && cells.length === 6,
+          `top=${cells.map(c => c.emag.toExponential(1)).join(',')}`);
+    const sk = f.chargeSeekDir(6000, 6000, -1, 600);
+    const skMag = Math.hypot(sk.x, sk.y);
+    check('charge-seek direction is unit or zero', (skMag === 0 || Math.abs(skMag - 1) < 1e-6),
+          `|seek|=${skMag.toFixed(3)} strength=${sk.strength.toFixed(2)}`);
+    const reach = sim._oppositeChargeReach(cells[0].xm, cells[0].ym, -1, 0, -1, 3200);
+    check('opposite-charge reach probe callable', reach === null || Math.sign(reach.rho) === 1,
+          reach ? `reached rho=${reach.rho.toExponential(2)}` : 'none along this direction (ok)');
+  }
+
   console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} TEST(S) FAILED`);
   process.exit(failures ? 1 : 0);
 }

@@ -916,6 +916,86 @@
             color: #ff8b8b;
         }
 
+        /* --- storm physics loading screen upgrade --- */
+        .loading-screen::before {
+            content: '';
+            position: absolute;
+            inset: -40%;
+            background:
+                radial-gradient(ellipse 42% 30% at 28% 32%, rgba(66, 134, 255, 0.16), transparent 60%),
+                radial-gradient(ellipse 38% 26% at 72% 62%, rgba(150, 80, 220, 0.13), transparent 60%),
+                radial-gradient(ellipse 50% 34% at 50% 90%, rgba(255, 190, 80, 0.07), transparent 65%);
+            animation: loading-aurora 7s ease-in-out infinite alternate;
+            pointer-events: none;
+        }
+
+        @keyframes loading-aurora {
+            from { transform: translate3d(-2.5%, -1.5%, 0) scale(1); }
+            to { transform: translate3d(2.5%, 1.5%, 0) scale(1.06); }
+        }
+
+        .loading-brand {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 18px;
+        }
+
+        .loading-bolt {
+            width: clamp(40px, 7vw, 62px);
+            height: auto;
+            filter: drop-shadow(0 0 12px rgba(255, 205, 90, 0.75));
+            animation: bolt-flicker 2.6s steps(1, end) infinite;
+        }
+
+        @keyframes bolt-flicker {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            38% { opacity: 0.92; }
+            41% { opacity: 0.45; transform: scale(0.985); }
+            44% { opacity: 0.95; transform: scale(1.01); }
+            47% { opacity: 0.6; }
+            52% { opacity: 1; transform: scale(1); }
+        }
+
+        .loading-title {
+            color: #fff;
+            font: 600 clamp(20px, 4vw, 30px)/1.15 "Plus Jakarta Sans", sans-serif;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        .loading-tagline {
+            color: rgba(210, 228, 255, 0.72);
+            font: 400 clamp(11px, 1.6vw, 13px)/1.5 "Roboto", sans-serif;
+            letter-spacing: 0.045em;
+            max-width: 460px;
+            text-align: center;
+        }
+
+        .loading-bar-track {
+            background: rgba(255, 255, 255, 0.14);
+            border-radius: 999px;
+            box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45);
+            height: 8px;
+            margin-top: 20px;
+            overflow: hidden;
+            width: min(420px, 72vw);
+        }
+
+        .loading-bar-fill {
+            background: linear-gradient(90deg, #3d7bff, #7fb4ff 55%, #ffd76a);
+            border-radius: 999px;
+            box-shadow: 0 0 12px rgba(127, 180, 255, 0.75);
+            height: 100%;
+            transition: width 280ms cubic-bezier(0.3, 0.8, 0.3, 1);
+            width: 0%;
+        }
+
+        body.is-finishing .loading-bolt {
+            animation: none;
+        }
+
         @media (prefers-reduced-motion: reduce) {
             body.is-loading > :not(#loadingScreen):not(#mainCanvas),
             .loading-screen,
