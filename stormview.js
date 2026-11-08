@@ -75,6 +75,8 @@ class StormOverlay {
       view: 'charge',            // charge|combined|species|chargeDensity|field|potential|realistic
       showCharges: true,         // master toggle for all charge overlays/tinting
       chargeRate: 1.0,
+      cloudThreshold: 0.8,       // cloud+precip density that initiates IC
+      icRate: 2.2,               // IC initiations per simulated second
       particleBudget: 12000,
       alpha: 0.85,
       arrows: false,
@@ -154,6 +156,11 @@ class StormOverlay {
         .onChange(() => { /* takes effect next frame; HUD keeps stats */ });
       folder.add(this.params, 'chargeRate', 0.0, 6.0, 0.05).name('Charge separation rate')
         .onChange((v) => { if (this.sim) this.sim.chargeRate = v; });
+      folder.add(this.params, 'cloudThreshold', 0.1, 3.0, 0.05)
+        .name('IC cloud-density trigger')
+        .onChange((v) => { if (this.sim) this.sim.cloudTriggerThreshold = v; });
+      folder.add(this.params, 'icRate', 0.0, 8.0, 0.1).name('IC spawn rate (/s)')
+        .onChange((v) => { if (this.sim) this.sim.icSpawnRate = v; });
       folder.add(this.params, 'particleBudget', 2000, 40000, 500).name('Particle budget')
         .onChange((v) => { if (this.sim) this.sim.setParticleBudget(v); });
       folder.add(this.params, 'alpha', 0.2, 1.0, 0.05).name('Particle opacity');
@@ -393,6 +400,8 @@ class StormOverlay {
         seed: (Math.random() * 1e9) >>> 0,
         maxParticles: this.params.particleBudget,
         chargeRate: this.params.chargeRate,
+        cloudTriggerThreshold: this.params.cloudThreshold,
+        icSpawnRate: this.params.icRate,
         widthM: sim_res_x * cellHeight,
         heightM: sim_res_y * cellHeight,
         wrapX: !!guiControls.wrapHorizontally,
@@ -577,6 +586,8 @@ class StormOverlay {
     const dt = Math.min(dIter * timePerIteration * 3600.0, 25.0);
     if (dt > 0.0 && this.bootstrapped) {
       this.sim.chargeRate = this.params.chargeRate;
+      this.sim.cloudTriggerThreshold = this.params.cloudThreshold;
+      this.sim.icSpawnRate = this.params.icRate;
       this.sim.step(dt);
       if (this._demoT > 0) {
         this._demoT -= dt;
@@ -871,6 +882,9 @@ class StormOverlay {
       `\nhydrometeors ${st.particles}  (cl${counts[0]} sc${counts[1]} ice${counts[2]} sn${counts[3]} gr${counts[4]} hail${counts[5]} rain${counts[6]})` +
       `\ncharge +${st.qPositive.toExponential(2)} / ${st.qNegative.toExponential(2)} C   E max ${st.maxField.toExponential(2)} V/m` +
       `\nflashes ${st.flashes}   ch.on ${st.channels}   ground ${st.qGround.toExponential(2)} C` +
+      (this.sim.lastInitiation ?
+        `\nlast flash ${this.sim.lastInitiation.kind} @ ${(this.sim.lastInitiation.dens).toFixed(2)} g/m3 cloud` +
+        `${this.sim.lastInitiation.fromCloud ? ' (density trigger)' : ' (field trigger)'}` : '') +
       `\ntripole +${st.structure.upperPositive.toExponential(1)} / ${st.structure.mainNegative.toExponential(1)} / +${st.structure.lowerPositive.toExponential(1)}` +
       (this._demoT > 0 ? `\nDEMO STORM injecting ${this._demoT.toFixed(0)}s` : '');
   }

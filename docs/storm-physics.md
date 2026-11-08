@@ -3,8 +3,8 @@
 A physically based atmospheric microphysics, charge-separation and lightning
 engine layered onto the fluid weather sandbox. Everything visible — cloud,
 precipitation, electrification, lightning — **emerges** from underlying
-physics. There are no scripted lightning shapes, no random flash timers and
-no hardcoded charge regions.
+physics. There are no scripted lightning shapes, no flash timers detached
+from the simulated fields, and no hardcoded charge regions.
 
 ## Architecture
 
@@ -14,7 +14,7 @@ no hardcoded charge regions.
 | `stormview.js` | Live integration: strided GPU-column sampling of the fluid state into the storm environment, real-time stepping, WebGL2 overlay rendering, thunder sound hooks, dat.GUI folder, adaptive quality. |
 | `lightningGenerator.js` | Procedural lightning artwork in a Worker. `mode:'CG'` produces the classic downward bolt used by the legacy cloud-density lightning; `mode:'IC'` produces a wide, flat, heavily forked intra-cloud flash confined to a horizontal band. |
 | `shaders/storm/*` | GLSL overlay programs: `points.vert/.frag` (hydrometeor sprites), `field.frag`+`quad.vert` (charge density / E magnitude / potential), `lines.vert/.frag` (lightning channels), `ic.vert/.frag` (additive intra-cloud flash billboards), `arrows.vert/.frag` (E vectors). |
-| `tests/stormsim.test.js` | 32-assertion regression suite (synthetic storm + calm control + strided-update integration + adaptive-budget conservation). Run: `node tests/stormsim.test.js`. |
+| `tests/stormsim.test.js` | 37-assertion regression suite (synthetic storm + calm control + strided-update integration + adaptive-budget conservation). Run: `node tests/stormsim.test.js`. |
 | `tests/check-shaders.js` | glslangValidator over every shader (inlining `common.glsl`). |
 | `tests/stormEnv.js`, `tests/debug-run.js` | Synthetic storm builder and charge-ledger/debug driver. |
 
@@ -60,30 +60,53 @@ no hardcoded charge regions.
    (grounded lower boundary, fair-weather top flux, open/neumann sides); E is
    taken from the field gradient.
 
-6. **Emergent lightning.** Initiation picks from the strongest solved-field
-   cells, preferring sites from which an **opposite-charge pocket is
-   reachable along the field** (`topFieldCells` + `_oppositeChargeReach` —
-   flashes connect the charge pattern rather than a scalar maximum), with
-   stochastic streamer gating. **Cloud density participates in the
-   trigger**: the local breakdown field is reduced by up to 34 % in dense
-   cloud and the streamer-runaway probability gains a cloud-density term, so
-   well-developed mixed-phase cloud flashes more readily than clear air.
-   Bidirectional stepped leaders follow the solved E-field **plus an explicit
-   seek gradient toward opposite-charge regions** (`chargeSeekDir`) so
-   channels visibly thread through charge pockets.
+6. **Emergent lightning.** Lightning has two initiation paths, both driven
+   by simulated fields:
+
+   **Cloud-density IC initiation (primary path).** An intra-cloud flash is
+   born from the *cloud*, not from the charge pattern. A strided scan of the
+   environment (bounded at ≈2000 texels per call, so cost is independent of
+   the environment resolution) collects mixed-phase texels (0 … −40 °C)
+   whose **cloud + precipitation water exceeds `cloudTriggerThreshold`**
+   (default **0.8** model units ≈ ordinary cloudy air; the legacy shader
+   threshold was 1.6), and one site is chosen with a density-weighted random
+   draw so consecutive flashes scatter through the dense core. Initiation is
+   then a Poisson streamer process with rate **`icSpawnRate` = 2.2 s⁻¹**,
+   scaled by how far the local density exceeds the threshold, with a short
+   refractory period (0.4 s) and a ceiling of 8 concurrent channels. No
+   charge density and no |E| is consulted: a dense electrified cloud
+   initiates on its own, which is why IC flashes appear as soon as a storm is
+   deep enough — and why a charge-free control run still flashes (asserted in
+   the tests). Each flash then drains the charge it passes through.
+
+   **Field/charge initiation (CG and clear air).** The classic breakdown rule
+   is retained for ground strikes and clear-air flashes: strongest
+   solved-field cells are ranked, an opposite-charge pocket (or ground/space)
+   must be reachable along the field (`topFieldCells` + `_oppositeChargeReach`),
+   the humidity- and cloud-corrected breakdown level must be exceeded, and a
+   stochastic streamer gate decides. In dense cloud the breakdown level is
+   reduced by up to 34 %.
+
+   **IC leaders propagate by cloud density.** A tip keeps extending while it
+   stays inside cloud denser than 45 % of the trigger threshold; it steers up
+   the horizontal density gradient with an outward (space-charge) drive,
+   damps vertical motion ×0.22 and is confined to a ±750 m sheet around its
+   birth level. Forking probability rises with density (up to 16 % per step),
+   and a channel completes when it leaves the dense cloud, spans ≥1.6 km and
+   enters an opposite-charge pocket, or hits its extent cap (55 % of the domain
+   width, ≤16 km) / 640-node budget.
+   Measured geometry: **91–100 % of flashes wider than tall, median ≈7.6 km
+   wide × ≈0.8 km thick**, always airborne. Counting is not charge-driven
+   either: a flash is a flash whether or not it happens to catch charge.
 
    Flash types are discriminated by their attachment:
    * **CG** — low, strong-field sites; leaders descend to the ground and
      deliver 1–3 bright return strokes with continuing current.
-   * **IC** — inside the cloud. Leaders propagate at a much lower field
-     threshold (25 kV/m versus 150 kV/m for CG), have their vertical motion
-     damped and are confined to the sampled cloud-charge band, fork heavily,
-     and must spread at least 1.6 km before bridging an opposite pocket.
-     They discharge as 2–4 dim sub-strokes (K-changes), spread the
-     transported charge across the far end of the channel, and never become
-     ground strikes. Leaders that spread ≥0.8 km without bridging still
-     produce a partial IC flare rather than being discarded.
-   * **CA** — clear-air breakdown near cloud edge.
+   * **IC** — inside the cloud, triggered by cloud density (above) and grown
+     through the densest air. They discharge as 2–4 dim sub-strokes
+     (K-changes), spread the transported charge across the far end of the
+     channel, and never become ground strikes.
+   * **CA** — clear-air flash when breakdown occurs outside cloud.
 
    Each stroke performs a channel-wide neutralization sweep. Signed charge is
    tracked through in-air → channel → ground/deposit with machine-exact
@@ -141,6 +164,14 @@ uniform.
 - Environment bilinear sampling is inlined (no per-call closure) and each
   particle is sampled once per sub-step; saturation densities come from a
   0.5 K lookup table.
+- The IC trigger's cloud scan is bounded to ≈2000 texels per physics call
+  (stride scales with the environment resolution) and IC leaders are capped
+  at 640 nodes / 2400 steps, so a storm flashing on every physics step still
+  costs ~1.5 ms of the frame (measured: 1.1 ms leader growth, 0.2 ms end
+  stroke, 0.05 ms cloud scan).
+- Density flashes actually *lower* the average frame cost (20–23 ms vs
+  28–29 ms with the trigger disabled at equal settings) because they keep the
+  storm's charge and particle population from ballooning.
 - GPU column sampling spread across frames (3 columns/frame steady-state).
 - Auto quality scaling lowers the particle budget if overlay CPU is high.
 - URL override: `?storm=0` disables the system entirely; `Reset storm engine`
@@ -148,7 +179,10 @@ uniform.
 
 ## Hard rules honored
 
-1. Lightning emerges from simulated charge separation — never random/timed.
+1. Lightning emerges from simulated fields — cloud density for the
+   intra-cloud trigger, separated charge and the solved field for
+   ground-strike breakdown — never from a scripted timer or a hardcoded
+   flash. Thin cloud and the calm-atmosphere control produce no flashes.
 2. Charge is assigned only by physical collision/field processes.
 3. Charge regions form only from sedimentation/transport of charged
    particles — never hardcoded zones, and separated charge is always carried
