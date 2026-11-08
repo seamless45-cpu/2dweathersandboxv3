@@ -147,6 +147,7 @@ class StormOverlay {
       folder.add(this.params, 'hud').name('Show stats HUD')
         .onChange((v) => { this.hud.style.display = v ? 'block' : 'none'; });
       folder.add({ reset: () => this.rebuild() }, 'reset').name('Reset storm engine');
+      folder.open();
       this._guiFolder = folder;
     };
     attach();
