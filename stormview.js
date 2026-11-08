@@ -113,6 +113,7 @@ class StormOverlay {
       'white-space:pre;pointer-events:none;display:block;';
     document.body.appendChild(hud);
     this.hud = hud;
+    this.hud.textContent = 'storm engine v1.1 · warming up…';
 
     if (this.gl) this._initGL();
     this._attachGui();
@@ -717,8 +718,24 @@ class StormOverlay {
   }
 }
 
-const overlay = new StormOverlay();
-window.stormOverlay = overlay;
-console.log('[StormEngine v1.1] Show Charges toggle + charge-pattern lightning active');
+/* Scripts load from <head> — document.body does not exist at parse time.
+ * Defer constructing the overlay (it appends a canvas + HUD to body) until
+ * the DOM is ready, otherwise the whole module path dies with a null-body
+ * TypeError and the storm engine never exists in real browsers. */
+function bootStormOverlay() {
+  if (window.stormOverlay) return;
+  try {
+    const overlay = new StormOverlay();
+    window.stormOverlay = overlay;
+    console.log('[StormEngine v1.1] Show Charges toggle + charge-pattern lightning active');
+  } catch (e) {
+    console.error('[StormEngine v1.1] failed to boot:', e);
+  }
+}
+if (document.body) {
+  bootStormOverlay();
+} else {
+  window.addEventListener('DOMContentLoaded', bootStormOverlay, { once: true });
+}
 
 })();
