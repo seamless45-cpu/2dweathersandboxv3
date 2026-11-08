@@ -29,6 +29,7 @@ uniform vec2 texelSize;
 uniform float dryLapse;
 
 uniform float iterNum;          // used as seed for random function
+uniform float legacyLightningGate; // 1.0 = legacy random lightning on, 0.0 = storm physics engine owns lightning
 uniform float numDroplets;      // total number of droplets
 uniform float inactiveDroplets; // used to maintain constant spawnrate
 
@@ -127,6 +128,7 @@ void main()
           float cloudPlusPrecipDensity = water[CLOUD] + water[PRECIPITATION];
 
           float lightningSpawnChance = max((cloudPlusPrecipDensity - lightningCloudDensityThreshold) * lightningChanceMultiplier, 0.);
+          lightningSpawnChance *= legacyLightningGate; // 0 when the storm physics engine owns lightning
 
           const float minIterationsSinceLastLightningBolt = 30.; // 50.
 

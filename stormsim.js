@@ -188,6 +188,40 @@ class EnvGrid {
     this.valid = true;
   }
 
+  /**
+   * Update a single env column in place (values per env row, length ny).
+   * Used by strided live sampling of the fluid sim. Recomputes the column's
+   * ground line and the local turbulence stencil.
+   */
+  setColumn(ix, col) {
+    if (!this.valid || ix < 0 || ix >= this.nx) return;
+    const ny = this.ny, base = ix * ny;
+    if (col.vx) this.vx.set(col.vx, base);
+    if (col.vy) this.vy.set(col.vy, base);
+    if (col.tK) this.tK.set(col.tK, base);
+    if (col.vapor) this.vapor.set(col.vapor, base);
+    if (col.cloud) this.cloud.set(col.cloud, base);
+    if (col.precip) this.precip.set(col.precip, base);
+    if (col.wall) this.wall.set(col.wall, base);
+    if (col.wall) {
+      let y = 0;
+      for (; y < ny; y++) if (this.wall[base + y]) break;
+      this.groundY[ix] = y;
+    }
+    // refresh turbulence stencil for this column and its left neighbor
+    // (the stencil references the column to its right)
+    for (const cx of [ix, ix - 1]) {
+      if (cx < 0) continue;
+      for (let iy = 0; iy < ny; iy++) {
+        const i = cx * ny + iy;
+        const ir = cx < this.nx - 1 ? i + ny : i;
+        const iu = iy < ny - 1 ? i + 1 : i;
+        this._turb[i] = Math.abs(this.vy[ir] - this.vy[i]) +
+                        Math.abs(this.vx[iu] - this.vx[i]);
+      }
+    }
+  }
+
   /** Bilinear sample. xCell/yCell in sim-cell units. Writes fields to `out`. */
   sample(xCell, yCell, out, wrap) {
     let fx = (xCell / this.wCells) * this.nx - 0.5;
@@ -597,6 +631,7 @@ class StormSim {
       f.resize(nx, ny, widthM, heightM);
     }
     this._gridNX = Math.max(1, Math.ceil(o.wCells / this._cellSize));
+    void 0;
     this._gridNY = Math.max(1, Math.ceil(o.hCells / this._cellSize));
     if (!this._gridHead || this._gridHead.length < this._gridNX * this._gridNY) {
       this._gridHead = new Int32Array(this._gridNX * this._gridNY);
@@ -604,6 +639,18 @@ class StormSim {
     }
     this.lastEnvRefresh = this.time;
     if (this.time === 0) this.field.beginAccumulate(this.env); // ground rows valid
+  }
+
+  /** Strided live update: replace one environment column (see EnvGrid.setColumn). */
+  updateEnvColumn(ix, col) { this.env.setColumn(ix, col); }
+
+  /**
+   * Adaptive quality: change the population budget at runtime. Lowering it
+   * makes the merge pass immediately consolidate cohorts; statistics and
+   * charge are preserved exactly by the merger.
+   */
+  setParticleBudget(n) {
+    this.maxParticles = Math.round(clampNum(n, 1500, 80000));
   }
 
   /* ------------------------- spatial hashing ------------------------ */
@@ -1707,9 +1754,11 @@ class StormSim {
       out = {
         pos: new Float32Array(P.count * 2),
         data: new Float32Array(P.count * 4), // size, type, log|q|*sign, rnd
+        misc: new Float32Array(P.count * 2), // log10 mult, melt fraction
         count: 0
       };
     }
+    if (out.misc.length < P.count * 2) out.misc = new Float32Array(P.count * 2);
     for (let i = 0; i < P.count; i++) {
       out.pos[i * 2] = P.x[i];
       out.pos[i * 2 + 1] = P.y[i];
@@ -1717,7 +1766,9 @@ class StormSim {
       out.data[i * 4 + 1] = P.type[i];
       const q = P.charge[i];
       out.data[i * 4 + 2] = q === 0 ? 0 : Math.sign(q) * Math.min(9, Math.log10(Math.abs(q)) + 14);
-      out.data[i * 4 + 3] = P.mult[i] > 0 ? Math.log10(Math.max(P.mult[i], 1)) : 0; // multiplicity weight
+      out.data[i * 4 + 3] = (P.seed[i] & 1023) / 1023.0; // per-particle dither
+      out.misc[i * 2] = P.mult[i] > 0 ? Math.log10(Math.max(P.mult[i], 1)) : 0;
+      out.misc[i * 2 + 1] = P.melt[i];
     }
     out.count = P.count;
     return out;

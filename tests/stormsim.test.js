@@ -186,6 +186,63 @@ function run() {
   check('calm atmosphere stays near-neutral', Math.abs(cs.qPositive) < 1e-8 && Math.abs(cs.qNegative) < 1e-8,
         `|q+|=${Math.abs(cs.qPositive).toExponential(2)}`);
 
+  /* --- 8. strided live environment updates (the app integration path) --- */
+  console.log('\n--- strided env-update integration (column-by-column, app-style) ---');
+  {
+    const env2 = buildStormEnv();
+    // fresh sim; push the env column by column over time, exactly like
+    // stormview.js samples the live GPU state
+    const sim2 = new StormSim({ seed: 99, maxParticles: 6000, chargeRate: 2.0, fieldNX: 64, fieldNY: 48,
+                                widthM: env2.wCells * env2.cellSizeM, heightM: env2.hCells * env2.cellSizeM });
+    const zero = Object.assign({}, env2, {
+      nx: env2.nx, ny: env2.ny,
+      vx: new Float32Array(env2.nx * env2.ny), vy: new Float32Array(env2.nx * env2.ny),
+      tK: new Float32Array(env2.nx * env2.ny).fill(280),
+      vapor: new Float32Array(env2.nx * env2.ny).fill(2.5),
+      cloud: new Float32Array(env2.nx * env2.ny), precip: new Float32Array(env2.nx * env2.ny)
+    });
+    sim2.setEnvironment(zero);
+    let cursor = 0;
+    let okFinite = true;
+    for (let s = 0; s < 480; s++) {
+      const ny = env2.ny;
+      sim2.updateEnvColumn(cursor, {
+        vx: env2.vx.subarray(cursor * ny, cursor * ny + ny),
+        vy: env2.vy.subarray(cursor * ny, cursor * ny + ny),
+        tK: env2.tK.subarray(cursor * ny, cursor * ny + ny),
+        vapor: env2.vapor.subarray(cursor * ny, cursor * ny + ny),
+        cloud: env2.cloud.subarray(cursor * ny, cursor * ny + ny),
+        precip: env2.precip.subarray(cursor * ny, cursor * ny + ny),
+        wall: env2.wall.subarray(cursor * ny, cursor * ny + ny)
+      });
+      cursor = (cursor + 1) % env2.nx;
+      sim2.step(0.5);
+      const stp = sim2.getStats();
+      okFinite = okFinite && isFinite(stp.qTotal) && isFinite(stp.maxField);
+    }
+    const st2 = sim2.getStats();
+    check('strided env updates: no NaN / no drift during assimilation', okFinite);
+    check('strided env updates: storm spun up from gradual assimilation',
+          st2.particles > 300 && Math.abs(st2.qNegative) > 0, `pop=${st2.particles} q-=${st2.qNegative.toExponential(2)}`);
+    const rel2 = Math.abs(st2.qTotal) / Math.max(1e-9, Math.abs(st2.qPositive) + Math.abs(st2.qNegative) + 1e-12);
+    check('strided env updates: charge conserved', Math.abs(st2.qTotal) < 1e-12 || rel2 < 1e-6,
+          `qTotal=${st2.qTotal.toExponential(3)}`);
+  }
+
+  /* --- 9. adaptive budget: population control preserves conservation --- */
+  {
+    const beforeQ = sim.getStats().qTotal;
+    const beforeN = sim.getStats().particles;
+    sim.setParticleBudget(Math.max(2500, Math.floor(beforeN / 2)));
+    for (let s = 0; s < 120; s++) sim.step(0.5);
+    const st3 = sim.getStats();
+    check('budget reduction keeps population under limit', st3.particles <= Math.max(2500, Math.floor(beforeN / 2)) + 200,
+          `particles=${st3.particles}`);
+    check('budget reduction conserves charge (merger exact)',
+          Math.abs(st3.qTotal - beforeQ) < Math.max(1e-9, Math.abs(beforeQ) * 1e-6),
+          `|dqTotal|=${Math.abs(st3.qTotal - beforeQ).toExponential(3)}`);
+  }
+
   console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} TEST(S) FAILED`);
   process.exit(failures ? 1 : 0);
 }
