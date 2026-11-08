@@ -7886,6 +7886,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
               gl.useProgram(precipitationProgram);
               gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'iterNum'), iterNum);
+              // when the storm physics engine is active it owns lightning:
+              // silence the legacy random-spawn bolts (uniform gate)
+              gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'legacyLightningGate'),
+                (typeof stormOverlay !== 'undefined' && stormOverlay) ? stormOverlay.lightningGate() : 1.0);
               gl.enable(gl.BLEND);
               gl.blendFunc(gl.ONE, gl.ONE); // add everything together
               gl.activeTexture(gl.TEXTURE0);
@@ -8561,6 +8565,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       }
     }
     updateClockTextContrast();
+
+    // particle-based storm microphysics, charge separation & lightning overlay
+    if (typeof stormOverlay !== 'undefined' && stormOverlay) {
+      try { stormOverlay.frame(); }
+      catch (e) {
+        if (!window.__stormOverlayFailed) {
+          window.__stormOverlayFailed = true;
+          console.error('storm overlay error (overlay disabled):', e);
+        }
+      }
+    }
 
     updateDiagnosticOverlays();
     frameNum++;
