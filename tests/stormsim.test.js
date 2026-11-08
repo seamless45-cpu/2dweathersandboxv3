@@ -243,7 +243,39 @@ function run() {
           `|dqTotal|=${Math.abs(st3.qTotal - beforeQ).toExponential(3)}`);
   }
 
-  /* --- 10. lightning connects the charge pattern --- */
+  /* --- 10. charge carriers & the realism of IC flashes --- */
+  {
+    const P = sim.particles;
+    let charged = 0, chargedIce = 0;
+    for (let i = 0; i < P.count; i++) {
+      if (P.charge[i] === 0) continue;
+      charged++;
+      const t = P.type[i];
+      if (t === 2 || t === 3 || t === 4 || t === 5) chargedIce++; // ice, snow, graupel, hail
+    }
+    check('charge separation puts charge on particles', charged > 50,
+          `${charged} charged of ${P.count}`);
+    check('separated charge resides on ice-phase carriers', chargedIce > 20,
+          `${chargedIce} ice-phase carriers`);
+
+    const evs = sim.flashEvents.slice();
+    const ic = evs.filter((e) => e.kind === 'IC');
+    check('intra-cloud flash events are emitted for renderers', ic.length > 0,
+          `${ic.length} IC / ${evs.length} queued events`);
+    if (ic.length) {
+      const flat = ic.filter((e) => (e.maxX - e.minX) > (e.maxY - e.minY)).length;
+      check('IC channels spread horizontally through the charge layer',
+            flat / ic.length > 0.6, `${flat}/${ic.length} wider than tall`);
+      const minAlt = Math.min.apply(null, ic.map((e) => e.minY));
+      check('IC flashes never become ground strikes', minAlt > 200,
+            `lowest IC channel node ${minAlt.toFixed(0)} m`);
+    }
+    const drained = sim.consumeFlashEvents();
+    check('flash events are drainable by the renderer', Array.isArray(drained) &&
+          sim.flashEvents.length === 0, `${drained.length} drained`);
+  }
+
+  /* --- 11. lightning connects the charge pattern --- */
   {
     const f = sim.field;
     const cells = f.topFieldCells(6);

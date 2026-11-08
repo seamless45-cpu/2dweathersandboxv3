@@ -122,8 +122,8 @@ void main()
 
           vec4 lightningData = texture(lightningDataTex, vec2(0.5)); // data from last lightning bolt
 
-          const float lightningCloudDensityThreshold = 2.5;          // 3.0
-          const float lightningChanceMultiplier = 0.0033;            // 0.0011
+          const float lightningCloudDensityThreshold = 1.6;          // 3.0 -> 2.5 -> 1.6
+          const float lightningChanceMultiplier = 0.0075;            // 0.0011 -> 0.0033 -> 0.0075
 
           float cloudPlusPrecipDensity = water[CLOUD] + water[PRECIPITATION];
 
