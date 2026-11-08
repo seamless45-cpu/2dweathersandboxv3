@@ -44,18 +44,29 @@ void main()
   float sizePx = max(1.6, simFrac * pointScale * view.z);
   // emphasize charging species a touch
   sizePx *= (typ == 4.0 || typ == 5.0) ? 1.25 : 1.0;
-  gl_PointSize = min(sizePx, 64.0);
 
   /* vertex color: species or charge polarity */
   vec3 col = typeColor(typ);
   float brightness = 1.0;
-  if (colorMode == 1 || colorMode == 2) {
-    if (qm > 0.0) { col = vec3(1.0, 0.32, 0.30); brightness = clamp(qm / 9.0, 0.35, 1.0); }
-    else if (qm < 0.0) { col = vec3(0.35, 0.55, 1.00); brightness = clamp(-qm / 9.0, 0.35, 1.0); }
-    else { brightness = 0.28; }
+  bool chargeView = (colorMode == 1 || colorMode == 2);
+  if (chargeView) {
+    float qMag = min(abs(qm), 9.0);
+    if (qm != 0.0) {
+      // A charged super-particle must actually read as a particle: before,
+      // every sprite was clamped to the same ~1.6 px floor, so the charge
+      // separation view looked empty even while the storm was electrified.
+      // Charged cohorts now grow and brighten with |q|.
+      col = qm > 0.0 ? vec3(1.0, 0.30, 0.26) : vec3(0.32, 0.52, 1.00);
+      brightness = clamp(qMag / 7.0, 0.55, 1.0);
+      float boost = (colorMode == 1) ? 1.0 : 0.6;
+      sizePx = max(sizePx, (1.9 + 0.42 * qMag) * boost * clamp(view[2], 0.35, 2.5));
+    } else {
+      brightness = (colorMode == 1) ? 0.14 : 0.22;
+    }
     if (colorMode == 2)
       col = mix(typeColor(typ), col, 0.62);
   }
+  gl_PointSize = min(sizePx, 64.0);   // charged sprites may have grown above
   // melting particles look wetter
   col = mix(col, vec3(0.45, 0.6, 1.0), clamp(pMisc.y, 0.0, 1.0) * 0.35);
   vColor = vec4(col * brightness, alphaScale * (0.55 + 0.45 * brightness));

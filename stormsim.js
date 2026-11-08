@@ -116,6 +116,37 @@ function satVaporDensityIce(T_K) {
   return Math.max(es_hPa * 100.0 / (R_DRY * T_K) * 1000.0, 1e-9);  // -> g/m^3
 }
 
+/* Fast saturation-density lookup tables. The exact functions below use
+ * pow()/exp(); the microphysics pass evaluates them for every hydrometeor on
+ * every sub-step, so a 0.5 K interpolated table removes hundreds of thousands
+ * of transcendental calls per frame with negligible error. */
+const _SAT_T0 = 150.0, _SAT_T1 = 350.0, _SAT_N = 401; // 0.5 K steps
+const _satWaterLUT = new Float32Array(_SAT_N);
+const _satIceLUT = new Float32Array(_SAT_N);
+(function buildSaturationTables() {
+  for (let i = 0; i < _SAT_N; i++) {
+    const T = _SAT_T0 + i * 0.5;
+    const Tc = T - T_MELT;
+    const es_hPa = 6.1115 * Math.exp((22.452 * Tc) / (272.55 + Tc));
+    _satIceLUT[i] = Math.max(es_hPa * 100.0 / (R_DRY * T) * 1000.0, 1e-9);
+    _satWaterLUT[i] = Math.pow(Math.min(Math.max(T / 250.0, 0.0), 4.0), 17.0);
+  }
+})();
+function satVaporDensityWaterFast(T_K) {
+  let f = (T_K - _SAT_T0) * 2.0;
+  if (f <= 0) return _satWaterLUT[0];
+  if (f >= _SAT_N - 1) return _satWaterLUT[_SAT_N - 1];
+  const i = f | 0, w = f - i;
+  return _satWaterLUT[i] * (1 - w) + _satWaterLUT[i + 1] * w;
+}
+function satVaporDensityIceFast(T_K) {
+  let f = (T_K - _SAT_T0) * 2.0;
+  if (f <= 0) return _satIceLUT[0];
+  if (f >= _SAT_N - 1) return _satIceLUT[_SAT_N - 1];
+  const i = f | 0, w = f - i;
+  return _satIceLUT[i] * (1 - w) + _satIceLUT[i + 1] * w;
+}
+
 /* ============================ small helper =========================== */
 
 /** Deterministic RNG (mulberry32) so tests are reproducible. */
@@ -222,27 +253,45 @@ class EnvGrid {
     }
   }
 
-  /** Bilinear sample. xCell/yCell in sim-cell units. Writes fields to `out`. */
+  /**
+   * Bilinear sample. xCell/yCell in sim-cell units. Writes fields to `out`.
+   *
+   * Hot path: called twice per hydrometeor per substep (tens of thousands of
+   * times per frame). The bilinear weights are inlined rather than using a
+   * per-call closure — this alone roughly halves the sampling cost.
+   */
   sample(xCell, yCell, out, wrap) {
-    let fx = (xCell / this.wCells) * this.nx - 0.5;
-    let fy = (yCell / this.hCells) * this.ny - 0.5;
-    if (wrap) fx = ((fx % this.nx) + this.nx) % this.nx;
-    fx = clampNum(fx, 0, this.nx - 1.001);
-    fy = clampNum(fy, 0, this.ny - 1.001);
-    const x0 = Math.floor(fx), y0 = Math.floor(fy);
+    const nx = this.nx, ny = this.ny;
+    let fx = (xCell / this.wCells) * nx - 0.5;
+    let fy = (yCell / this.hCells) * ny - 0.5;
+    if (wrap) {
+      fx -= Math.floor(fx / nx) * nx;      // fast positive modulo
+      if (fx < 0) fx += nx;
+    }
+    if (fx < 0) fx = 0; else if (fx > nx - 1.001) fx = nx - 1.001;
+    if (fy < 0) fy = 0; else if (fy > ny - 1.001) fy = ny - 1.001;
+    const x0 = fx | 0, y0 = fy | 0;
     const tx = fx - x0, ty = fy - y0;
-    const x1 = Math.min(x0 + 1, this.nx - 1), y1 = Math.min(y0 + 1, this.ny - 1);
-    const i00 = x0 * this.ny + y0, i10 = x1 * this.ny + y0;
-    const i01 = x0 * this.ny + y1, i11 = x1 * this.ny + y1;
-    const L = (a) => (a[i00] * (1 - tx) + a[i10] * tx) * (1 - ty) + (a[i01] * (1 - tx) + a[i11] * tx) * ty;
+    const x1 = x0 + 1 < nx ? x0 + 1 : nx - 1;
+    const y1 = y0 + 1 < ny ? y0 + 1 : ny - 1;
+    const i00 = x0 * ny + y0, i10 = x1 * ny + y0;
+    const i01 = x0 * ny + y1, i11 = x1 * ny + y1;
+    const w00 = (1 - tx) * (1 - ty), w10 = tx * (1 - ty);
+    const w01 = (1 - tx) * ty, w11 = tx * ty;
     const cellPerSec = this.cellSizeM / this.iterSeconds; // cells/iter -> m/s
-    out.vx = L(this.vx) * cellPerSec;
-    out.vy = L(this.vy) * cellPerSec;
-    out.tK = L(this.tK);
-    out.vapor = Math.max(L(this.vapor), 0.0);   // g/m^3 proxy
-    out.cloud = Math.max(L(this.cloud), 0.0);
-    out.precip = Math.max(L(this.precip), 0.0);
-    out.turb = L(this._turb) * cellPerSec;
+
+    const vxA = this.vx, vyA = this.vy, tA = this.tK, qA = this.vapor;
+    const cA = this.cloud, pA = this.precip, bA = this._turb;
+    out.vx = (vxA[i00] * w00 + vxA[i10] * w10 + vxA[i01] * w01 + vxA[i11] * w11) * cellPerSec;
+    out.vy = (vyA[i00] * w00 + vyA[i10] * w10 + vyA[i01] * w01 + vyA[i11] * w11) * cellPerSec;
+    out.tK = tA[i00] * w00 + tA[i10] * w10 + tA[i01] * w01 + tA[i11] * w11;
+    const vap = qA[i00] * w00 + qA[i10] * w10 + qA[i01] * w01 + qA[i11] * w11;
+    const cld = cA[i00] * w00 + cA[i10] * w10 + cA[i01] * w01 + cA[i11] * w11;
+    const prc = pA[i00] * w00 + pA[i10] * w10 + pA[i01] * w01 + pA[i11] * w11;
+    out.vapor = vap > 0 ? vap : 0;   // g/m^3 proxy
+    out.cloud = cld > 0 ? cld : 0;
+    out.precip = prc > 0 ? prc : 0;
+    out.turb = (bA[i00] * w00 + bA[i10] * w10 + bA[i01] * w01 + bA[i11] * w11) * cellPerSec;
     out.wall = yCell < this.groundAt(xCell, wrap);
     return out;
   }
@@ -329,35 +378,35 @@ class FieldSolver {
     const nx = this.nx, ny = this.ny;
     const phi = this.phi, rho = this.rho;
     const dx2 = this.dx * this.dx, dy2 = this.dy * this.dy;
-    const denom = 2.0 * (dx2 + dy2);
+    const invDenom = 1.0 / (2.0 * (dx2 + dy2));
     const omega = 1.85;
     const w = this.wrapX;
+    const top = ny - 1;
+    const rowBC = FAIR_WEATHER_E * ny * this.dy;
+    const kRho = dx2 * dy2 / EPSILON_0;
+    // Conducting ground: pinned to zero (once per solve, not per sweep).
+    for (let ix = 0; ix < nx; ix++) {
+      const g = this.groundRow[ix], base = ix * ny;
+      for (let iy = 0; iy <= g; iy++) phi[base + iy] = 0.0;
+    }
     let maxDelta = 0;
     for (let it = 0; it < iterations; it++) {
       maxDelta = 0;
       for (let ix = 0; ix < nx; ix++) {
+        const base = ix * ny;
+        const baseL = (ix > 0 ? ix - 1 : (w ? nx - 1 : ix)) * ny;
+        const baseR = (ix < nx - 1 ? ix + 1 : (w ? 0 : ix)) * ny;
         const g = this.groundRow[ix];
-        const ixl = ix > 0 ? ix - 1 : (w ? nx - 1 : ix);
-        const ixr = ix < nx - 1 ? ix + 1 : (w ? 0 : ix);
-        const rowBC = FAIR_WEATHER_E * ny * this.dy;
-        for (let iy = 0; iy < ny; iy++) {
-          const i = ix * ny + iy;
-          let target;
-          if (iy <= g) {
-            target = 0.0;                       // conducting ground
-          } else if (iy === ny - 1) {
-            target = rowBC;                     // fair-weather top boundary
-          } else {
-            const cL = phi[ixl * ny + iy], cR = phi[ixr * ny + iy];
-            const cD = iy > 0 ? phi[i - 1] : 0.0;
-            const cU = phi[i + 1];
-            target = ((cL + cR) * dy2 + (cD + cU) * dx2 + (rho[i] / EPSILON_0) * dx2 * dy2) / denom;
-          }
+        let i = base + g + 1;
+        for (let iy = g + 1; iy < top; iy++, i++) {
+          const target = ((phi[baseL + iy] + phi[baseR + iy]) * dy2 +
+                          (phi[i - 1] + phi[i + 1]) * dx2 + rho[i] * kRho) * invDenom;
           const upd = phi[i] + omega * (target - phi[i]);
-          const d = Math.abs(upd - phi[i]);
+          const d = upd > phi[i] ? upd - phi[i] : phi[i] - upd;
           if (d > maxDelta) maxDelta = d;
           phi[i] = upd;
         }
+        phi[base + top] = rowBC;    // fair-weather top boundary
       }
     }
     // E = -grad(phi)
@@ -583,6 +632,7 @@ class LightningChannel {
     this.strokeT = 0;         // time of latest return stroke
     this.strokeOrigin = 0;    // node index of return-stroke origin
     this.continuing = 0;      // continuing-current remaining time
+    this.toGround = false;
     this.attachX = 0; this.attachY = 0;
     this.flashLevel = 0;      // global screen flash contribution
   }
@@ -641,6 +691,7 @@ class StormSim {
 
     this.channels = [];
     this.channelIdCounter = 0;
+    this.flashEvents = [];   // public per-flash records for renderers / audio
     this.flashCount = 0;
     this.chargeFlashed = 0;  // cumulative |C| transported by all completed flashes
     this.maxFieldNow = 0;
@@ -833,16 +884,19 @@ class StormSim {
     return true;
   }
 
-  /* Local microphysics: phase transformations & growth of one particle. */
-  _microParticle(i, dt) {
+  /* Local microphysics: phase transformations & growth of one particle.
+   * `sampled` is set by the integrator when it has already sampled the
+   * environment at this particle this substep — avoids a second bilinear
+   * fetch per particle (the single largest cost of the microphysics pass). */
+  _microParticle(i, dt, sampled) {
     const P = this.particles;
     const out = this._envOut;
-    this.env.sample(P.x[i], P.y[i], out, this.wrapX);
+    if (!sampled) this.env.sample(P.x[i], P.y[i], out, this.wrapX);
     const T = out.tK;
     const rho_v = out.vapor;                          // g/m^3 (model units)
-    const satW = Math.max(satVaporDensityWater(T), 1e-6);
+    const satW = Math.max(satVaporDensityWaterFast(T), 1e-6);
     const RHw = clampNum(rho_v / satW, 0, 1.5);         // rel hum w.r.t. water
-    const satI = Math.max(satVaporDensityIce(T), 1e-6);
+    const satI = Math.max(satVaporDensityIceFast(T), 1e-6);
     const RHi = clampNum(rho_v / satI, 0, 1.7);         // w.r.t. ice
     const t = P.type[i];
     const r = P.radius[i];
@@ -884,8 +938,9 @@ class StormSim {
       else if (growRate < -0.01) this._shrink(i, Math.min(-growRate, 0.4) * dt);
       // melt
       if (T >= T_MELT) this._meltStep(i, dt, T);
-      // aggregate to snow when big
-      if (P.radius[i] > 1.6e-4 && this.rng() < 0.1) {
+      // aggregate to snow when big (probability per second, so it does not
+      // depend on the integrator sub-step size)
+      if (P.radius[i] > 1.6e-4 && this.rng() < Math.min(1, 0.5 * dt)) {
         P.type[i] = PT_SNOW;
       }
       break;
@@ -1029,6 +1084,10 @@ class StormSim {
         let i0 = head[gi];
         if (i0 === -1) continue;
 
+        // Stochastic cohort rates were tuned per 0.2 s sub-step; scale them by
+        // the actual sub-step so they stay equal per simulated second.
+        const dtK = Math.min(1, dt / 0.2);
+
         // cell environment (center sample)
         env.sample((gx + 0.5) * cs, (gy + 0.5) * cs, out, this.wrapX);
         const T = out.tK;
@@ -1038,7 +1097,7 @@ class StormSim {
         // (n-weighted number densities, mass, mean radius, mean velocity)
         let nIce = 0, mIce = 0, rIce = 0, vxIce = 0, vyIce = 0;
         let nGra = 0, mGra = 0, rGra = 0, vxGra = 0, vyGra = 0;
-        let nSnow = 0, nRain = 0, nCloud = 0, nSuper = 0;
+        let nSnow = 0, nHail = 0, nRain = 0, nCloud = 0, nSuper = 0;
         let countInCell = 0;
         for (let i = i0; i !== -1; i = next[i]) {
           countInCell++;
@@ -1047,6 +1106,7 @@ class StormSim {
           case PT_ICE: nIce += mt; mIce += m; rIce += P.radius[i] * mt; vxIce += P.vx[i] * mt; vyIce += P.vy[i] * mt; break;
           case PT_GRAUPEL: nGra += mt; mGra += m; rGra += P.radius[i] * mt; vxGra += P.vx[i] * mt; vyGra += P.vy[i] * mt; break;
           case PT_SNOW: nSnow += mt; break;
+          case PT_HAIL: nHail += mt; break;
           case PT_RAIN: nRain += mt; break;
           case PT_CLOUD: nCloud += mt; break;
           case PT_SUPER: nSuper += mt; break;
@@ -1104,17 +1164,46 @@ class StormSim {
               clampNum(ew / (ew + 0.35), 0.05, 1) *
               clampNum(meanVelDiff / 3.0, 0.2, 3) * eff * nearReversal * branchScale;
             // volumetric budget: storm-scale generation cap (chargeRate-scaled)
-            const rateBudget = this.chargeRate * 1.67e-11 * cellVol * dt; // C
+            // Volumetric budget ~2.4 C/km^3/min at rate 1. Vigorous
+            // mixed-phase convection sits in the 0.1-1 C/km^3/min band on
+            // average but the collision kernel below wants far more than
+            // that; this cap keeps the emergence storm-scale while giving
+            // enough separated charge for the field to reach breakdown.
+            const rateBudget = this.chargeRate * 4.0e-11 * cellVol * dt; // C
             let dqMag = clampNum(kernel * perColl * cellVol * dt, 0, rateBudget);
             if (dqMag > 0) {
               // graupel carriers gain graupelNegative ? -dqMag : +dqMag,
-              // the ice population gains the opposite — exact conservation
-              const graSign = graupelNegative ? -1 : 1;
-              const dq = dqMag * graSign;
-              const placedG = this._spreadChargeToType(gi, PT_GRAUPEL, dq);
-              this.ledger.leaked += dq - placedG;     // no carriers: free ions
-              const placedI = this._spreadChargeToType(gi, PT_ICE, -dq);
-              this.ledger.leaked += (-dq) - placedI;
+              // the ice population gains the opposite — exact conservation.
+              //
+              // Carrier selection is what makes "charge separation" actually
+              // produce charged particles: the old code only ever wrote onto
+              // PT_GRAUPEL / PT_ICE, so in a cell that hosted (say) snow and
+              // graupel but no pristine ice crystals the whole separated
+              // charge was silently booked as "free ions" and never appeared
+              // on a particle. Choose the best available ice-phase carriers
+              // on each side instead, and only charge a cell when two
+              // distinct carrier populations exist (a single population
+              // cannot separate charge from itself).
+              const graType = nGra > 0 ? PT_GRAUPEL :
+                              nHail > 0 ? PT_HAIL :
+                              nSnow > 0 ? PT_SNOW :
+                              nIce > 0 ? PT_ICE : -1;
+              const iceType = nIce > 0 ? PT_ICE :
+                              nSnow > 0 ? PT_SNOW :
+                              nHail > 0 ? PT_HAIL :
+                              nGra > 0 ? PT_GRAUPEL : -1;
+              if (graType !== -1 && iceType !== -1 && graType !== iceType) {
+                const graSign = graupelNegative ? -1 : 1;
+                const dq = dqMag * graSign;
+                const placedG = this._spreadChargeToType(gi, graType, dq);
+                this.ledger.leaked += dq - placedG;     // no carriers: free ions
+                const placedI = this._spreadChargeToType(gi, iceType, -dq);
+                this.ledger.leaked += (-dq) - placedI;
+              } else {
+                // No two distinct ice-phase populations in this cell: no
+                // relative collision charging is possible here.
+                this._unchargedBudget = (this._unchargedBudget || 0) + dqMag;
+              }
             }
           }
         }
@@ -1160,7 +1249,7 @@ class StormSim {
             // droplet breakup cap
             if (P.radius[i] > 4.5e-3) {
               // shed mass into a new smaller raindrop occasionally
-              if (this.rng() < 0.25 && P.count < this.maxParticles) {
+              if (this.rng() < 0.25 * dtK && P.count < this.maxParticles) {
                 const frac = 0.35;
                 const childR = P.radius[i] * 0.55;
                 P.spawn(PT_RAIN, P.x[i], P.y[i], P.vx[i], P.vy[i] - 0.5,
@@ -1202,12 +1291,19 @@ class StormSim {
         }
 
         // ---------- ice aggregation into snow ---------------------------
-        if (nIce > 0 && T < T_MELT + 2 && this.rng() < 0.35) {
-          for (let i = i0; i !== -1; i = next[i]) {
-            if (P.type[i] !== PT_ICE) continue;
-            if (nIce / cellVol * Math.pow(meanRIce, 2) > 1e-7 && this.rng() < 0.30) {
-              // aggregates: grow radius quickly, become snow when large
-              this._grow(i, 0.25 * dt);
+        // Mean-field form of the former stochastic per-call gate (0.35 gate
+        // x 0.30 chance of a 0.25*0.2 = 0.05 growth per reference sub-step):
+        // a continuous growth rate makes the aggregation independent of the
+        // integrator sub-step, which previously let ice crystals over-grow
+        // (and sediment out of the upper positive layer) when the step was
+        // large, collapsing the storm's vertical dipole and its field.
+        if (nIce > 0 && T < T_MELT + 2) {
+          const aggGrow = 0.02625 * dt;      // fraction per call (0.35*0.30*0.05 per 0.2 s)
+          const collOK = nIce / cellVol * meanRIce * meanRIce > 1e-7;
+          if (collOK) {
+            for (let i = i0; i !== -1; i = next[i]) {
+              if (P.type[i] !== PT_ICE) continue;
+              this._grow(i, aggGrow);
               if (P.radius[i] > 3.0e-4) P.type[i] = PT_SNOW;
             }
           }
@@ -1217,7 +1313,7 @@ class StormSim {
         if (nSnow > 0 && T < T_MELT && cloudAvail > 0.35) {
           for (let i = i0; i !== -1; i = next[i]) {
             if (P.type[i] !== PT_SNOW) continue;
-            if (this.rng() < clampNum(cloudAvail * 0.12, 0, 0.25)) {
+            if (this.rng() < clampNum(cloudAvail * 0.12, 0, 0.25) * dtK) {
               P.type[i] = PT_GRAUPEL;
               this._recomputeRadius(i, RHO_GRAUPEL);
             }
@@ -1386,12 +1482,63 @@ class StormSim {
       if (py <= 0 || py >= f.dy * f.ny - 1) break;
       f.fieldAt(px, py, out);
       const rho = out.rho;
-      if (Math.sign(rho) === -sign && Math.abs(rho) > 0.35e-9) {
+      if (Math.sign(rho) === -sign && Math.abs(rho) > 0.18e-9) {
         best = {xm: px, ym: py, rho};
         break;
       }
     }
     return best;
+  }
+
+  /**
+   * Vertical extent of the cloud layer that contains (xm, ym), in metres.
+   * Intra-cloud leaders stay inside the charge layer they were born in
+   * (they do not plunge earthward like a CG stepped leader), so the leader
+   * integrator confines IC propagation to this band.
+   */
+  _cloudBandAt(xm, ym) {
+    const env = this.env;
+    const xCell = xm / env.cellSizeM;
+    const out = this._envOut2 || (this._envOut2 = {});
+    const nScan = 26;
+    const dyCell = env.hCells / nScan;
+    const wrap = this.wrapX;
+    const cloudAt = (yCell) => { env.sample(xCell, clampNum(yCell, 0, env.hCells - 1), out, wrap); return out.cloud; };
+    const y0 = ym / env.cellSizeM;
+    let lo = y0, hi = y0;
+    while (lo > 0 && cloudAt(lo - dyCell) > 0.04) lo -= dyCell;
+    while (hi < env.hCells && cloudAt(hi + dyCell) > 0.04) hi += dyCell;
+    if (hi - lo < dyCell) return null;
+    const pad = env.cellSizeM * 1.5;
+    return {lo: Math.max(0, lo * env.cellSizeM - pad), hi: hi * env.cellSizeM + pad};
+  }
+
+  /** Queue a public flash event for renderers / audio. */
+  _recordFlashEvent(ch) {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (let k = 0; k < ch.nodesX.length; k++) {
+      const x = ch.nodesX[k], y = ch.nodesY[k];
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    if (!isFinite(minX)) return;
+    this.flashEvents.push({
+      kind: ch.kind,
+      x: ch.attachX, y: ch.attachY,
+      minX, maxX, minY, maxY,
+      intensity: ch.toGround ? 1.0 : 0.6,
+      toGround: !!ch.toGround,
+      t: this.time
+    });
+    if (this.flashEvents.length > 64) this.flashEvents.shift();
+  }
+
+  /** Drain queued flash events (rendering / thunder). */
+  consumeFlashEvents() {
+    if (this.flashEvents.length === 0) return [];
+    const out = this.flashEvents;
+    this.flashEvents = [];
+    return out;
   }
 
   _maybeInitiateLightning() {
@@ -1403,11 +1550,11 @@ class StormSim {
     // from which an opposite-charge region is reachable along the field —
     // flashes then genuinely connect the simulated charge pattern (IC), or
     // reach ground/space (CG/CA), rather than triggering inside one blob.
-    const cands = f.topFieldCells(10);
+    const cands = f.topFieldCells(14);
     let chosen = null;
     // Hydrometeor- and turbulence-assisted initiation: observed in-cloud
     // initiation fields are ~150-400 kV/m, well below the dry-air 3 MV/m
-    // conventional breakdown. The ~0.2 factor reflects that correction.
+    // conventional breakdown. The ~0.22 factor reflects that correction.
     const Ebd0 = (this.breakdownScale || 0.22);
     const out2 = this._envOut2 || (this._envOut2 = {});
     for (const c of cands) {
@@ -1415,7 +1562,15 @@ class StormSim {
       this.env.sample(c.xm / this.env.cellSizeM, c.ym / this.env.cellSizeM, out2, this.wrapX);
       const satWc = Math.max(satVaporDensityWater(out2.tK), 1e-6);
       const rhc = clampNum(out2.vapor / satWc, 0, 1.2);
-      const EbdC = f.breakdownField(c.ym, rhc) * Ebd0;
+      // ---- cloud-density assisted initiation -------------------------
+      // A dense mixed-phase cloud is crowded with hydrometeors and the ions
+      // their collisions produce, so the local runaway field is markedly
+      // lower there than in clear air. Scaling the breakdown threshold with
+      // the sampled cloud water content lets lightning emerge from cloud
+      // density itself, not only from the largest solved |E| value.
+      const cloudDens = clampNum(out2.cloud, 0, 8);
+      const cloudBoost = clampNum(cloudDens / 1.2, 0, 1);       // 0..1
+      const EbdC = f.breakdownField(c.ym, rhc) * Ebd0 * (1 - 0.34 * cloudBoost);
       if (c.emag < EbdC) continue;
       const rhoC = f.fieldAt(c.xm, c.ym).rho;
       const signC = rhoC <= 0 ? -1 : 1;
@@ -1423,19 +1578,30 @@ class StormSim {
       f.fieldAt(c.xm, c.ym, out2);
       const dirE = signC < 0 ? 1 : -1;
       const em = Math.max(out2.emag, 1e-9);
-      const reach = this._oppositeChargeReach(c.xm, c.ym, signC,
-        dirE * out2.ex / em, dirE * out2.ey / em, 3200);
-      chosen = {x: c.xm, y: c.ym, emag: c.emag, Ebd: EbdC, connectedness: reach ? 1.0 : 0.35, rho: rhoC};
+      // In-cloud flashes run horizontally through their charge layer, so in
+      // dense cloud probe along the layer too, not only along E.
+      let reach = this._oppositeChargeReach(c.xm, c.ym, signC,
+        dirE * out2.ex / em, dirE * out2.ey / em, 5200);
+      if (!reach && cloudBoost > 0.25) {
+        reach = this._oppositeChargeReach(c.xm, c.ym, signC, 1, 0, 5200) ||
+                this._oppositeChargeReach(c.xm, c.ym, signC, -1, 0, 5200);
+      }
+      chosen = {x: c.xm, y: c.ym, emag: c.emag, Ebd: EbdC,
+                connectedness: reach ? 1.0 : 0.35, rho: rhoC,
+                cloud: cloudDens, cloudBoost};
       if (reach) break; // strongly preferred: opposite-charge pocket reachable
     }
     if (!chosen) return null;
     const bx = chosen.x, by = chosen.y;
     const Ebd = chosen.Ebd;
     // Initiation is a stochastic streamer-runaway process: probability rises
-    // with field overdrive and with charge-structure connectedness. Each
-    // flash then collapses its local charge reservoir (relaxation cadence).
+    // with field overdrive, with charge-structure connectedness and — for the
+    // same reason the threshold falls — with cloud density. Each flash then
+    // collapses its local charge reservoir (relaxation cadence).
     const overdrive = chosen.emag / Ebd - 1.0;
-    if (this.rng() > Math.min(0.65, overdrive * 0.9) * chosen.connectedness) return null;
+    const pTrigger = clampNum(0.12 + overdrive * 0.9 + 0.55 * chosen.cloudBoost, 0, 0.92) *
+      chosen.connectedness;
+    if (this.rng() > pTrigger) return null;
 
     // determine polarity & kind from local charge structure
     const rhoHere = chosen.rho;
@@ -1443,9 +1609,13 @@ class StormSim {
     const heightM = this.env.hCells * this.env.cellSizeM;
     const out = this._envOut;
     this.env.sample(bx / this.env.cellSizeM, by / this.env.cellSizeM, out, this.wrapX);
+    const inCloud = out.cloud > 0.06;
     let kind;
+    // Low, strong-field sites launch cloud-to-ground leaders (CG initiation
+    // happens in cloud, so this stays valid inside it); flashes high in the
+    // cloud become intra-cloud; the only remaining case is clear-air CA.
     if (groundDist < 0.30 * heightM && chosen.emag > Ebd * 1.02) kind = 'CG';
-    else if (out.cloud < 0.05 && Math.abs(rhoHere) > 0) kind = 'CA';
+    else if (!inCloud) kind = 'CA';
     else kind = 'IC'; // inside cloud (CC within-column flashes look like IC in 2D)
 
     // channel polarity: negative leaders carry negative charge downward where
@@ -1469,15 +1639,30 @@ class StormSim {
    */
   _developLeader(ch, kind, bx, by) {
     const f = this.field;
-    const Eprop = 1.5e5;                       // V/m leader propagation threshold
-    const maxNodes = 1100;
+    const isIC = kind === 'IC' || kind === 'CC';
+    // Propagation threshold. CG stepped leaders need a strong ambient field
+    // (~150 kV/m here); intra-cloud leaders run inside a densely charged
+    // layer and keep extending at a few tens of kV/m, which is why IC flashes
+    // spread for kilometres while CG leaders stay relatively compact.
+    const Eprop = isIC ? 2.5e4 : 1.5e5;
+    const maxNodes = isIC ? 900 : 1100;
     const heightM = this.env.hCells * this.env.cellSizeM;
     const capRadius = Math.max(f.dx, f.dy) * 0.55;   // charge capture radius
     const stepBase = Math.min(f.dx, f.dy) * 0.28;    // sub-cell zigzag
     const fOut = this._fOut || (this._fOut = {});
     let connected = false, connectNode = -1, toGround = false;
     let steps = 0;
-    const maxSteps = 6000;
+    let extent = 0;
+    const maxSteps = isIC ? 3200 : 6000;
+    // An IC channel has to actually spread through the layer before its far
+    // end can "connect" to an opposite pocket; without this a flash born in
+    // a charge dipole would close after a single step and render as a dot.
+    const minConnectLen = isIC ? 1600 : 150;
+    // Intra-cloud leaders spread through the charge layer they were born in.
+    // Confining them to the sampled cloud band (and damping the vertical
+    // component below) is what makes IC flashes look like the wide, flat,
+    // multiply-forked spiders they are instead of short vertical stubs.
+    const band = isIC ? this._cloudBandAt(bx, by) : null;
 
     while (ch.tips.length && !connected && steps++ < maxSteps && ch.nodesX.length < maxNodes) {
       // process one tip at a time (round robin from end)
@@ -1511,14 +1696,30 @@ class StormSim {
         const nm = Math.hypot(dxx, dyy) || 1;
         dxx /= nm; dyy /= nm;
       }
+      // Intra-cloud leaders are driven along the charge layer, so damp the
+      // vertical component of the field direction before adding jitter.
+      if (isIC) {
+        dyy *= 0.30;
+        if (Math.abs(dxx) < 0.18) dxx += (this.rng() - 0.5) * 0.7;
+        const nm = Math.hypot(dxx, dyy) || 1;
+        dxx /= nm; dyy /= nm;
+      }
       // stochastic angular jitter (branchy, lightning-like)
       const jitter = 0.55 * (Eprop / Math.max(emag, Eprop));
       const baseAng = Math.atan2(dyy, dxx);
       const ang = baseAng + (this.rng() - 0.5) * 2.4 * jitter;
       const bias = kind === 'CG' && sign < 0 ? -0.35 : 0; // CG negative leads earthward
       const dx = Math.cos(ang) * stepBase;
-      const dy = Math.sin(ang) * stepBase * (1 + 0.15 * (this.rng() - 0.5)) + (bias * stepBase * this.rng());
+      const verticalScale = isIC ? 0.35 : 1.0;
+      const dy = Math.sin(ang) * stepBase * verticalScale * (1 + 0.15 * (this.rng() - 0.5)) +
+        (bias * stepBase * this.rng());
       let nx = x + dx, ny = y + dy;
+      // Stay inside the cloud layer that hosts an IC channel (soft reflect).
+      if (isIC && band) {
+        if (ny < band.lo) ny = band.lo + (band.lo - ny) * 0.35;
+        else if (ny > band.hi) ny = band.hi - (ny - band.hi) * 0.35;
+        ny = clampNum(ny, band.lo, band.hi);
+      }
       // stay in domain
       if (this.wrapX) nx = ((nx % (f.dx * f.nx)) + f.dx * f.nx) % (f.dx * f.nx);
       nx = clampNum(nx, 0, f.dx * f.nx - 1);
@@ -1541,17 +1742,25 @@ class StormSim {
         break;
       }
       if (ny >= ceil) { ch.tips.splice(tipIdx, 1); ch.tipSign.splice(tipIdx, 1); continue; }
+      // IC leaders stop when they reach the edge of the cloudy charge layer
+      if (isIC && this.env.sample(nx / this.env.cellSizeM, ny / this.env.cellSizeM, fOut, this.wrapX).cloud < 0.025) {
+        ch.tips.splice(tipIdx, 1); ch.tipSign.splice(tipIdx, 1);
+        continue;
+      }
 
       // ------ IC/CC: tip reached a region of opposite charge ------
       f.fieldAt(nx, ny, fOut);
       const localRho = fOut.rho;
-      if (Math.sign(localRho) === -sign && Math.abs(localRho) > 0.4e-9) {
+      if (extent > minConnectLen && Math.sign(localRho) === -sign && Math.abs(localRho) > 0.4e-9) {
         // enter opposite-charge region: capture completes circuit
         const nn = ch.addNode(nx, ny);
         ch.addSegment(nodeIdx, nn, this.time);
         connected = true; connectNode = nn; toGround = false;
         break;
       }
+
+      const disp = Math.hypot(nx - bx, ny - by);
+      if (disp > extent) extent = disp;
 
       // ------ capture charge near the new node ------
       const captured = this._captureCharge(nx, ny, capRadius, sign, ch);
@@ -1562,13 +1771,15 @@ class StormSim {
       ch.tips[tipIdx] = nn;
 
       // ------ branching ------
-      const pBranch = 0.045 * clampNum(emag / 8e5, 0, 2);
+      // IC channels are heavily forked (the classic "spider" look); CG
+      // leaders keep the sparser dendritic branching they had before.
+      const pBranch = (isIC ? 0.085 : 0.045) * clampNum(emag / 8e5, 0, 2);
       if (this.rng() < pBranch) {
         ch.tips.push(nn);
         ch.tipSign.push(sign);
       }
       // tiny chance for spontaneous secondary tip at a side angle
-      if (this.rng() < 0.012) {
+      if (this.rng() < (isIC ? 0.022 : 0.012)) {
         const bn = ch.addNode(nx + (this.rng() - 0.5) * stepBase * 2, ny + (this.rng() - 0.5) * stepBase * 2);
         ch.addSegment(nn, bn, this.time); // zero-length cosmetic stub avoided: reuse nn
         ch.segA[ch.segA.length - 1] = nodeIdx; // proper: branch from current node
@@ -1578,18 +1789,40 @@ class StormSim {
       void by;
     }
 
+    // Abortive / partial IC flares: a leader system that spread through a
+    // kilometre or more of the charge layer but never bridged to a far
+    // pocket still produces the dim multi-stroke discharge (K-changes) seen
+    // inside cloud; treating it as "failed" wasted most of the flashes.
+    if (!connected && isIC && extent > 800) {
+      connected = true;
+      connectNode = ch.nodesX.length - 1;
+      toGround = false;
+    }
+
     if (connected) {
       ch.state = 'stroke';
       ch.strokeT = this.time;
       ch.strokeOrigin = connectNode;
-      ch.strokesLeft = 1 + Math.floor(this.rng() * 3);    // 1-3 subsequent
-      ch.continuing = 0.15 + this.rng() * 0.25;           // continuing current
       ch.toGround = toGround;
-      ch.flashLevel = 1.0;
+      if (toGround) {
+        // CG return strokes: bright, few restrikes, continuing current
+        ch.strokesLeft = 1 + Math.floor(this.rng() * 3);
+        ch.continuing = 0.15 + this.rng() * 0.25;
+        ch.flashLevel = 1.0;
+      } else {
+        // Intra-cloud flashes are dominated by K-changes / multiple dim
+        // sub-strokes spread through the layer rather than one blinding
+        // return stroke. They are brighter than a leader but dimmer than CG.
+        ch.strokesLeft = 2 + Math.floor(this.rng() * 3);
+        ch.continuing = 0.10 + this.rng() * 0.18;
+        ch.flashLevel = 0.62;
+      }
       // light the whole channel up
-      for (let s = 0; s < ch.segBright.length; s++) ch.segBright[s] = 1.0;
+      const lit = toGround ? 1.0 : 0.78;
+      for (let s = 0; s < ch.segBright.length; s++) ch.segBright[s] = lit;
       this._strokeNeutralize(ch, toGround);
       this.flashCount++;
+      this._recordFlashEvent(ch);
     } else {
       // failed leader: release captured charge back into the air locally
       this._releaseChannelCharge(ch);
@@ -1732,8 +1965,8 @@ class StormSim {
     for (let ci = this.channels.length - 1; ci >= 0; ci--) {
       const ch = this.channels[ci];
       ch.age += dt;
-      // afterglow decay
-      const tau = ch.state === 'decay' ? 0.03 : 0.09;
+      // afterglow decay (IC channels cool faster than a CG return stroke)
+      const tau = ch.state === 'decay' ? 0.03 : (ch.toGround ? 0.09 : 0.065);
       const decay = Math.exp(-dt / tau);
       for (let s = 0; s < ch.segBright.length; s++) ch.segBright[s] *= decay;
       ch.flashLevel *= Math.exp(-dt / 0.12);
@@ -1771,18 +2004,25 @@ class StormSim {
   /* ------------------------------ main step ------------------------- */
 
   /**
-   * Advance by dtSim seconds (of simulation time). Sub-steps internally for
-   * stability and caps work per call.
+   * Advance by dtSim seconds (of simulation time).
+   *
+   * Cost control (the app hands the engine up to several simulated seconds per
+   * rendered frame): the call is split into a few stable sub-steps for the
+   * particle integrator, but the expensive global work — the SOR field solve
+   * and the lightning scan — runs at most once per call. Drag is integrated
+   * implicitly (k = min(1, dt/tau)) and every microphysical rate is clamped,
+   * so sub-steps of ~1 s remain stable; the former fixed 0.2 s cadence made
+   * a 2.9 s frame pay for 15 full particle sweeps and 5 field solves and was
+   * the main source of frame hitching during charge separation.
    */
   step(dtSim) {
     if (!this.env.valid || dtSim <= 0) return;
     const P = this.particles;
     dtSim = Math.min(dtSim, 3.0); // hard cap per call
-    let remaining = dtSim;
-    const subDt = 0.20; // s
-    while (remaining > 1e-9) {
-      const dt = Math.min(subDt, remaining);
-      remaining -= dt;
+    const nSub = Math.max(1, Math.min(3, Math.ceil(dtSim / 1.0)));
+    const dt = dtSim / nSub;
+
+    for (let sub = 0; sub < nSub; sub++) {
       this.time += dt;
 
       this._spawnMissing();
@@ -1791,11 +2031,15 @@ class StormSim {
       // particle removal is safe because no index lists exist yet)
       for (let i = P.count - 1; i >= 0; i--) {
         if (!this._moveParticle(i, dt)) { P.remove(i); continue; }
-        this._microParticle(i, dt);
+        this._microParticle(i, dt, true);
         if (P.mass[i] <= 0) { P.remove(i); continue; }
-        // atmospheric ion leakage (charge relaxation in electrified cloud)
+        // Atmospheric ion leakage: in-cloud charge relaxes with a
+        // multi-minute time constant. The former 180 s value drained
+        // separated charge almost as fast as it formed, which left the
+        // charge-separation view starved of charged particles and kept the
+        // field below breakdown in all but the most vigorous storms.
         if (P.charge[i] !== 0) {
-          const leak = P.charge[i] * (dt / 180.0);
+          const leak = P.charge[i] * (dt / 600.0);
           P.charge[i] -= leak;
           this.ledger.leaked += leak;
           this.ledger.inAir -= leak;
@@ -1808,26 +2052,30 @@ class StormSim {
       // spatial partition *after* all removals, so linked lists are consistent
       this._buildGrid();
 
-      // cohort interactions: collisions, riming, aggregation & charging
-      this._cohortStep(dt);
-
-      // adaptive merge when population pressure is high
-      if (P.count > this.maxParticles * 0.92) {
-        this._buildGrid();   // cohort pass can convert types / spawn children
-        this._mergePass();
-        this._buildGrid();
-      }
-
-      // field solve periodically & after events
-      if (this.time - this.lastFieldSolve >= this.fieldSolveInterval) {
-        this._accumulateChargeAndChargeRegions();
-        this.field.solve(90);
-        this.lastFieldSolve = this.time;
-        // attempt breakdown initiation; only in real atmospheric conditions
-        this._maybeInitiateLightning();
-      }
-
       this._updateChannels(dt);
+    }
+
+    // Cohort interactions (collisions, riming, aggregation & charging) are
+    // mean-field over ~seconds; one pass per call is enough and removes four
+    // redundant full-grid sweeps from a typical multi-second frame.
+    this._buildGrid();
+    this._cohortStep(dtSim);
+
+    // adaptive merge when population pressure is high
+    if (P.count > this.maxParticles * 0.92) {
+      this._buildGrid();   // cohort pass can convert types / spawn children
+      this._mergePass();
+      this._buildGrid();
+    }
+
+    // Field solve + lightning scan: once per call (the potential relaxes on a
+    // multi-second timescale relative to the discharge events themselves).
+    if (this.time - this.lastFieldSolve >= this.fieldSolveInterval) {
+      this._accumulateChargeAndChargeRegions();
+      this.field.solve(90);
+      this.lastFieldSolve = this.time;
+      // attempt breakdown initiation; only in real atmospheric conditions
+      this._maybeInitiateLightning();
     }
   }
 
@@ -1870,7 +2118,9 @@ class StormSim {
       out.data[i * 4] = P.radius[i];
       out.data[i * 4 + 1] = P.type[i];
       const q = P.charge[i];
-      out.data[i * 4 + 2] = q === 0 ? 0 : Math.sign(q) * Math.min(9, Math.log10(Math.abs(q)) + 14);
+      // treat trace charges as neutral for display so the charge view is honest
+      out.data[i * 4 + 2] = (q === 0 || Math.abs(q) < 1e-13) ? 0 :
+        Math.sign(q) * Math.min(9, Math.log10(Math.abs(q)) + 14);
       out.data[i * 4 + 3] = (P.seed[i] & 1023) / 1023.0; // per-particle dither
       out.misc[i * 2] = P.mult[i] > 0 ? Math.log10(Math.max(P.mult[i], 1)) : 0;
       out.misc[i * 2 + 1] = P.melt[i];
