@@ -70,7 +70,7 @@ class StormOverlay {
     const qs = new URLSearchParams(location.search);
     this.params = {
       enabled: qs.get('storm') === '0' ? false : true,
-      view: 'combined',          // realistic|species|charge|chargeDensity|field|potential|combined
+      view: 'charge',            // charge|combined|species|chargeDensity|field|potential|realistic
       chargeRate: 1.0,
       particleBudget: 12000,
       alpha: 0.85,
@@ -126,13 +126,13 @@ class StormOverlay {
       folder.add(this.params, 'enabled').name('Enable storm physics')
         .onChange(() => { if (!this.params.enabled) this._clearCanvas(); });
       folder.add(this.params, 'view', {
-        'Realistic (lightning only)': 'realistic',
+        'Show Charges (+ red / − blue)': 'charge',
+        'Combined (charges + density field)': 'combined',
         'Particles by species': 'species',
-        'Particles by charge (+/-)': 'charge',
         'Charge density': 'chargeDensity',
         'Electric field magnitude': 'field',
         'Electric potential': 'potential',
-        'Combined (energetics view)': 'combined'
+        'Realistic (lightning only)': 'realistic'
       }).name('Visualization');
       folder.add(this.params, 'chargeRate', 0.0, 6.0, 0.05).name('Charge separation rate')
         .onChange((v) => { if (this.sim) this.sim.chargeRate = v; });
@@ -277,7 +277,7 @@ class StormOverlay {
     const envNx = this.envNx, envNy = this.envNy;
     const simX = Math.min(sim_res_x - 1, Math.max(0, Math.floor(((ix + 0.5) / envNx) * sim_res_x)));
 
-    gl2.bindFramebuffer(gl2.FRAMEBUFFER, frameBuff_1);
+    gl2.bindFramebuffer(gl2.FRAMEBUFFER, this._frameBuff());
     gl2.readBuffer(gl2.COLOR_ATTACHMENT0);
     gl2.readPixels(simX, 0, 1, sim_res_y, gl2.RGBA, gl2.FLOAT, this._colBase);
     gl2.readBuffer(gl2.COLOR_ATTACHMENT1);
@@ -335,8 +335,9 @@ class StormOverlay {
 
   _sampleSomeColumns() {
     if (!this.sim) return;
-    const glApp = window.gl;
-    if (!glApp || typeof frameBuff_1 === 'undefined') return;
+    const glApp = (typeof gl !== 'undefined') ? gl : null;
+    const fb = this._frameBuff();
+    if (!glApp || !fb) return;
     if (!this._colBase || this._colBase.length !== sim_res_y * 4) {
       this._colBase = new Float32Array(sim_res_y * 4);
       this._colWater = new Float32Array(sim_res_y * 4);
@@ -349,13 +350,16 @@ class StormOverlay {
     }
     const colsPerFrame = this.bootstrapped ? 3 : 24;
     const savedFb = glApp.getParameter(glApp.FRAMEBUFFER_BINDING);
+    const savedRead = glApp.getParameter(glApp.READ_BUFFER);
     for (let k = 0; k < colsPerFrame; k++) {
       const ix = this.sampleCursor;
       this._sampleColumn(glApp, ix);
       this.sampleCursor = (this.sampleCursor + 1) % this.envNx;
       if (this.sampleCursor === 0) this.bootstrapped = true;
     }
+    // leave GL read state exactly as found (BACK is only valid unbound)
     glApp.bindFramebuffer(glApp.FRAMEBUFFER, savedFb);
+    try { glApp.readBuffer(savedRead); } catch (e) { /* BACK vs attachment edge */ }
   }
 
   _buildZeroEnv() {
@@ -372,12 +376,18 @@ class StormOverlay {
     return E;
   }
 
+  // app.js exposes the function-scoped FBO on window (see mainScript)
+  _frameBuff() {
+    return (typeof window !== 'undefined' && window.frameBuff_1) ?
+      window.frameBuff_1 : (typeof frameBuff_1 !== 'undefined' ? frameBuff_1 : null);
+  }
+
   /* ------------------------- per-frame ----------------------------- */
   lightningGate() { return (this.params.enabled && this.sim) ? 0.0 : 1.0; }
 
   frame() {
     if (!this.gl || this.failed || !this.readyGL || !this.params.enabled) return;
-    if (!window.gl || typeof frameBuff_1 === 'undefined' || typeof iterNum === 'undefined') return;
+    if (typeof iterNum === 'undefined' || !this._frameBuff()) return;
     if (typeof SETUP_MODE !== 'undefined' && SETUP_MODE) return;
     const t0 = performance.now();
 
@@ -407,7 +417,7 @@ class StormOverlay {
     if (typeof cam !== 'undefined') { out.x = cam.curXpos; out.y = cam.curYpos; out.z = cam.curZoom; }
     if (typeof sim_aspect !== 'undefined') out.ax = sim_aspect;
     if (typeof canvas_aspect !== 'undefined') out.ab = canvas_aspect;
-    if (typeof guiControls !== 'undefined' && guiControls.wrapHorizontally) out.xmult = 1.0;
+    if (typeof horizontalDisplayMult !== 'undefined') out.xmult = horizontalDisplayMult;
     return out;
   }
 

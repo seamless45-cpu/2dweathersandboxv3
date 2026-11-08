@@ -13,7 +13,6 @@ in vec2 pMisc;    // [multiplicity log10, melt fraction]
 
 uniform vec2 aspectRatios; // sim, canvas
 uniform vec3 view;         // x pos, y pos, zoom
-uniform float Xmult;       // horizontal domain oversampling
 uniform float pointScale;  // base point-size multiplier (px per sim fraction)
 uniform int colorMode;     // 0 = by species, 1 = by charge, 2 = species with charge brightness
 uniform float alphaScale;
@@ -61,8 +60,9 @@ void main()
   col = mix(col, vec3(0.45, 0.6, 1.0), clamp(pMisc.y, 0.0, 1.0) * 0.35);
   vColor = vec4(col * brightness, alphaScale * (0.55 + 0.45 * brightness));
 
+  // particle positions live in the [-1..1] sim domain, exactly like the
+  // app's precipitation display shader (no Xmult tiling for point sprites)
   vec2 outpos = simPos * 2.0 - 1.0;
-  outpos.x *= Xmult;
   outpos.x += view.x;
   outpos.y += view.y * aspectRatios[0];
   outpos *= view[2];

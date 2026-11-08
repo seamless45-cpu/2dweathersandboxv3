@@ -1,20 +1,28 @@
 #version 300 es
 precision highp float;
 
-/* Full-domain quad for the storm field overlays. Same view transform
- * contract as dispShader.vert. The quad spans the whole sim domain. */
+/* Full-domain quad for the storm field overlays, mirroring the app's
+ * dispShader.vert transform exactly (Xmult tiling for wrap-around views) so
+ * the charge/field overlays stay glued to the simulated clouds. */
 
 in vec2 vertPosition;  // [-1..1]
 
 uniform vec2 aspectRatios; // sim, canvas
 uniform vec3 view;         // x pos, y pos, zoom
-uniform float Xmult;
+uniform float Xmult;       // horizontal domain tiling (3 when wrapping)
 
-out vec2 fragCoord;        // sim-normalized [0..1]
+out vec2 fragCoord;        // sim-domain [0..1] before tiling offset
 
 void main()
 {
-  fragCoord = vertPosition * 0.5 + 0.5;
+  vec2 texCoordAdjusted = vertPosition * 0.5 + 0.5;
+
+  texCoordAdjusted.x *= Xmult;
+  // same tiling correction as dispShader.vert, expressed in tile units
+  texCoordAdjusted.x -= (Xmult - 1.0) / 2.0;
+
+  fragCoord = texCoordAdjusted;
+
   vec2 outpos = vertPosition;
   outpos.x *= Xmult;
   outpos.x += view.x;

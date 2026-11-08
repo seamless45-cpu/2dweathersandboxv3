@@ -502,14 +502,14 @@ const guiControls_default = {
   IterPerFrame : 10,
   auto_IterPerFrame : true,
   autoFpsTarget : '120',
-  performancePreset : 'Balanced',
-  hdrQuality : '75%',
-  bloomQuality : '50%',
+  performancePreset : 'Extreme',
+  hdrQuality : '100%',
+  bloomQuality : '100%',
   bloomEnabled : true,
-  filmicToneMapping : false,
-  fxaaEnabled : false,
-  volumetricCloudLighting : false,
-  temporalAAEnabled : false,
+  filmicToneMapping : true,
+  fxaaEnabled : true,
+  volumetricCloudLighting : true,
+  temporalAAEnabled : true,
   showWeatherStations : true,
   shareWeatherDataToLan : false,
   sound : true,
@@ -7028,6 +7028,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   frameBuff_0 = gl.createFramebuffer(); // global for weather stations
   const frameBuff_1 = gl.createFramebuffer();
+  window.frameBuff_1 = frameBuff_1; // storm overlay (stormview.js) samples this for its storm environment
 
   const curlFrameBuff = gl.createFramebuffer();
   const vortForceFrameBuff = gl.createFramebuffer();
