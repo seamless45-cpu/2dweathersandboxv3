@@ -92,6 +92,7 @@ class StormOverlay {
     this.qualityLevel = 0;     // 0 full, 1 reduced, 2 minimal
     this.particleOut = null;
     this.timeMs = 0;
+    this._demoT = 0;              // >0 while demo thunderstorm injection is active
 
     // stacking canvas above the ecosystem overlay
     const cv = document.createElement('canvas');
@@ -146,7 +147,8 @@ class StormOverlay {
       folder.add(this.params, 'channelsOn').name('Lightning channels');
       folder.add(this.params, 'hud').name('Show stats HUD')
         .onChange((v) => { this.hud.style.display = v ? 'block' : 'none'; });
-      folder.add({ reset: () => this.rebuild() }, 'reset').name('Reset storm engine');
+      folder.add({ startDemo: () => this.startDemoStorm() }, 'startDemo')
+        .name('\u26a1 Spawn demo thunderstorm');
       folder.open();
       this._guiFolder = folder;
     };
@@ -320,7 +322,42 @@ class StormOverlay {
     }
     const topP = Math.max(0, E.cloud[ix * envNy + envNy - 1] - 0.45) * 0.9;
     E.precip[ix * envNy + envNy - 1] = topP;
+    if (this._demoT > 0) this._injectDemoColumn(E, ix);
     this.sim.updateEnvColumn(ix, E._colScratch ? E._colScratch : this._makeColScratch(ix));
+  }
+
+  /** Superimpose a synthetic mature thunderstorm column while demo mode runs. */
+  startDemoStorm() {
+    this._demoT = 180.0; // simulated seconds of injection
+    if (this.sim) this.sim.chargeRate = Math.max(this.sim.chargeRate, 2.5);
+    this.params.chargeRate = Math.max(this.params.chargeRate, 2.5);
+    console.log('[StormEngine v1.1] demo thunderstorm injected (~3 simulated minutes)');
+  }
+
+  _injectDemoColumn(E, ix) {
+    const envNy = this.envNy;
+    const x0 = Math.floor(this.envNx * 0.28), x1 = Math.floor(this.envNx * 0.72);
+    if (ix < x0 || ix > x1) return;
+    const u = (ix - x0) / Math.max(1, x1 - x0);       // 0..1 across the cell
+    const upCore = Math.sin(Math.PI * u);             // updraft envelope
+    const mid = (x0 + x1) / 2;
+    const toward = Math.sign(mid - ix) || 1;          // low-level convergence
+    const km = E.cellSizeM / 1000;
+    for (let j = 0; j < envNy; j++) {
+      const zk = (j + 0.5) * km;
+      const io = ix * envNy + j;
+      if (E.wall[io]) continue;
+      const g = (zc, zw) => Math.exp(-((zk - zc) / zw) * ((zk - zc) / zw));
+      // moisten and warm the column
+      E.vapor[io] = Math.min(32, E.vapor[io] + 6.0 * g(2.5, 6));
+      E.tK[io] += 2.5 * upCore * (zk < 8 ? 1 : 0.4);
+      // cloud between ~1.5 and 10.5 km, precip core underneath
+      E.cloud[io] = Math.max(E.cloud[io], 2.4 * g(5.5, 3.0) * (0.4 + 0.6 * upCore));
+      E.precip[io] = Math.max(E.precip[io], 1.3 * g(2.5, 1.9) * upCore);
+      // organized updraft with convergence/divergence pattern
+      E.vy[io] = Math.max(E.vy[io], 22.0 * upCore * g(5.0, 3.6));
+      E.vx[io] += 7.0 * toward * g(1.2, 1.6) - 6.0 * toward * g(9.0, 2.2);
+    }
   }
 
   _makeColScratch(ix) {
@@ -405,6 +442,10 @@ class StormOverlay {
     if (dt > 0.0 && this.bootstrapped) {
       this.sim.chargeRate = this.params.chargeRate;
       this.sim.step(dt);
+      if (this._demoT > 0) {
+        this._demoT -= dt;
+        if (this._demoT <= 0) console.log('[StormEngine v1.1] demo thunderstorm injection ended');
+      }
     }
 
     this._render();
@@ -655,11 +696,12 @@ class StormOverlay {
     const st = this.sim.getStats();
     const counts = st.perType;
     this.hud.textContent =
-      `storm engine   t=${st.time.toFixed(0)}s   cpu=${this.cpuEma.toFixed(1)}ms` +
+      `storm engine v1.1   t=${st.time.toFixed(0)}s   cpu=${this.cpuEma.toFixed(1)}ms` +
       `\nhydrometeors ${st.particles}  (cl${counts[0]} sc${counts[1]} ice${counts[2]} sn${counts[3]} gr${counts[4]} hail${counts[5]} rain${counts[6]})` +
       `\ncharge +${st.qPositive.toExponential(2)} / ${st.qNegative.toExponential(2)} C   E max ${st.maxField.toExponential(2)} V/m` +
       `\nflashes ${st.flashes}   ch.on ${st.channels}   ground ${st.qGround.toExponential(2)} C` +
-      `\ntripole +${st.structure.upperPositive.toExponential(1)} / ${st.structure.mainNegative.toExponential(1)} / +${st.structure.lowerPositive.toExponential(1)}`;
+      `\ntripole +${st.structure.upperPositive.toExponential(1)} / ${st.structure.mainNegative.toExponential(1)} / +${st.structure.lowerPositive.toExponential(1)}` +
+      (this._demoT > 0 ? `\nDEMO STORM injecting ${this._demoT.toFixed(0)}s` : '');
   }
 
   _autoQuality() {
@@ -677,5 +719,6 @@ class StormOverlay {
 
 const overlay = new StormOverlay();
 window.stormOverlay = overlay;
+console.log('[StormEngine v1.1] Show Charges toggle + charge-pattern lightning active');
 
 })();
