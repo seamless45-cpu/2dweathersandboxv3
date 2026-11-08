@@ -2076,6 +2076,7 @@ class LoadingBar
   #screen;
   #progress;
   #task;
+  #bar;
 
   constructor(percentIn)
   {
@@ -2091,14 +2092,24 @@ class LoadingBar
     this.#screen.setAttribute('aria-valuemin', '0');
     this.#screen.setAttribute('aria-valuemax', '100');
     this.#screen.innerHTML = `
+      <div class="loading-brand">
+        <svg class="loading-bolt" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="#ffd76a" d="M13 2 L5 13 h4 L8 24 L19.5 10 h-4.5 L17 2 Z"></path>
+        </svg>
+        <div class="loading-title">2D Weather Sandbox</div>
+        <div class="loading-tagline">Particle microphysics &middot; charge separation &middot; emergent lightning —
+          the storm runs its own electrical physics</div>
+      </div>
       <div class="loading-progress">
         <span class="loading-percentage"></span>
         <span class="loading-complete">Complete</span>
       </div>
+      <div class="loading-bar-track"><div class="loading-bar-fill"></div></div>
       <div class="loading-task"></div>
     `;
     this.#progress = this.#screen.querySelector('.loading-percentage');
     this.#task = this.#screen.querySelector('.loading-task');
+    this.#bar = this.#screen.querySelector('.loading-bar-fill');
     document.body.appendChild(this.#screen);
     this.#update();
   }
@@ -2128,6 +2139,8 @@ class LoadingBar
     this.#progress.textContent = percent + '%';
     this.#screen.setAttribute('aria-valuenow', String(percent));
     this.#task.textContent = this.description || '';
+    if (this.#bar)
+      this.#bar.style.width = percent + '%';
   }
 
   async remove(completed = false)

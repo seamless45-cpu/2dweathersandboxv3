@@ -71,6 +71,7 @@ class StormOverlay {
     this.params = {
       enabled: qs.get('storm') === '0' ? false : true,
       view: 'charge',            // charge|combined|species|chargeDensity|field|potential|realistic
+      showCharges: true,         // master toggle for all charge overlays/tinting
       chargeRate: 1.0,
       particleBudget: 12000,
       alpha: 0.85,
@@ -134,6 +135,8 @@ class StormOverlay {
         'Electric potential': 'potential',
         'Realistic (lightning only)': 'realistic'
       }).name('Visualization');
+      folder.add(this.params, 'showCharges').name('Show Charges')
+        .onChange(() => { /* takes effect next frame; HUD keeps stats */ });
       folder.add(this.params, 'chargeRate', 0.0, 6.0, 0.05).name('Charge separation rate')
         .onChange((v) => { if (this.sim) this.sim.chargeRate = v; });
       folder.add(this.params, 'particleBudget', 2000, 40000, 500).name('Particle budget')
@@ -434,9 +437,14 @@ class StormOverlay {
 
     const v = this._view();
     const mode = this.params.view;
-    const drawParticles = mode === 'species' || mode === 'charge' || mode === 'combined';
-    const drawField = mode === 'chargeDensity' ? 0 : mode === 'field' ? 1 :
-                      mode === 'potential' ? 2 : mode === 'combined' ? 3 : -1;
+    const chargeOn = this.params.showCharges;
+    // 'charge' without the toggle degrades to a clear species view; 'combined'
+    // keeps species particles but swaps the density film for E magnitude
+    const effMode = (!chargeOn && mode === 'charge') ? 'species' : mode;
+    const drawParticles = effMode === 'species' || effMode === 'charge' || effMode === 'combined';
+    const drawField = effMode === 'chargeDensity' ? 0 : effMode === 'field' ? 1 :
+                      effMode === 'potential' ? 2 : effMode === 'combined' ? (chargeOn ? 3 : 1) : -1;
+    const colorModeEff = effMode === 'charge' ? (chargeOn ? 1 : 0) : (effMode === 'combined' ? (chargeOn ? 2 : 0) : 0);
 
     // ---- field overlay ----
     if (drawField >= 0 && this._uploadField()) {
@@ -458,7 +466,7 @@ class StormOverlay {
     }
 
     // ---- E-field arrows ----
-    if ((this.params.arrows || mode === 'field') && this._buildArrows()) {
+    if ((this.params.arrows || effMode === 'field') && this._buildArrows()) {
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.useProgram(this.prog_arrows);
       gl.bindVertexArray(this.vaoArrows);
@@ -490,7 +498,7 @@ class StormOverlay {
         // super-particles are statistical cohorts: size with a small
         // physical component and a visibility floor (see shader)
         gl.uniform1f(gl.getUniformLocation(P, 'pointScale'), 6.0);
-        gl.uniform1i(gl.getUniformLocation(P, 'colorMode'), mode === 'charge' ? 1 : (mode === 'combined' ? 2 : 0));
+        gl.uniform1i(gl.getUniformLocation(P, 'colorMode'), colorModeEff);
         gl.uniform1f(gl.getUniformLocation(P, 'alphaScale'), this.params.alpha);
         this._setViewUniforms(P, v);
         gl.drawArrays(gl.POINTS, 0, n);

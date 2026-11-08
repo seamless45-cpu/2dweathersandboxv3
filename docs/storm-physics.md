@@ -48,14 +48,17 @@ no hardcoded charge regions.
    (grounded lower boundary, fair-weather top flux, open/neumann sides); E is
    taken from the field gradient.
 
-6. **Emergent lightning.** Initiation where |E| exceeds the
-   altitude/humidity-corrected breakdown threshold (in-cloud initiation
-   ~150–400 kV/m), stochastic streamer gating, bidirectional stepped leaders
-   that follow the solved field with probabilistic branching, IC/CG/CA
-   discriminated by attachment, 1–3 restrikes with continuing current, and
-   channel-wide charge neutralization along the stroke path. Signed charge
-   is tracked through in-air → channel → ground/deposit with machine-exact
-   conservation; the calm-atmosphere control shows no flashes.
+6. **Emergent lightning.** Initiation picks from the strongest solved-field
+   cells, preferring sites from which an **opposite-charge pocket is
+   reachable along the field** (`topFieldCells` + `_oppositeChargeReach` —
+   flashes connect the charge pattern rather than a scalar maximum), with
+   stochastic streamer gating; bidirectional stepped leaders follow the
+   solved E-field **plus an explicit seek gradient toward opposite-charge
+   regions** (`chargeSeekDir`) so channels visibly thread through charge
+   pockets; IC/CG/CA discriminated by attachment, 1–3 restrikes with
+   continuing current, channel-wide neutralization sweep per stroke. Signed
+   charge is tracked through in-air → channel → ground/deposit with
+   machine-exact conservation; the calm-atmosphere control shows no flashes.
 
 7. **Tripole structure** (upper positive / main negative / small lower
    positive) emerges from differential sedimentation of charged species —
@@ -63,13 +66,18 @@ no hardcoded charge regions.
 
 ## Rendering modes (GUI → "Storm Physics & Electricity")
 
-- **Realistic** — only lightning channels over the normal storm display.
+- **Show Charges (default)** — + red / − blue polarity particles, brightness
+  ~ log |q|; master **Show Charges** checkbox toggles every charge overlay
+  instantly (species view remains when toggled off).
+- **Combined** — charge-tinted particles over charge-density/E blend.
 - **Particles by species** — 7-way hydrometeor colouring.
-- **Particles by charge** — red/blue polarity, brightness ~ log |q|.
 - **Charge density** — bipolar fluid of the solver's ρ field.
 - **Electric field magnitude / potential** — solved-field heat map /
   iso-contour shading (+ optional vector arrows).
-- **Combined** — charge-tinted particles over charge-density/E blend.
+- **Realistic** — only lightning channels over the normal storm display.
+
+The app also shows a storm-themed loading screen (percent, task, animated
+bolt and progress bar) while shaders compile and buffers warm up.
 
 Thunder reuses the existing `soundSystem.soundThunder(x, y, intensity)`
 with flash position/intensity derived from completed strokes. While the
