@@ -1,0 +1,1938 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <title>2D Weather Sandbox</title>
+    <script type="text/javascript" src="libraries/dat.gui.min.js"></script>
+    <script type="text/javascript" src="libraries/pako.min.js"></script>
+    <script type="text/javascript" src="libraries/chart.js"></script>
+    <script type="text/javascript" src="libraries/chartjs-adapter-date-fns.js"></script>
+    <script type="text/javascript" src="ecosystem.js"></script>
+    <script type="text/javascript" src="app.js"></script>
+    <link rel="shortcut icon" type="image/x-icon" href="favicon.ico">
+    <style>
+        :root {
+            --text-color: #ffffff;
+            --accent-color: #4a90e2;
+            --hover-color: #007bff;
+            --border-radius: 12px;
+            --transition-speed: 0.3s;
+            --shadow: 0 4px 6px rgba(15, 5, 5, 0.1);
+            --soft-gradient: linear-gradient(135deg, rgba(74, 144, 226, 0.1), rgba(0, 123, 255, 0.1));
+        }
+
+        @font-face {
+            font-family: "Plus Jakarta Sans";
+            font-style: normal;
+            font-weight: 400 800;
+            font-display: swap;
+            src: url("resources/fonts/plus-jakarta-sans-latin.woff2") format("woff2");
+            unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+        }
+
+        @font-face {
+            font-family: "Plus Jakarta Sans";
+            font-style: normal;
+            font-weight: 400 800;
+            font-display: swap;
+            src: url("resources/fonts/plus-jakarta-sans-latin-ext.woff2") format("woff2");
+            unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+        }
+
+        @font-face {
+            font-family: "Roboto";
+            font-style: normal;
+            font-weight: 400;
+            font-display: swap;
+            src: url("resources/fonts/roboto-latin.woff2") format("woff2");
+            unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+        }
+
+        .dg.ac .dg.main,
+        .dg.ac .dg.main * {
+            font-family: "Plus Jakarta Sans", sans-serif !important;
+            font-size: 12px !important;
+        }
+
+        .dg.ac .dg.main .cr {
+            border-left: 0 !important;
+        }
+
+        .dg.ac .dg.main .c input[type="text"] {
+            font-family: "Roboto", sans-serif !important;
+            font-size: 12px !important;
+            font-weight: 400;
+        }
+
+        .dg .c .slider-fg {
+            background-repeat: no-repeat;
+        }
+
+        .simulation-clock {
+            color: var(--clock-text-color, #fff);
+            font-family: "Roboto", sans-serif;
+            left: 18px;
+            line-height: 1.5;
+            position: absolute;
+            top: 12px;
+            z-index: 10;
+        }
+
+        .weather-station-menu-hint {
+            align-items: center;
+            background: linear-gradient(145deg, rgba(17, 24, 32, 0.48), rgba(17, 24, 32, 0.28));
+            -webkit-backdrop-filter: blur(12px) saturate(160%) brightness(1.12);
+            backdrop-filter: blur(12px) saturate(160%) brightness(1.12);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 999px;
+            box-sizing: border-box;
+            color: #fff;
+            display: flex;
+            font: 400 9px/1 "Plus Jakarta Sans", sans-serif;
+            gap: 8px;
+            justify-content: center;
+            overflow: hidden;
+            opacity: 0;
+            padding: 5px 0;
+            pointer-events: none;
+            position: absolute;
+            left: 130px;
+            top: -55px;
+            transform: translateX(-50%);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2), inset 0 1px rgba(255, 255, 255, 0.35);
+            transition: width 240ms ease, opacity 180ms ease, background 500ms ease, border-color 500ms ease, color 500ms ease;
+            white-space: nowrap;
+            width: 0;
+            z-index: 3;
+        }
+
+        .weather-station-menu-hint[data-contrast="dark"] {
+            background: linear-gradient(145deg, rgba(255, 255, 255, 0.62), rgba(225, 238, 250, 0.38));
+            border-color: rgba(17, 24, 32, 0.24);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12), inset 0 1px rgba(255, 255, 255, 0.72);
+            color: #111820;
+        }
+
+        .weather-station-marker {
+            align-items: center;
+            color: #fff;
+            display: flex;
+            font: 400 10px/1 "Plus Jakarta Sans", sans-serif;
+            gap: 3px;
+            left: 50%;
+            pointer-events: none;
+            position: absolute;
+            top: -3px;
+            transform: translate(-50%, var(--weather-marker-transition-y, 0px));
+            transition: none;
+            will-change: opacity, transform;
+            z-index: 2;
+        }
+
+        .weather-station-marker img {
+            display: block;
+            flex: 0 0 22px;
+            height: 22px;
+            width: 22px;
+        }
+
+        #weatherStationLayer {
+            height: 100vh;
+            inset: 0;
+            overflow: visible;
+            pointer-events: none;
+            position: fixed;
+            transform: none;
+            width: 100vw;
+            zoom: 1;
+            z-index: 2;
+        }
+
+        #weatherStationLayer .weather-station {
+            height: 0;
+            pointer-events: none;
+            transform: none;
+            width: 0;
+            zoom: 1;
+        }
+
+        #weatherStationLayer .weather-station-display {
+            height: var(--weather-station-height) !important;
+            max-height: none !important;
+            max-width: none !important;
+            transform: none !important;
+            width: var(--weather-station-width) !important;
+        }
+
+        .scroll-downs {
+            align-items: center;
+            display: flex;
+            flex: 0 0 15px;
+            height: 26px;
+            justify-content: center;
+        }
+
+        .mousey {
+            border: 1.5px solid currentColor;
+            border-radius: 10px;
+            box-sizing: border-box;
+            display: flex;
+            height: 26px;
+            justify-content: center;
+            opacity: 0.8;
+            padding-top: 4px;
+            width: 15px;
+        }
+
+        .scroller {
+            animation: scroll 2.2s cubic-bezier(.15, .41, .69, .94) infinite;
+            animation-play-state: paused;
+            background-color: currentColor;
+            border-radius: 25%;
+            height: 6px;
+            width: 2px;
+        }
+
+        .weather-station.is-hovered .scroller {
+            animation-play-state: running;
+        }
+
+        @keyframes scroll {
+            0% {
+                opacity: 0;
+            }
+            10% {
+                opacity: 1;
+                transform: translateY(0);
+            }
+            100% {
+                opacity: 0;
+                transform: translateY(9px);
+            }
+        }
+
+        .weather-station.is-hovered .weather-station-menu-hint {
+            opacity: 1;
+            padding: 5px 8px;
+            width: 144px;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .weather-station-menu-hint {
+                transition-duration: 0.01ms;
+            }
+
+            .scroller {
+                animation: none;
+            }
+        }
+
+        .simulation-clock,
+        .simulation-clock * {
+            transition: color 500ms ease-in-out;
+        }
+
+        .simulation-clock-primary {
+            align-items: baseline;
+            display: flex;
+            gap: 10px;
+            white-space: nowrap;
+        }
+
+        .simulation-clock-time {
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .simulation-clock-time::after {
+            content: ",";
+        }
+
+        .simulation-clock-date {
+            font-size: 16px;
+            font-weight: 500;
+        }
+
+        .simulation-clock-detail {
+            align-items: center;
+            display: flex;
+            font-size: 13px;
+            font-weight: 400;
+            gap: 8px;
+            letter-spacing: 0.01em;
+            min-height: 19px;
+        }
+
+        .simulation-clock-fps {
+            gap: 6px;
+        }
+
+        .simulation-clock-fps-value {
+            font-weight: 600;
+        }
+
+        .simulation-clock-fps-good {
+            color: #7ee787;
+        }
+
+        .simulation-clock[data-contrast="dark"] .simulation-clock-fps-good {
+            color: #236b32;
+        }
+
+        .simulation-clock-fps-warn {
+            color: #f2cc60;
+        }
+
+        .simulation-clock[data-contrast="dark"] .simulation-clock-fps-warn {
+            color: #765900;
+        }
+
+        .simulation-clock-fps-poor {
+            color: #ff7b72;
+        }
+
+        .simulation-clock[data-contrast="dark"] .simulation-clock-fps-poor {
+            color: #a32620;
+        }
+
+        .display-mode-overlay {
+            background: #000;
+            inset: 0;
+            opacity: 0;
+            pointer-events: none;
+            position: fixed;
+            z-index: 9997;
+        }
+
+        .display-mode-overlay.is-transitioning {
+            animation: display-mode-dim 420ms ease-out both;
+        }
+
+        .display-mode-toast {
+            color: #fff;
+            font: 700 clamp(28px, 5vw, 56px)/1.15 "Roboto", sans-serif;
+            left: 50%;
+            opacity: 0;
+            pointer-events: none;
+            position: fixed;
+            text-align: center;
+            top: 50%;
+            transform: translate(-50%, calc(-50% + 12px)) scale(0.96);
+            width: min(90vw, 900px);
+            z-index: 9998;
+        }
+
+        .display-mode-toast.is-visible {
+            animation: display-mode-toast 780ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+        }
+
+        @keyframes display-mode-dim {
+            0%, 100% { opacity: 0; }
+            35% { opacity: 0.25; }
+        }
+
+        @keyframes display-mode-toast {
+            0% { opacity: 0; transform: translate(-50%, calc(-50% + 12px)) scale(0.96); }
+            18%, 72% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+            100% { opacity: 0; transform: translate(-50%, calc(-50% - 8px)) scale(1.02); }
+        }
+
+        .diagnostic-legend {
+            background: rgba(15, 20, 28, 0.68);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            border-radius: 10px;
+            bottom: 20px;
+            color: #fff;
+            display: grid;
+            font: 11px/1.4 "Roboto", sans-serif;
+            gap: 5px;
+            left: 50%;
+            padding: 10px 14px;
+            pointer-events: none;
+            position: fixed;
+            transform: translateX(-50%);
+            width: min(320px, calc(100vw - 32px));
+            z-index: 9000;
+            -webkit-backdrop-filter: blur(14px) saturate(135%);
+            backdrop-filter: blur(14px) saturate(135%);
+        }
+
+        .diagnostic-legend[hidden] {
+            display: none;
+        }
+
+        .diagnostic-legend-title {
+            font-size: 12px;
+            text-align: center;
+        }
+
+        .diagnostic-legend-scale {
+            border-radius: 999px;
+            height: 9px;
+            width: 100%;
+        }
+
+        .diagnostic-legend-reflectivity-scale {
+            background: linear-gradient(90deg, #1a2947, #0dc0f2, #0dd138, #faeb0d, #ff7a0a, #eb0a0a, #eb14dc, #b875ff);
+        }
+
+        .diagnostic-legend-cape-scale {
+            background: linear-gradient(90deg, #141f57, #00b8eb, #14cc47, #f2e614, #ff6b0a, #e60a0a, #d140e6);
+        }
+
+        .diagnostic-legend-labels {
+            display: flex;
+            justify-content: space-between;
+            opacity: 0.82;
+        }
+
+        .diagnostic-legend-reflectivity-title,
+        .diagnostic-legend-reflectivity-scale,
+        .diagnostic-legend-reflectivity-labels,
+        .diagnostic-legend-cape-title,
+        .diagnostic-legend-cape-scale,
+        .diagnostic-legend-cape-labels {
+            display: none;
+        }
+
+        .diagnostic-legend-reflectivity .diagnostic-legend-reflectivity-title,
+        .diagnostic-legend-reflectivity .diagnostic-legend-reflectivity-scale,
+        .diagnostic-legend-reflectivity .diagnostic-legend-reflectivity-labels,
+        .diagnostic-legend-cape .diagnostic-legend-cape-title,
+        .diagnostic-legend-cape .diagnostic-legend-cape-scale,
+        .diagnostic-legend-cape .diagnostic-legend-cape-labels {
+            display: block;
+        }
+
+        .diagnostic-legend-reflectivity .diagnostic-legend-reflectivity-labels,
+        .diagnostic-legend-cape .diagnostic-legend-cape-labels {
+            display: flex;
+        }
+
+        .cape-hover-tooltip {
+            background: rgba(15, 20, 28, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 9px;
+            box-shadow: 0 8px 26px rgba(0, 0, 0, 0.32);
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            font: 12px/1.55 "Roboto", sans-serif;
+            gap: 2px;
+            max-width: min(260px, calc(100vw - 24px));
+            padding: 9px 12px;
+            pointer-events: none;
+            position: fixed;
+            z-index: 10001;
+            -webkit-backdrop-filter: blur(14px) saturate(135%);
+            backdrop-filter: blur(14px) saturate(135%);
+        }
+
+        .cape-hover-tooltip[hidden] {
+            display: none;
+        }
+
+        .cape-hover-tooltip small {
+            color: rgba(255, 255, 255, 0.65);
+            margin-top: 3px;
+        }
+
+        .performance-tooltip {
+            background: rgba(18, 25, 35, 0.68);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+            box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+            color: #fff;
+            font: 12px/1.5 "Plus Jakarta Sans", sans-serif;
+            opacity: 0;
+            padding: 11px 13px;
+            pointer-events: none;
+            position: fixed;
+            transform: translateY(4px);
+            transition: opacity 180ms ease, transform 180ms ease;
+            width: 250px;
+            z-index: 10000;
+            -webkit-backdrop-filter: blur(14px) saturate(135%);
+            backdrop-filter: blur(14px) saturate(135%);
+        }
+
+        .performance-tooltip.is-visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .performance-tooltip-impact {
+            font-weight: 700;
+            margin-top: 7px;
+        }
+
+        .performance-tooltip-impact[data-level="low"] {
+            color: #7ee787;
+        }
+
+        .performance-tooltip-impact[data-level="medium"] {
+            color: #f2cc60;
+        }
+
+        .performance-tooltip-impact[data-level="high"] {
+            color: #ff7b72;
+        }
+
+        .performance-score-face {
+            color: #f2cc60;
+            height: 16px;
+            margin-left: 5px;
+            vertical-align: middle;
+            width: 16px;
+        }
+
+        .performance-score-face[data-level="good"] {
+            color: #7ee787;
+        }
+
+        .performance-score-face[data-level="poor"] {
+            color: #ff7b72;
+        }
+
+        .dg.ac .dg.main .cr[data-level="good"] .c input {
+            color: #7ee787 !important;
+        }
+
+        .dg.ac .dg.main .cr[data-level="warn"] .c input {
+            color: #f2cc60 !important;
+        }
+
+        .dg.ac .dg.main .cr[data-level="poor"] .c input {
+            color: #ff7b72 !important;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .display-mode-overlay.is-transitioning,
+            .display-mode-toast.is-visible {
+                animation-duration: 1ms;
+            }
+        }
+
+        .simulation-clock-event-icon {
+            flex: 0 0 auto;
+            height: 16px;
+            width: 16px;
+        }
+
+        .simulation-clock-event-icon svg {
+            display: block;
+            height: 100%;
+            width: 100%;
+        }
+
+        .simulation-clock-event-icon svg[hidden] {
+            display: none;
+        }
+
+        @media (max-width: 600px) {
+            .simulation-clock {
+                left: 10px;
+                top: 8px;
+            }
+
+            .simulation-clock-time {
+                font-size: 14px;
+            }
+
+            .simulation-clock-date {
+                font-size: 14px;
+            }
+
+            .simulation-clock-detail {
+                font-size: 12px;
+            }
+        }
+
+        .dg.ac .dg.main {
+            background: rgba(18, 25, 35, 0.82);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            border-radius: 12px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            max-height: calc(100vh - 8px);
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+        }
+
+        @supports (height: 100dvh) {
+            .dg.ac .dg.main {
+                max-height: calc(100dvh - 8px);
+            }
+        }
+
+        .dg.ac .dg.main > ul {
+            flex: 0 1 auto;
+            height: auto !important;
+            min-height: 0;
+            overflow-x: hidden;
+            overflow-y: auto;
+        }
+
+        .dg.ac .dg.main > .close-button.close-bottom {
+            flex: 0 0 auto;
+            position: relative;
+            width: 100% !important;
+            z-index: 1003;
+        }
+
+        .app-version {
+            background: rgba(8, 12, 18, 0.48);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            border-radius: 6px;
+            bottom: 10px;
+            color: rgba(255, 255, 255, 0.78);
+            font: 500 11px/1 "Plus Jakarta Sans", sans-serif;
+            left: 10px;
+            padding: 5px 7px;
+            pointer-events: none;
+            position: fixed;
+            z-index: 1000;
+        }
+
+        @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+            .dg.ac .dg.main {
+                background: rgba(18, 25, 35, 0.56);
+                -webkit-backdrop-filter: blur(16px) saturate(140%);
+                backdrop-filter: blur(16px) saturate(140%);
+            }
+        }
+
+        .dg.ac .dg.main li:not(.folder) {
+            height: 32px;
+            line-height: 32px;
+            padding-left: 7px;
+            padding-right: 7px;
+            background: rgba(18, 25, 35, 0.28);
+            border-bottom-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .dg.ac .dg.main .cr {
+            height: 32px;
+        }
+
+        .dg.ac .dg.main .cr.boolean .c {
+            height: 32px;
+            position: absolute;
+            right: 0;
+            top: 0;
+            width: 42px;
+        }
+
+        .dg.ac .dg.main .cr.boolean {
+            position: relative;
+        }
+
+        .dg.ac .dg.main .cr.boolean .c input[type="checkbox"] {
+            appearance: none;
+            -webkit-appearance: none;
+            border: 0;
+            cursor: pointer;
+            height: 100%;
+            inset: 0;
+            margin: 0;
+            opacity: 0;
+            padding: 0;
+            position: absolute;
+            width: 100%;
+            z-index: 1;
+        }
+
+        .dg.ac .dg.main .cr.boolean .gui-lucide-check {
+            display: none;
+            height: 18px;
+            pointer-events: none;
+            position: absolute;
+            right: 9px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 18px;
+        }
+
+        .dg.ac .dg.main .cr.boolean .gui-lucide-check svg {
+            display: block;
+            height: 100%;
+            width: 100%;
+        }
+
+        .dg.ac .dg.main .cr.boolean .c input[type="checkbox"]:checked + .gui-lucide-check {
+            display: block;
+        }
+
+        .dg.ac .dg.main .cr.boolean .c input[type="checkbox"]:focus-visible {
+            outline: 2px solid rgba(255, 255, 255, 0.75);
+            outline-offset: 3px;
+        }
+
+        .dg.ac .dg.main li.title {
+            background-color: rgba(8, 12, 18, 0.82);
+            border-radius: 5px;
+            padding-left: 24px;
+            position: relative;
+            background-image: none;
+        }
+
+        .dg.ac .dg.main li.title::before {
+            border-bottom: 2px solid rgba(255, 255, 255, 0.85);
+            border-right: 2px solid rgba(255, 255, 255, 0.85);
+            content: "";
+            height: 5px;
+            left: 9px;
+            position: absolute;
+            top: 11px;
+            transform: rotate(-45deg);
+            transition: transform 220ms ease-out;
+            width: 5px;
+        }
+
+        .dg.ac .dg.main ul:not(.closed) > li.title::before {
+            transform: rotate(45deg);
+        }
+
+        .dg.ac .dg li {
+            transition: height 280ms cubic-bezier(0.2, 0.75, 0.25, 1);
+        }
+
+        .dg.ac .dg ul.closed > li:not(.title),
+        .dg.ac .dg ul.closed > li:not(.title) > * {
+            height: 0;
+            overflow: hidden;
+            transition-duration: 110ms;
+            transition-timing-function: ease-in;
+        }
+
+        .dg.ac .dg ul:not(.closed) > li:not(.title) {
+            transition-duration: 280ms;
+            transition-timing-function: cubic-bezier(0.2, 0.75, 0.25, 1);
+        }
+
+        .dg.ac .dg li.wind-push-strength-row {
+            height: 32px;
+            overflow: hidden;
+            transition: height 280ms cubic-bezier(0.2, 0.75, 0.25, 1);
+        }
+
+        .dg.ac .dg.main li.wind-push-extras-row {
+            overflow: hidden;
+            transition: height 280ms cubic-bezier(0.2, 0.75, 0.25, 1);
+        }
+
+        .dg.ac .dg.main .c input[type="text"] {
+            margin-top: 6px;
+        }
+
+        .dg.ac .dg.main .c input[type="checkbox"] {
+            margin-top: 0;
+        }
+
+        .dg.ac .dg.main .c .slider {
+            height: 20px;
+            margin-left: -1px;
+            margin-top: 6px;
+        }
+
+        .dg.ac .dg.main .c select {
+            background: rgba(8, 12, 18, 0.92);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            border-radius: 5px;
+            color: #fff;
+            color-scheme: dark;
+            cursor: pointer;
+            margin-top: 7px;
+            transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+        }
+
+        .dg.ac .dg.main .c select:hover,
+        .dg.ac .dg.main .c select:focus {
+            background: rgba(22, 32, 45, 0.98);
+            border-color: rgba(255, 255, 255, 0.32);
+            box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.16);
+            outline: none;
+        }
+
+        .dg.ac .dg.main .c select option {
+            background: #121923;
+            color: #fff;
+        }
+
+        .dg.ac .dg.main li.selection-wheel-change {
+            animation: selection-wheel-change 220ms ease-out;
+        }
+
+        .dg.ac .dg.main li.selection-wheel-change .c select {
+            border-color: rgba(126, 231, 135, 0.62);
+        }
+
+        @keyframes selection-wheel-change {
+            0% { background-color: rgba(74, 144, 226, 0.3); }
+            100% { background-color: transparent; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .dg.ac .dg.main li.selection-wheel-change {
+                animation-duration: 1ms;
+            }
+        }
+
+        .dg.ac .dg.main li.wind-push-strength-collapsed {
+            border-bottom-width: 0;
+            height: 0 !important;
+            overflow: hidden;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .dg.ac .dg li.wind-push-strength-row,
+            .dg.ac .dg.main li.wind-push-extras-row {
+                transition-duration: 1ms;
+            }
+        }
+
+        .dg.ac .dg.main > ul > li.folder:first-child > .dg > ul > li.title {
+            border-top-left-radius: 11px;
+            border-top-right-radius: 11px;
+        }
+
+        .dg.ac .dg.main .close-button {
+            background-color: rgba(8, 12, 18, 0.45);
+            border-bottom-left-radius: 11px;
+            border-bottom-right-radius: 11px;
+        }
+
+        .dg.ac .dg.main .close-button:hover {
+            background-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .dg.ac .dg.main .c input[type="text"] {
+            background: rgba(0, 0, 0, 0.25);
+        }
+
+        .dg.ac .dg.main .c .slider {
+            background: rgba(0, 0, 0, 0.28);
+        }
+
+        body {
+            margin: 0;
+            font-family: 'Arial', sans-serif;
+            background: url('resources/img/background.png') bottom left no-repeat;
+            background-size: cover;
+            background-attachment: fixed;
+            color: var(--text-color);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        body.is-loading > :not(#loadingScreen):not(#mainCanvas) {
+            opacity: 0 !important;
+            pointer-events: none !important;
+            transition: opacity 350ms ease;
+        }
+
+        .loading-screen {
+            align-items: center;
+            -webkit-backdrop-filter: blur(8px) saturate(120%);
+            backdrop-filter: blur(8px) saturate(120%);
+            background: rgba(3, 7, 12, 0.28);
+            box-sizing: border-box;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            inset: 0;
+            justify-content: center;
+            opacity: 0;
+            padding: 24px;
+            pointer-events: none;
+            position: fixed;
+            transition: opacity 350ms ease;
+            transform: translate3d(0, 0, 0);
+            z-index: 10000;
+        }
+
+        body.is-loading .loading-screen {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        body.is-finishing .loading-screen {
+            opacity: 0;
+            transform: translate3d(0, -100%, 0);
+            will-change: opacity, transform;
+            transition: opacity 700ms cubic-bezier(0.16, 1, 0.3, 1), transform 700ms cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        body.is-finishing #mainCanvas {
+            animation: simulation-slide-up 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
+            will-change: transform;
+        }
+
+        @keyframes simulation-slide-up {
+            from {
+                transform: translate3d(0, 100vh, 0);
+            }
+            to {
+                transform: translate3d(0, 0, 0);
+            }
+        }
+
+        .loading-progress {
+            align-items: baseline;
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            letter-spacing: -0.035em;
+        }
+
+        .loading-percentage {
+            font: 500 clamp(42px, 9vw, 72px)/1 "Roboto", sans-serif;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .loading-complete {
+            color: rgba(255, 255, 255, 0.76);
+            font: 400 clamp(18px, 3vw, 24px)/1 "Plus Jakarta Sans", sans-serif;
+            letter-spacing: 0;
+        }
+
+        .loading-task {
+            bottom: 34px;
+            color: rgba(255, 255, 255, 0.64);
+            font: 400 12px/1.5 "Roboto", sans-serif;
+            left: 24px;
+            position: absolute;
+            right: 24px;
+            text-align: center;
+        }
+
+        .loading-screen.has-error .loading-percentage,
+        .loading-screen.has-error .loading-task {
+            color: #ff8b8b;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            body.is-loading > :not(#loadingScreen):not(#mainCanvas),
+            .loading-screen,
+            .loading-percentage,
+            .loading-complete,
+            .loading-task,
+            body.is-finishing #mainCanvas {
+                transition-duration: 0.01ms;
+                animation-duration: 0.01ms;
+            }
+        }
+
+
+        .main-nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0rem 2rem 0rem 2rem;
+            background: rgba(8, 15, 24, 0.42);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.13);
+            -webkit-backdrop-filter: blur(16px) saturate(145%);
+            backdrop-filter: blur(16px) saturate(145%);
+            z-index: 0;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+
+        body:not(.simulation-started) .main-nav {
+            display: none;
+        }
+
+        .nav-title h1 {
+            margin: 0;
+            font-size: 2.0rem;
+            color: var(--text-color);
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        .nav-title {
+            transition: opacity 0.25s ease, visibility 0s linear;
+        }
+
+        .simulation-started .nav-title {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transition: opacity 0.25s ease, visibility 0s linear 0.25s;
+        }
+
+        .nav-icons {
+            display: flex;
+            padding-top: 1rem;
+            gap: 1.5rem;
+            align-items: center;
+        }
+
+        .nav-icons img {
+            height: 50px;
+            width: auto;
+            transition: all 0.3s ease;
+            opacity: 0.9;
+        }
+
+        .nav-icons a:hover img {
+            transform: scale(1.1);
+            opacity: 1;
+        }
+
+        .resolution-warning {
+            margin-top: 4rem;
+            max-width: 1200px;
+            padding: 1rem 2rem;
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: var(--border-radius);
+            box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+            -webkit-backdrop-filter: blur(14px) saturate(135%);
+            backdrop-filter: blur(14px) saturate(135%);
+
+        }
+
+        .resolution-warning p {
+            margin: 0;
+            font-size: 1.1rem;
+            color: rgba(255, 255, 255, 0.9);
+            line-height: 1.5;
+        }
+
+        #IntroScreen {
+            align-items: center;
+            background: rgba(0, 0, 0, 0.78);
+            display: grid;
+            inset: 0;
+            justify-items: center;
+            margin: 0;
+            max-width: none;
+            overflow: auto;
+            padding: 24px;
+            position: fixed;
+            z-index: 20;
+            -webkit-backdrop-filter: blur(22px) saturate(75%);
+            backdrop-filter: blur(22px) saturate(75%);
+        }
+
+        #IntroScreen > :not(.main-menu-content) {
+            display: none !important;
+        }
+
+        .main-menu-content {
+            display: grid;
+            gap: 30px;
+            justify-items: center;
+            max-width: min(820px, 100%);
+            width: 100%;
+        }
+
+        .main-menu-choice,
+        .main-menu-setup {
+            grid-area: 1 / 1;
+            transition: opacity 260ms ease, transform 260ms ease, visibility 0s linear 280ms;
+        }
+
+        .main-menu-choice {
+            display: grid;
+            gap: 30px;
+            justify-items: center;
+            opacity: 1;
+            transform: translateY(0);
+            visibility: visible;
+        }
+
+        .main-menu-content.is-configuring .main-menu-choice {
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(-12px);
+            visibility: hidden;
+        }
+
+        .main-menu-setup {
+            box-sizing: border-box;
+            opacity: 0;
+            padding: clamp(18px, 4vw, 32px) 0;
+            pointer-events: none;
+            transform: translateY(12px);
+            visibility: hidden;
+            width: 100%;
+            font-family: "Plus Jakarta Sans", sans-serif !important;
+        }
+
+        .main-menu-setup * {
+            font-family: "Plus Jakarta Sans", sans-serif !important;
+        }
+
+        .main-menu-content.is-configuring .main-menu-setup {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateY(0);
+            transition-delay: 80ms, 80ms, 0s;
+            visibility: visible;
+        }
+
+        .main-menu-setup > h2 {
+            color: #fff;
+            font: 600 clamp(19px, 2.7vw, 25px)/1.3 "Plus Jakarta Sans", sans-serif;
+            margin: 0 0 7px;
+            text-align: center;
+        }
+
+        .main-menu-setup > p {
+            color: rgba(255, 255, 255, 0.72);
+            font: 13px/1.5 "Roboto", sans-serif;
+            margin: 0 0 16px;
+            text-align: center;
+        }
+
+        .main-menu-setup #startBtn {
+            display: grid;
+            gap: 13px;
+            margin: 0;
+        }
+
+        .main-menu-setup .resolution-warning {
+            background: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.12);
+            margin: 0;
+            max-width: none;
+            padding: 10px 14px;
+        }
+
+        .main-menu-setup .resolution-warning p {
+            font: 13px/1.45 "Roboto", sans-serif;
+        }
+
+        .main-menu-setup table {
+            margin: 0;
+        }
+
+        .main-menu-setup table td {
+            padding: 8px 10px;
+        }
+
+        .main-menu-setup #simWorldProperties {
+            font: 12px/1.5 "Roboto", sans-serif;
+        }
+
+        .main-menu-setup input[type="range"] {
+            appearance: none;
+            background: rgba(14, 17, 22, 0.9);
+            border: 0;
+            border-radius: 0;
+            cursor: pointer;
+            height: 4px;
+            margin: 7px 0 2px;
+            outline: none;
+            transition: height 180ms ease;
+            width: 100%;
+            -webkit-appearance: none;
+        }
+
+        .main-menu-setup input[type="range"]:hover,
+        .main-menu-setup input[type="range"]:focus-visible {
+            height: 10px;
+        }
+
+        .main-menu-setup input[type="range"]::-webkit-slider-runnable-track {
+            background: linear-gradient(to right, #fff 0%, #fff var(--range-progress, 50%), rgba(14, 17, 22, 0.9) var(--range-progress, 50%), rgba(14, 17, 22, 0.9) 100%);
+            border: 0;
+            border-radius: 0;
+            height: 100%;
+            transition: height 180ms ease;
+        }
+
+        .main-menu-setup input[type="range"]::-moz-range-track {
+            background: rgba(14, 17, 22, 0.9);
+            border: 0;
+            border-radius: 0;
+            height: 100%;
+            transition: height 180ms ease;
+        }
+
+        .main-menu-setup input[type="range"]::-moz-range-progress {
+            background: #fff;
+            border: 0;
+            border-radius: 0;
+            height: 100%;
+            transition: height 180ms ease;
+        }
+
+        .main-menu-setup input[type="range"]::-webkit-slider-thumb {
+            appearance: none;
+            background: transparent;
+            border: 0;
+            box-shadow: none;
+            height: 0;
+            margin-top: 0;
+            width: 0;
+            -webkit-appearance: none;
+        }
+
+        .main-menu-setup input[type="range"]::-moz-range-thumb {
+            background: transparent;
+            border: 0;
+            box-shadow: none;
+            height: 0;
+            width: 0;
+        }
+
+        .main-menu-setup input[type="range"]:focus {
+            outline: none;
+        }
+
+        .main-menu-setup output {
+            color: rgba(255, 255, 255, 0.9);
+            font: 12px "Roboto", sans-serif;
+        }
+
+        .main-menu-setup #simResYWarning,
+        .main-menu-setup #simHeightWarning {
+            display: none !important;
+        }
+
+        .main-menu-setup .main-menu-submit {
+            align-items: center;
+            background: transparent;
+            border: 0;
+            border-radius: 16px;
+            color: rgba(255, 255, 255, 0.94);
+            cursor: pointer;
+            display: flex;
+            height: 64px;
+            justify-self: center;
+            justify-content: center;
+            padding: 12px;
+            width: 64px;
+        }
+
+        .main-menu-setup .main-menu-submit:hover,
+        .main-menu-setup .main-menu-submit:focus-visible {
+            color: #fff;
+            outline: 2px solid rgba(255, 255, 255, 0.65);
+            outline-offset: 3px;
+        }
+
+        .main-menu-setup .main-menu-submit svg {
+            height: 38px;
+            stroke: currentColor;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            stroke-width: 1.7;
+            width: 38px;
+        }
+
+        .performance-estimate {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 10px;
+            color: rgba(255, 255, 255, 0.8);
+            display: grid;
+            gap: 4px;
+            padding: 12px 15px;
+            text-align: center;
+        }
+
+        .performance-estimate-label {
+            font: 600 14px "Plus Jakarta Sans", sans-serif;
+        }
+
+        .performance-estimate[data-level="good"] .performance-estimate-label {
+            color: #82e6a5;
+        }
+
+        .performance-estimate[data-level="moderate"] .performance-estimate-label {
+            color: #f2d36e;
+        }
+
+        .performance-estimate[data-level="challenging"] .performance-estimate-label {
+            color: #ffad66;
+        }
+
+        .performance-estimate[data-level="demanding"] .performance-estimate-label {
+            color: #ff7b82;
+        }
+
+        .performance-estimate-details,
+        .performance-estimate-note {
+            font: 11px/1.45 "Plus Jakarta Sans", sans-serif;
+        }
+
+        .performance-estimate-note {
+            color: rgba(255, 255, 255, 0.55);
+        }
+
+        @media (max-width: 600px) {
+            .main-menu-setup table,
+            .main-menu-setup tbody,
+            .main-menu-setup tr,
+            .main-menu-setup td {
+                display: block;
+                width: auto !important;
+            }
+
+            .main-menu-setup table td {
+                border: 0;
+                padding: 5px 2px;
+            }
+
+            .main-menu-setup table tr {
+                border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+                padding: 8px 0;
+            }
+        }
+
+        .main-menu-prompt {
+            color: rgba(255, 255, 255, 0.94);
+            font: 500 clamp(20px, 3vw, 28px)/1.35 "Plus Jakarta Sans", sans-serif;
+            letter-spacing: 0.01em;
+            margin: 0;
+            text-align: center;
+        }
+
+        .main-menu-intro {
+            display: grid;
+            gap: 6px;
+            justify-items: center;
+        }
+
+        .main-menu-credit {
+            color: rgba(255, 255, 255, 0.72);
+            font: 400 12px/1.5 "Plus Jakarta Sans", sans-serif;
+            margin: 0;
+            text-align: center;
+        }
+
+        .main-menu-credit a {
+            color: inherit;
+            text-decoration-color: rgba(255, 255, 255, 0.45);
+            text-underline-offset: 2px;
+            transition: color 160ms ease, text-decoration-color 160ms ease;
+        }
+
+        .main-menu-credit a:hover,
+        .main-menu-credit a:focus-visible {
+            color: #fff;
+            text-decoration-color: currentColor;
+        }
+
+        .main-menu-actions {
+            display: flex;
+            gap: clamp(32px, 7vw, 76px);
+            justify-content: center;
+        }
+
+        .main-menu-file-input {
+            display: none;
+        }
+
+        .main-menu-action-wrap {
+            position: relative;
+        }
+
+        .main-menu-action {
+            align-items: center;
+            background: transparent;
+            border: 0;
+            border-radius: 16px;
+            color: rgba(255, 255, 255, 0.94);
+            cursor: pointer;
+            display: flex;
+            height: 76px;
+            justify-content: center;
+            padding: 12px;
+            width: 76px;
+        }
+
+        .main-menu-action svg {
+            height: 42px;
+            stroke: currentColor;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            stroke-width: 1.7;
+            width: 42px;
+        }
+
+        .main-menu-action:hover,
+        .main-menu-action:focus-visible {
+            color: #fff;
+            outline: none;
+        }
+
+        .main-menu-tooltip {
+            background: rgba(20, 26, 36, 0.48);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            border-radius: 9px;
+            bottom: calc(100% + 10px);
+            box-shadow: 0 8px 26px rgba(0, 0, 0, 0.36), inset 0 1px rgba(255, 255, 255, 0.08);
+            color: #fff;
+            font: 500 13px/1.4 "Plus Jakarta Sans", sans-serif;
+            left: 50%;
+            opacity: 0;
+            padding: 8px 12px;
+            pointer-events: none;
+            position: absolute;
+            transform: translateX(-50%);
+            transition: opacity 180ms ease, visibility 180ms ease;
+            visibility: hidden;
+            white-space: nowrap;
+            z-index: 2;
+            -webkit-backdrop-filter: blur(20px) saturate(155%);
+            backdrop-filter: blur(20px) saturate(155%);
+        }
+
+        .main-menu-action-wrap:hover .main-menu-tooltip,
+        .main-menu-action-wrap:focus-within .main-menu-tooltip {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        #IntroScreen select,
+        #IntroScreen input[type="date"] {
+            background: rgba(10, 17, 26, 0.58);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 7px;
+            color: #fff;
+            color-scheme: dark;
+            padding: 7px 9px;
+            -webkit-backdrop-filter: blur(10px);
+            backdrop-filter: blur(10px);
+        }
+
+        #IntroScreen select option {
+            background: #121923;
+            color: #fff;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+
+        table td {
+            padding: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        input[type="range"] {
+            width: 100%;
+            max-width: 800px;
+            margin: 10px 0;
+            height: 8px;
+        }
+
+        input[type="button"] {
+            background: rgba(22, 111, 218, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            padding: 12px 24px;
+            color: var(--text-color);
+            border-radius: var(--border-radius);
+            cursor: pointer;
+            font-size: 1rem;
+            transition: transform var(--transition-speed) ease, box-shadow var(--transition-speed) ease;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+            -webkit-backdrop-filter: blur(10px);
+            backdrop-filter: blur(10px);
+        }
+
+        input[type="button"]:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2);
+            background-color: rgba(0, 74, 154, 0.86);
+            transition: var(--transition-speed);
+        }
+
+        #help {
+            margin: 20px 0;
+            padding: 20px;
+            background: linear-gradient(135deg, rgba(28, 42, 60, 0.58), rgba(13, 30, 52, 0.46));
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: var(--border-radius);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+            animation: fadeIn 1s ease-in-out;
+            -webkit-backdrop-filter: blur(16px) saturate(140%);
+            backdrop-filter: blur(16px) saturate(140%);
+        }
+
+        .tips,
+        .controls,
+        .example-files {
+            margin: 20px 0;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.09);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: var(--border-radius);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+            -webkit-backdrop-filter: blur(12px) saturate(135%);
+            backdrop-filter: blur(12px) saturate(135%);
+        }
+
+        .support {
+            margin: 20px 0;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.09);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: var(--border-radius);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+            text-align: center;
+            -webkit-backdrop-filter: blur(12px) saturate(135%);
+            backdrop-filter: blur(12px) saturate(135%);
+        }
+
+        #mainCanvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 0;
+            display: none;
+        }
+
+        #graphCanvas {
+            position: fixed;
+            z-index: 1;
+            display: none;
+        }
+
+        .autopilotNumberInput {
+            background-color: #0000ff;
+            border: 3px solid #0000ff;
+            color: #ffffff;
+        }
+
+        .airbus-switch {
+            display: none
+        }
+
+        .airbus-label {
+            position: relative;
+            width: 50px;
+            height: 50px;
+            background: #222;
+            border: 2px solid #555;
+            border-radius: 10px;
+            box-shadow: inset 0 0 8px #000;
+            color: #fff;
+            font-size: 13px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            align-items: flex-end;
+        }
+
+        .airbus-label::before {
+            content: "";
+            position: absolute;
+            top: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 60%;
+            height: 10px;
+            background: #020;
+            border: 1px solid #030;
+            border-radius: 2px;
+        }
+
+        .airbus-switch:checked+.airbus-label::before {
+            background: #0f0;
+            box-shadow: 0 0 8px #0f0;
+        }
+
+        :root {
+            --size: 50px
+        }
+
+        .gauge {
+            position: absolute;
+            left: 300px;
+            height: calc(var(--size)/2);
+        }
+
+        svg {
+            display: block;
+            overflow: visible
+        }
+
+        .bg-arc {
+            stroke: #263242;
+            stroke-width: 24;
+            fill: none;
+            stroke-linecap: round
+        }
+
+        .fill-arc {
+            stroke: green;
+            stroke-width: 24;
+            fill: none;
+            stroke-linecap: round;
+            transition: stroke 0.4s linear;
+        }
+
+        .value {
+            font-size: 56px;
+            font-weight: 700;
+            fill: #ffffff;
+            text-anchor: middle
+        }
+    </style>
+</head>
+
+<body id="body" onload="updateSetupSliders();">
+    <nav class="main-nav">
+        <div class="nav-title">
+            <h1>2D Weather Sandbox</h1>
+        </div>
+        <div class="nav-icons">
+            <a href="https://github.com/niels747/2D-Weather-Sandbox" target="_blank" rel="noopener noreferrer">
+                <img src="resources/img/Github.png" alt="GitHub">
+            </a>
+            <a href="https://www.patreon.com/user?u=76043935" target="_blank" rel="noopener noreferrer">
+                <img src="resources/img/Patreon.png" alt="Patreon">
+            </a>
+            <a href="https://www.youtube.com/user/nielsdaemen/videos" target="_blank" rel="noopener noreferrer">
+                <img src="resources/img/Youtube.png" alt="YouTube">
+            </a>
+            <a href="https://discord.gg/c4Xdf92PzG" target="_blank" rel="noopener noreferrer">
+                <img src="resources/img/Discord.png" alt="Discord">
+            </a>
+        </div>
+    </nav>
+
+    <div id="IntroScreen">
+        <div class="main-menu-content" id="mainMenuContent">
+            <section class="main-menu-choice" id="mainMenuChoice">
+            <div class="main-menu-intro">
+                <p class="main-menu-prompt">Create a new simulation or load an existing one?</p>
+                <p class="main-menu-credit">Thanks to <a href="https://niels747.github.io/2D-Weather-Sandbox/" target="_blank" rel="noopener noreferrer">Niels Daemen</a> for the original simulation.</p>
+            </div>
+            <div class="main-menu-actions">
+                <div class="main-menu-action-wrap">
+                    <button class="main-menu-action" type="button" aria-label="Create a new simulation"
+                        onclick="showNewSimulationSetup()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                            <path d="M12 5v14M5 12h14" />
+                        </svg>
+                    </button>
+                    <span class="main-menu-tooltip" role="tooltip">Create new simulation</span>
+                </div>
+                <div class="main-menu-action-wrap">
+                    <button class="main-menu-action" type="button" aria-label="Load an existing simulation"
+                        onclick="document.getElementById('fileInput').click()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                            <path d="M12 13V3m0 0 4 4m-4-4L8 7" />
+                            <path d="M5 13v5a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3v-5" />
+                        </svg>
+                    </button>
+                    <span class="main-menu-tooltip" role="tooltip">Load existing save</span>
+                </div>
+            </div>
+            <input class="main-menu-file-input" type="file" id="fileInput" name="fileInput"
+                accept=".weathersandbox" onchange="loadData()" />
+            </section>
+            <section class="main-menu-setup" id="mainMenuSetup" aria-hidden="true">
+                <h2>Simulation resolution</h2>
+                <p>Choose the simulation detail level before starting.</p>
+                <div class="performance-estimate" id="performanceEstimate" data-level="good" aria-live="polite">
+                    <span class="performance-estimate-label" data-performance-estimate-label>Checking estimated performance…</span>
+                    <span class="performance-estimate-details" data-performance-estimate-details></span>
+                    <span class="performance-estimate-note">Rough estimate from resolution and browser-reported device specs; actual performance depends on your GPU and browser.</span>
+                </div>
+            </section>
+        </div>
+
+        <div style="width: 100%; height: 500px;">
+            <div style="float: left; margin-right: 100px;">
+                <div>
+                    Preset:<select id="presetSelect" style="margin: 10px;"></select>
+                </div>
+                <div>
+                    <select id="stationSelect"></select>
+                    <input type="date" id="datePicker" value="2025-06-15" min="2010-01-01"
+                        onchange="prepareSounding();" />
+
+                    <select id="hourSelector" onchange="prepareSounding();">
+                        <option value="0">00H</option>
+                        <option value="6">06H</option>
+                        <option value="12" selected>12H</option>
+                        <option value="18">18H</option>
+                    </select>
+                    <p>Select a real world sounding to use as forcing in the simulation</p>
+                </div>
+            </div>
+            <img style="float: left; height: 500px;" id="soundingPreview"
+                alt="Sounding not available, Please select a different time.">
+        </div>
+
+        <form id="startBtn" oninput="updateSetupSliders();">
+            <div class="resolution-warning">
+                <p>Choose a resolution - Higher resolutions provide more detail but significantly impact performance
+                </p>
+            </div>
+
+            <table>
+                <tr>
+                    <td><b>Horizontal resolution</b></td>
+                    <td style="width: 30%">
+                        <input type="range" min="100" max="16000" value="3000" step="100" id="simResSelX" />
+                        <output id="simResShowX"></output>
+                    </td>
+                    <td id="simWorldProperties" style="color:rgb(255, 255, 255); width: 50%"> Cellheight: 40m Sim
+                        width:
+                        40 km</td>
+                </tr>
+                <tr>
+                    <td><b>Vertical resolution</b></td>
+                    <td>
+                        <input type="range" min="100" max="500" value="300" step="10" id="simResSelY" />
+                        <output id="simResShowY"></output>
+                    </td>
+                    <td><i id="simResYWarning" style="color:rgb(255, 61, 61); display: none;">Vertical resolutions
+                            other
+                            than 300 are not optimized and may be buggy!</i></td>
+                </tr>
+                <tr>
+                    <td><b>Simulation height</b></td>
+                    <td>
+                        <input type="range" min="5000" max="15000" value="12000" step="100" id="simHeightSel" />
+                        <output id="simHeightShow"></output>
+                    </td>
+                    <td><i id="simHeightWarning" style="color:rgb(255, 61, 61); display: none;">Sim heights other
+                            than
+                            12000 m are not optimized and may be buggy!</i></td>
+                </tr>
+            </table>
+            <button class="main-menu-submit" type="button" aria-label="Start simulation"
+                title="Start simulation" onclick="loadData ()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                    <path d="m8 5 12 7-12 7V5Z" />
+                </svg>
+            </button>
+            <i>Move the mouse until you see a terrain you like, then just click to start.</i>
+        </form>
+
+
+        <div class="example-files">
+            <h3>Example Save Files</h3>
+            <p><a style="color: white" href="https://raw.githubusercontent.com/zaioiemeerkat-commits/2dweathersimoptimized/main/saves/Background%20image.weathersandbox">Background image</a></p>
+            <p><a style="color: white" href="https://raw.githubusercontent.com/zaioiemeerkat-commits/2dweathersimoptimized/main/saves/Hotlake%20Valley.weathersandbox">Hotlake Valley</a></p>
+            <p><a style="color: white" href="https://raw.githubusercontent.com/zaioiemeerkat-commits/2dweathersimoptimized/main/saves/Mountain%20uplift%20cell.weathersandbox">Mountain Uplift Cell at
+                    sunset</a></p>
+            <p><a style="color: white" href="https://raw.githubusercontent.com/zaioiemeerkat-commits/2dweathersimoptimized/main/saves/480%20km%20map%20with%20strong%20derecho.weathersandbox">480 km map with
+                    strong Derecho</a></p>
+            <p><a style="color: white" href="https://raw.githubusercontent.com/zaioiemeerkat-commits/2dweathersimoptimized/main/saves/Three%20Nice%20Cells.weathersandbox">Three Nice Cells</a></p>
+            <p><a style="color: white" href="https://raw.githubusercontent.com/zaioiemeerkat-commits/2dweathersimoptimized/main/saves/Mountain%20Snow%20Storm.weathersandbox">Mountain Snow Storm</a></p>
+            <p><a style="color: white" href="https://raw.githubusercontent.com/zaioiemeerkat-commits/2dweathersimoptimized/main/saves/Powerful%20%26%20Longlasting%20Cell.weathersandbox">Powerful &
+                    Longlasting
+                    Cell</a></p>
+            <p><a style="color: white" href="https://raw.githubusercontent.com/zaioiemeerkat-commits/2dweathersimoptimized/main/saves/Rain%20Sucked%20Up.weathersandbox">Powerful updraft sucking up rain
+                    and
+                    turning it into hail.</a></p>
+            <p><a style="color: white" href="https://raw.githubusercontent.com/zaioiemeerkat-commits/2dweathersimoptimized/main/saves/Powerful%20Hail%20and%20Snow%20Cells.weathersandbox">Powerful Hail and
+                    Snow
+                    Cells</a></p>
+            <p><a style="color: white" href="https://raw.githubusercontent.com/zaioiemeerkat-commits/2dweathersimoptimized/main/saves/Very%20nice%20cell%20over%20coastal%20mountain.weathersandbox">Very nice
+                    cell
+                    over coastal mountain</a></p>
+            <p><a style="color: white" href="https://raw.githubusercontent.com/zaioiemeerkat-commits/2dweathersimoptimized/main/saves/Awesome%20Convergence%20Cell.weathersandbox">Awesome Convergence
+                    Cell</a></p>
+            <p><a style="color: white" href="https://raw.githubusercontent.com/zaioiemeerkat-commits/2dweathersimoptimized/main/saves/Two%20nice%20cells%20in%20lake%20valley.weathersandbox">Two nice cells in
+                    lake valley</a></p>
+            <p><a style="color: white" href="https://raw.githubusercontent.com/zaioiemeerkat-commits/2dweathersimoptimized/main/saves/Insane%20CAPE.weathersandbox">Insane CAPE</a></p>
+            <p><a style="color: white" href="https://raw.githubusercontent.com/zaioiemeerkat-commits/2dweathersimoptimized/main/saves/100%20X%20100%20Test.weathersandbox">100 X 100 Test</a></p>
+        </div>
+
+        <div id="help" class="tips">
+            <h2>Tips</h2>
+            <ul>
+                <li>Vertical resolution of 300 gives most realistic results</li>
+                <li>Larger horizontal resolutions allow stronger converging winds to develop, forming more
+                    realistic,
+                    longer lasting cells</li>
+                <li>Performance is mostly GPU dependent, GTX 1070 or better recommended for realtime gameplay</li>
+                <li>If you have a laptop with a dedicated GPU, make sure the browser is actually using it! It's
+                    often
+                    using the integrated graphics by default</li>
+                <li>Play in fullscreen mode (F11)</li>
+            </ul>
+        </div>
+
+        <div class="controls">
+            <h2>Controls</h2>
+            <h3>Mouse</h3>
+            <ul>
+                <li>Middle mouse button to drag the simulation area around</li>
+                <li>Mouse wheel to zoom in and out, Or to change brush size while holding down B</li>
+                <li>Left mouse button to use selected tool. Hold down Ctrl (command on mac) to perform the inverted
+                    action</li>
+                <li>Touchscreen input is pretty basic for now, will add more controls in the future</li>
+            </ul>
+            <h3>Keys</h3>
+            <table style="width: 100%">
+                <tr>
+                    <td>1 - 9</td>
+                    <td>Display Modes</td>
+                </tr>
+                <tr>
+                    <td>K</td>
+                    <td>Air Quality Display</td>
+                </tr>
+                <tr>
+                    <td>C</td>
+                    <td>Relative Humidity & Cloud Density Display</td>
+                </tr>
+                <tr>
+                    <td>QWERTYUIOP [ ] \</td>
+                    <td>Tools</td>
+                </tr>
+                <tr>
+                    <td>Left Ctrl</td>
+                    <td>Invert Tool Action</td>
+                </tr>
+                <tr>
+                    <td>Esc</td>
+                    <td>No Tool, Flashlight</td>
+                </tr>
+                <tr>
+                    <td>Arrows ◄ ▲ ▼ ►</td>
+                    <td>Move View</td>
+                </tr>
+                <tr>
+                    <td>+ -</td>
+                    <td>Zoom In / Out</td>
+                </tr>
+                <tr>
+                    <td>Right Ctrl</td>
+                    <td>Hold For Slower Pan speed</td>
+                </tr>
+                <tr>
+                    <td>Space Bar</td>
+                    <td>Pause / Resume</td>
+                </tr>
+                <tr>
+                    <td>Tab</td>
+                    <td>Show / Hide Velocity Vectors</td>
+                </tr>
+                <tr>
+                    <td>A</td>
+                    <td>Toggle Flight Simulator Mode. Vertical Mouse position controls elevator, Throttle: ▲ ▼ </td>
+                </tr>
+                <tr>
+                    <td>F</td>
+                    <td>Toggle camera following plane</td>
+                </tr>
+                <tr>
+                    <td>Shift</td>
+                    <td>Toggle Gear</td>
+                </tr>
+                <tr>
+                    <td>Z</td>
+                    <td>Drop water from airplane to extinguish fires</td>
+                </tr>
+                <tr>
+                    <td>CapsLk</td>
+                    <td>Autopilot</td>
+                </tr>
+                <tr>
+                    <td>.</td>
+                    <td>Brakes</td>
+                </tr>
+                <tr>
+                    <td>/</td>
+                    <td>Toggle Engine</td>
+                </tr>
+                <tr>
+                    <td>D</td>
+                    <td>Show / Hide Droplets</td>
+                </tr>
+                <tr>
+                    <td>X</td>
+                    <td>Toggle follow droplet</td>
+                </tr>
+                <tr>
+                    <td>G</td>
+                    <td>Show / Hide Sounding Graph</td>
+                </tr>
+                <tr>
+                    <td>N</td>
+                    <td>Show / Hide Weather Stations</td>
+                </tr>
+                <tr>
+                    <td>M</td>
+                    <td>Add / Remove Weather Stations</td>
+                </tr>
+                <tr>
+                    <td>H</td>
+                    <td>Show / Hide GUI</td>
+                </tr>
+                <tr>
+                    <td>V</td>
+                    <td>Reset View</td>
+                </tr>
+                <tr>
+                    <td>B</td>
+                    <td>Hold To Change Brush Size Or Whole Width Brush Width By Scrolling</td>
+                </tr>
+                <tr>
+                    <td>B x 2</td>
+                    <td>Toggle Whole Width Brush</td>
+                </tr>
+                <tr>
+                    <td>L</td>
+                    <td>Reload From Save File</td>
+                </tr>
+                <tr>
+                    <td>Home</td>
+                    <td>1 Iteration/sec</td>
+                </tr>
+                <tr>
+                    <td>End</td>
+                    <td>Auto Iterations/sec</td>
+                </tr>
+                <tr>
+                    <td>PgUp</td>
+                    <td>Increase Iterations/sec</td>
+                </tr>
+                <tr>
+                    <td>PgDn</td>
+                    <td>Decrease Iterations/sec</td>
+                </tr>
+            </table>
+        </div>
+
+        <div class="support">
+            <h1 style="color: rgb(0, 255, 0)">$ Support me on Patreon $</h1>
+            If you love my project and want to support its future development, please consider <a
+                href="https://www.patreon.com/user?u=76043935" target="_blank" rel="noopener noreferrer"
+                style="color: white">supporting me on patreon</a>
+            <br />
+            Every small amount helps! Thank you!
+            <br />
+            <br />
+            <br />
+            <i>By Niels Daemen</i>
+        </div>
+    </div>
+
+    </div>
+
+    <canvas id="graphCanvas"></canvas>
+    <canvas id="dropletInfoCanvas" width="90" height="50"
+        style="z-index: 1; position: absolute; left: 50%; top: 50%;"></canvas>
+    <canvas id="mainCanvas">
+        Your browser does not support HTML5, you must be using a really old browser!
+    </canvas>
+    <div class="app-version" aria-label="Version 1.0">V1.0</div>
+</body>
+
+</html>
