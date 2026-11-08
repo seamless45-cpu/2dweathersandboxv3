@@ -42,7 +42,9 @@ vec3 heat(float t) // black->purple->orange->white
 
 void main()
 {
-  vec4 v = sampleBilinear(fragCoord);
+  // fragCoord.x may span multiple tiles when the view wraps horizontally
+  vec2 uv = vec2(fract(fragCoord.x), clamp(fragCoord.y, 0.0, 1.0));
+  vec4 v = sampleBilinear(uv);
   float rho = v.r, emag = v.g, phi = v.b;
 
   vec3 col = vec3(0.0);

@@ -11,7 +11,6 @@ in float mag;     // 0..1 normalized magnitude
 
 uniform vec2 aspectRatios;
 uniform vec3 view;
-uniform float Xmult;
 uniform float extentFrac;  // arrow length scale in sim units
 
 out vec3 vColor;
@@ -21,14 +20,12 @@ out float vPixelLen;
 void main()
 {
   vColor = mix(vec3(0.45, 0.7, 1.0), vec3(1.0, 0.85, 0.35), clamp(mag, 0.0, 1.0));
-  float len = mag * extentFrac * dot(aspectRatios, vec2(0.0)) ; // placeholder overwritten below
-  len = mag * extentFrac;
+  float len = mag * extentFrac;
   vVec = vec * len;
   gl_PointSize = max(8.0, len * 900.0 * view.z);
   vPixelLen = gl_PointSize;
 
   vec2 outpos = simPos * 2.0 - 1.0;
-  outpos.x *= Xmult;
   outpos.x += view.x;
   outpos.y += view.y * aspectRatios[0];
   outpos *= view[2];
