@@ -4,7 +4,10 @@
  *   - particles form supercooled/ice/graupel populations where they should
  *   - non-inductive charging separates charge (emergent, not hardcoded)
  *   - the tripole charge structure emerges (upper +, mid −, lower +)
- *   - electric field grows until breakdown; lightning then fires on its own
+ *   - intra-cloud flashes are initiated by CLOUD DENSITY (not by the charge
+ *     clock): a dense mixed-phase cloud flashes on its own, with or without
+ *     any separated charge
+ *   - the field/charge path still produces breakdown-driven leaders
  *   - every flash measurably reduces the field & drains particle charge
  *   - total charge is conserved (in-air + channel + ground + rainout + leak)
  *   - numerical stability: no NaN, bounded population, sane magnitudes
@@ -96,6 +99,7 @@ function run() {
   const steps = Math.round(SIM_MINUTES * 60 / dt);
 
   let flashTimes = [];
+  let firstInitiation = null;
   let lastFlashes = 0;
   let fieldAtFirstFlash = 0, fieldAfterFlash = 0;
   let prevMaxField = 0;
@@ -110,6 +114,7 @@ function run() {
     maxFieldTrack = Math.max(maxFieldTrack, st.maxField);
     if (st.flashes > lastFlashes) {
       flashTimes.push(st.time);
+      if (!firstInitiation) firstInitiation = Object.assign({t: st.time}, sim.lastInitiation);
       if (fieldAtFirstFlash === 0) fieldAtFirstFlash = prevMaxField; // field just before
       if (st.flashes >= 2 && fieldAfterFlash === 0) fieldAfterFlash = st.maxField;
       lastFlashes = st.flashes;
@@ -156,8 +161,14 @@ function run() {
   /* --- 4. electric field & breakdown --- */
   check('electric field grew to storm magnitude (>=1e5 V/m)', maxFieldTrack > 1e5, `${maxFieldTrack.toExponential(2)} V/m`);
   check('lightning initiated from breakdown (>=1 flash)', st.flashes >= 1, `${st.flashes} flashes`);
-  check('no artificial timer firing: flashes late (after charging)', flashTimes.length >= 1 && flashTimes[0] > 60,
-        `first flash at t=${flashTimes[0] ? flashTimes[0].toFixed(0) : '-'} s`);
+  check('IC flashes are initiated by cloud density as well as the charge field',
+        !!firstInitiation && firstInitiation.dens >= sim.cloudTriggerThreshold,
+        firstInitiation ?
+          `first flash t=${firstInitiation.t.toFixed(0)} s in cloud of density ${firstInitiation.dens.toFixed(2)} ` +
+          `(${firstInitiation.kind}, fromCloud=${firstInitiation.fromCloud}, |E|=${firstInitiation.emag.toExponential(1)})` : 'no flash');
+  check('dense cloud flashes early, before charge has fully built up',
+        flashTimes.length >= 1 && flashTimes[0] < 60,
+        `first flash at t=${flashTimes.length ? flashTimes[0].toFixed(0) : '-'} s`);
 
   /* --- 5. every discharge changes storm state --- */
   check('flash changed the electrical state', fieldAfterFlash === 0 || fieldAfterFlash < maxFieldTrack * 1.0001,
@@ -289,6 +300,54 @@ function run() {
     const reach = sim._oppositeChargeReach(cells[0].xm, cells[0].ym, -1, 0, -1, 3200);
     check('opposite-charge reach probe callable', reach === null || Math.sign(reach.rho) === 1,
           reach ? `reached rho=${reach.rho.toExponential(2)}` : 'none along this direction (ok)');
+  }
+
+  /* --- 12. cloud-density IC initiation needs no charge at all --- */
+  {
+    const envD = buildStormEnv();
+    const dry = new StormSim({
+      seed: 4242, maxParticles: 8000, chargeRate: 0.0,
+      enableCharging: false,           // no charge separation anywhere
+      widthM: envD.wCells * envD.cellSizeM,
+      heightM: envD.hCells * envD.cellSizeM,
+      fieldNX: 96, fieldNY: 64
+    });
+    dry.setEnvironment(envD);
+    const kinds = {};
+    for (let s = 0; s < 120; s++) {      // 60 s
+      dry.step(0.5);
+      for (const ev of dry.consumeFlashEvents()) kinds[ev.kind] = (kinds[ev.kind] || 0) + 1;
+    }
+    const ds = dry.getStats();
+    check('dense cloud initiates IC flashes with zero separated charge',
+          ds.flashes > 0 && Math.abs(ds.qPositive) < 1e-12,
+          `${ds.flashes} flashes, q+=${ds.qPositive.toExponential(1)}, ` +
+          `|E|max=${ds.maxField.toExponential(1)}`);
+    check('charge-free flashes are all intra-cloud (no ground attachment)',
+          (kinds.IC || 0) === ds.flashes && !kinds.CG,
+          `${kinds.IC || 0} IC / ${kinds.CG || 0} CG of ${ds.flashes}`);
+    check('cloud-density trigger honours its threshold',
+          ds.flashes > 0 && !!dry.lastInitiation &&
+          dry.lastInitiation.dens >= dry.cloudTriggerThreshold,
+          dry.lastInitiation ?
+            `site density ${dry.lastInitiation.dens.toFixed(2)} >= ${dry.cloudTriggerThreshold}` : 'none');
+
+    // below-threshold cloud must not flash (same engine, cloud thinned out)
+    const thinEnv = buildStormEnv();
+    // 0.16..0.48 model units — everything below the 0.8 trigger point
+    for (let i = 0; i < thinEnv.cloud.length; i++) thinEnv.cloud[i] *= 0.2;
+    const thin = new StormSim({
+      seed: 4242, maxParticles: 6000, chargeRate: 0.0, enableCharging: false,
+      widthM: thinEnv.wCells * thinEnv.cellSizeM,
+      heightM: thinEnv.hCells * thinEnv.cellSizeM,
+      fieldNX: 96, fieldNY: 64
+    });
+    thin.setEnvironment(thinEnv);
+    for (let s = 0; s < 120; s++) thin.step(0.5);
+    const ts = thin.getStats();
+    check('cloud thinner than the trigger threshold does not flash',
+          ts.flashes <= Math.max(2, 0.05 * ds.flashes),
+          `${ts.flashes} flashes vs ${ds.flashes} in the dense control`);
   }
 
   console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} TEST(S) FAILED`);

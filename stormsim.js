@@ -635,6 +635,10 @@ class LightningChannel {
     this.toGround = false;
     this.attachX = 0; this.attachY = 0;
     this.flashLevel = 0;      // global screen flash contribution
+    // how the flash was initiated (cloud density vs field breakdown)
+    this.triggerDensity = 0;  // cloud+precip water at the initiation site
+    this.triggerField = 0;    // |E| at the initiation site (V/m)
+    this.fromCloud = false;   // true = cloud-density trigger
   }
 
   addNode(x, y) {
@@ -667,6 +671,39 @@ class StormSim {
     this.chargeRate = opts.chargeRate !== undefined ? opts.chargeRate : 1.0;
     this.enableCharging = opts.enableCharging !== false;
     this.enableLightning = opts.enableLightning !== false;
+
+    /* ----------------------- lightning initiation ---------------------
+     * Intra-cloud flashes are born from the CLOUD, not from the solved
+     * charge pattern: a dense mixed-phase cloud is where the hydrometeor
+     * collisions live that generate the ions and the runaway-electron
+     * avalanches which start a flash. Initiation is therefore gated on
+     * cloud + precipitation water content (model units, g/m^3 scale) and
+     * only the cloud-to-ground branch still asks for a strong field.
+     *
+     *   cloudTriggerThreshold : cloud+precip density a site needs before an
+     *                           IC flash may be initiated there (0.8 =
+     *                           ordinary cloudy air).
+     *   icSpawnRate           : expected IC initiations per simulated
+     *                           second over the dense-cloud region (2.2 =
+     *                           a vigorous, very active thunderstorm).
+     *   icCooldown            : refractory period between initiations (s),
+     *                           keeps a single 25 s physics frame from
+     *                           launching a whole burst of overlapping
+     *                           channels.
+     *
+     * All three are live-tunable from the overlay GUI.
+     */
+    this.cloudTriggerThreshold = opts.cloudTriggerThreshold !== undefined ?
+      opts.cloudTriggerThreshold : 0.8;
+    this.icSpawnRate = opts.icSpawnRate !== undefined ? opts.icSpawnRate : 2.2;
+    this.icCooldown = opts.icCooldown !== undefined ? opts.icCooldown : 0.4;
+    // field-based (CG) initiation still needs a breakdown correction
+    this.breakdownScale = opts.breakdownScale !== undefined ? opts.breakdownScale : 0.22;
+    this._icAccum = 0;            // Poisson accumulator (expected initiates)
+    this.lastLightningAt = -1e9;  // sim time of the last initiated flash
+    this.lastLightningTry = 0;    // sim time of the last initiation attempt
+    this.maxConcurrentChannels = 8;
+
     this.env = new EnvGrid();
     this.field = new FieldSolver(opts.fieldNX || 128, opts.fieldNY || 64,
                                  opts.widthM || 40000, opts.heightM || 12000,
@@ -1513,6 +1550,67 @@ class StormSim {
     return {lo: Math.max(0, lo * env.cellSizeM - pad), hi: hi * env.cellSizeM + pad};
   }
 
+  /** Cloud + precipitation water content (model units) at a world point. */
+  _cloudDensityAt(xm, ym) {
+    const env = this.env;
+    if (!env.valid) return 0;
+    const out = this._envOut3 || (this._envOut3 = {});
+    env.sample(xm / env.cellSizeM, ym / env.cellSizeM, out, this.wrapX);
+    return out.cloud + out.precip;
+  }
+
+  /**
+   * Pick the site of the next intra-cloud flash from the CLOUD field alone.
+   *
+   * This is the IC trigger. It scans a bounded, strided set of environment
+   * texels (a couple of thousand per call) for mixed-phase cloud: cloud +
+   * precipitation water >= `cloudTriggerThreshold`, below freezing and above
+   * -40 C. Among those it picks one with a density-weighted random draw, so
+   * consecutive flashes scatter through the storm's dense core instead of
+   * stacking on one texel.
+   *
+   * No charge density and no |E| is consulted — a dense electrified cloud
+   * initiates on its own; the field only shapes the polarity and reach of
+   * the channel afterwards.
+   *
+   * Returns {xm, ym, dens, tK} or null when no cloud is dense enough.
+   */
+  _denseCloudSite() {
+    const env = this.env;
+    if (!env.valid) return null;
+    const nx = env.nx, ny = env.ny;
+    const cloudA = env.cloud, precipA = env.precip, tKA = env.tK, wallA = env.wall;
+    const thr = this.cloudTriggerThreshold;
+    const cell = env.cellSizeM;
+    // env texel size in metres (the env grid is coarser than the sim grid)
+    const dxM = (env.wCells / nx) * cell;
+    const dyM = (env.hCells / ny) * cell;
+    // Bounded scan budget: ~2000 texels regardless of the env resolution.
+    const stride = Math.max(1, Math.floor(Math.sqrt((nx * ny) / 2000)));
+    let best = null, bestKey = 0;
+    for (let ix = 0; ix < nx; ix += stride) {
+      const base = ix * ny;
+      for (let iy = 0; iy < ny; iy += stride) {
+        const i = base + iy;
+        if (wallA && wallA[i]) continue;
+        const dens = cloudA[i] + precipA[i];
+        if (dens < thr) continue;
+        const tK = tKA[i];
+        // Mixed-phase layer only: IC flashes happen where supercooled water
+        // and ice coexist (0 .. -40 C); the tropical anvil and the warm
+        // boundary layer do not host intra-cloud breakdown.
+        if (tK > 273.15 || tK < 233.15) continue;
+        // density-weighted random draw (cheap reservoir step, O(1) memory)
+        const key = dens * (0.75 + 0.5 * this.rng());
+        if (key > bestKey) {
+          bestKey = key;
+          best = {xm: (ix + 0.5) * dxM, ym: (iy + 0.5) * dyM, dens};
+        }
+      }
+    }
+    return best;
+  }
+
   /** Queue a public flash event for renderers / audio. */
   _recordFlashEvent(ch) {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -1541,35 +1639,77 @@ class StormSim {
     return out;
   }
 
+  /**
+   * Lightning initiation.
+   *
+   * Two independent initiation paths, in priority order:
+   *
+   *  1. CLOUD DENSITY — the intra-cloud trigger. Dense mixed-phase cloud *is*
+   *     the source of lightning: it is where the ice/graupel collisions, the
+   *     charge separation and the ionising particle cascades happen. As soon
+   *     as a site holds more cloud + precipitation water than
+   *     `cloudTriggerThreshold`, the storm starts flashing at `icSpawnRate`
+   *     initiations per simulated second, whether or not the solved field has
+   *     reached a textbook breakdown value. It is a Poisson process, not a
+   *     timer: the rate scales with how far the local cloud density exceeds
+   *     the threshold, and each flash drains the charge it passes through.
+   *
+   *  2. FIELD / CHARGE — the classic path that produces the rarer
+   *     cloud-to-ground strikes: strongest solved field cells are ranked and
+   *     a leader is launched when the field overdrives the humidity- and
+   *     cloud-corrected breakdown level with a reachable opposite-charge
+   *     pocket (or ground/space) ahead of it.
+   */
   _maybeInitiateLightning() {
     if (!this.enableLightning) return null;
     const f = this.field;
     this.maxFieldNow = f.maxField().emag;
 
+    const dtTry = Math.max(0, this.time - this.lastLightningTry);
+    this.lastLightningTry = this.time;
+    const cooled = (this.time - this.lastLightningAt) >= this.icCooldown &&
+                   this.channels.length < this.maxConcurrentChannels;
+
+    /* ------------------ 1. cloud-density IC initiation ---------------- */
+    if (cooled) {
+      const site = this._denseCloudSite();
+      if (site) {
+        // Poisson expectation for this attempt. `rel` is how far the local
+        // cloud density sits above the trigger point: marginally dense cloud
+        // flashes at ~1/3 of the nominal rate, the dense mixed-phase core at
+        // up to twice it. Accumulator is capped so one long (accelerated)
+        // frame cannot bank a burst of overlapping channels.
+        const rel = site.dens / Math.max(this.cloudTriggerThreshold, 1e-6);
+        const w = clampNum(0.35 + 0.65 * (rel - 1), 0, 2);
+        this._icAccum = Math.min(this._icAccum + this.icSpawnRate * dtTry * w, 2.0);
+        if (this._icAccum >= 1.0) {
+          this._icAccum = Math.max(0, this._icAccum - 1.0);
+          return this._startFlash(site.xm, site.ym, {dens: site.dens, fromCloud: true});
+        }
+      } else {
+        this._icAccum *= 0.5; // no dense cloud: let the accumulator decay
+      }
+    }
+
+    /* ---------------- 2. field / charge initiation -------------------- */
     // Candidate breakdown sites: strongest field cells, ranked. Prefer sites
     // from which an opposite-charge region is reachable along the field —
     // flashes then genuinely connect the simulated charge pattern (IC), or
     // reach ground/space (CG/CA), rather than triggering inside one blob.
     const cands = f.topFieldCells(14);
     let chosen = null;
-    // Hydrometeor- and turbulence-assisted initiation: observed in-cloud
-    // initiation fields are ~150-400 kV/m, well below the dry-air 3 MV/m
-    // conventional breakdown. The ~0.22 factor reflects that correction.
-    const Ebd0 = (this.breakdownScale || 0.22);
+    const Ebd0 = this.breakdownScale;
     const out2 = this._envOut2 || (this._envOut2 = {});
     for (const c of cands) {
       // local humidity-corrected breakdown level
       this.env.sample(c.xm / this.env.cellSizeM, c.ym / this.env.cellSizeM, out2, this.wrapX);
       const satWc = Math.max(satVaporDensityWater(out2.tK), 1e-6);
       const rhc = clampNum(out2.vapor / satWc, 0, 1.2);
-      // ---- cloud-density assisted initiation -------------------------
-      // A dense mixed-phase cloud is crowded with hydrometeors and the ions
-      // their collisions produce, so the local runaway field is markedly
-      // lower there than in clear air. Scaling the breakdown threshold with
-      // the sampled cloud water content lets lightning emerge from cloud
-      // density itself, not only from the largest solved |E| value.
-      const cloudDens = clampNum(out2.cloud, 0, 8);
-      const cloudBoost = clampNum(cloudDens / 1.2, 0, 1);       // 0..1
+      // Cloud-density assisted breakdown: a dense mixed-phase cloud is
+      // crowded with hydrometeors and the ions their collisions produce, so
+      // the local runaway field is markedly lower there than in clear air.
+      const cloudDens = clampNum(out2.cloud + out2.precip, 0, 8);
+      const cloudBoost = clampNum(cloudDens / Math.max(this.cloudTriggerThreshold, 1e-6), 0, 1);
       const EbdC = f.breakdownField(c.ym, rhc) * Ebd0 * (1 - 0.34 * cloudBoost);
       if (c.emag < EbdC) continue;
       const rhoC = f.fieldAt(c.xm, c.ym).rho;
@@ -1592,42 +1732,76 @@ class StormSim {
       if (reach) break; // strongly preferred: opposite-charge pocket reachable
     }
     if (!chosen) return null;
-    const bx = chosen.x, by = chosen.y;
     const Ebd = chosen.Ebd;
-    // Initiation is a stochastic streamer-runaway process: probability rises
-    // with field overdrive, with charge-structure connectedness and — for the
-    // same reason the threshold falls — with cloud density. Each flash then
-    // collapses its local charge reservoir (relaxation cadence).
+    // Stochastic streamer-runaway process: probability rises with field
+    // overdrive, with charge-structure connectedness and with cloud density.
     const overdrive = chosen.emag / Ebd - 1.0;
-    const pTrigger = clampNum(0.12 + overdrive * 0.9 + 0.55 * chosen.cloudBoost, 0, 0.92) *
+    const pTrigger = clampNum(0.12 + overdrive * 0.9 + 0.55 * chosen.cloudBoost, 0, 0.95) *
       chosen.connectedness;
     if (this.rng() > pTrigger) return null;
+    return this._startFlash(chosen.x, chosen.y,
+      {emag: chosen.emag, Ebd, rho: chosen.rho, dens: chosen.cloud});
+  }
 
-    // determine polarity & kind from local charge structure
-    const rhoHere = chosen.rho;
-    const groundDist = by - (this.env.groundAt(bx / this.env.cellSizeM, this.wrapX) * this.env.cellSizeM);
-    const heightM = this.env.hCells * this.env.cellSizeM;
+  /**
+   * Build and develop one lightning channel rooted at (x, y).
+   *
+   * `info` carries whatever the initiating path knows — the solved field
+   * magnitude `emag`, the corrected breakdown level `Ebd`, local charge
+   * density `rho`, cloud density `dens`, and `fromCloud` when the flash was
+   * triggered by cloud density rather than by field breakdown. The channel
+   * kind, polarity and geometry are then decided from the local state.
+   */
+  _startFlash(x, y, info) {
+    info = info || {};
+    const env = this.env;
+    const cell = env.cellSizeM;
+    const heightM = env.hCells * cell;
+
+    let rho = info.rho;
+    if (rho === undefined) rho = this.field.fieldAt(x, y).rho;
+
+    // local environment at the initiation site (cloud density, humidity)
     const out = this._envOut;
-    this.env.sample(bx / this.env.cellSizeM, by / this.env.cellSizeM, out, this.wrapX);
-    const inCloud = out.cloud > 0.06;
+    env.sample(x / cell, y / cell, out, this.wrapX);
+    const cloudDens = info.dens !== undefined ? info.dens : (out.cloud + out.precip);
+    const satW = Math.max(satVaporDensityWater(out.tK), 1e-6);
+    const rh = clampNum(out.vapor / satW, 0, 1.2);
+
+    const fOut = this._fOutStart || (this._fOutStart = {});
+    this.field.fieldAt(x, y, fOut);
+    const emag = info.emag !== undefined ? info.emag : fOut.emag;
+    const Ebd = info.Ebd !== undefined ? info.Ebd :
+      this.field.breakdownField(y, rh) * this.breakdownScale *
+      (1 - 0.34 * clampNum(cloudDens / Math.max(this.cloudTriggerThreshold, 1e-6), 0, 1));
+
+    const groundDist = y - env.groundAt(x / cell, this.wrapX) * cell;
     let kind;
     // Low, strong-field sites launch cloud-to-ground leaders (CG initiation
-    // happens in cloud, so this stays valid inside it); flashes high in the
-    // cloud become intra-cloud; the only remaining case is clear-air CA.
-    if (groundDist < 0.30 * heightM && chosen.emag > Ebd * 1.02) kind = 'CG';
-    else if (!inCloud) kind = 'CA';
-    else kind = 'IC'; // inside cloud (CC within-column flashes look like IC in 2D)
+    // happens in cloud, so this stays valid inside it); flashes elsewhere in
+    // the cloud become intra-cloud; the only remaining case is clear-air CA.
+    if (groundDist < 0.30 * heightM && emag > Ebd * 1.02) kind = 'CG';
+    else if (cloudDens < 0.06) kind = 'CA';
+    else kind = 'IC';  // inside cloud (CC within-column flashes look like IC in 2D)
 
-    // channel polarity: negative leaders carry negative charge downward where
-    // rhoHere < 0 (typical for main-N region), positive otherwise
-    const polarity = rhoHere <= 0 ? -1 : 1;
+    // channel polarity: negative leaders carry negative charge where the
+    // local charge density is negative (typical for the main-N region),
+    // positive otherwise. The density trigger does not need charge at all, so
+    // a neutral site simply starts as a negative leader.
+    const polarity = rho <= 0 ? -1 : 1;
     const ch = new LightningChannel(++this.channelIdCounter, kind, polarity);
-    ch.attachX = bx; ch.attachY = by;
-    const n0 = ch.addNode(bx, by);
+    ch.attachX = x; ch.attachY = y;
+    ch.triggerDensity = cloudDens;
+    ch.triggerField = emag;
+    ch.fromCloud = !!info.fromCloud;
+    const n0 = ch.addNode(x, y);
     ch.tips.push(n0, n0);          // bidirectional start: two ends
     ch.tipSign.push(polarity < 0 ? -1 : 1, polarity < 0 ? 1 : -1); // −end, +end
     this.channels.push(ch);
-    this._developLeader(ch, kind, bx, by);
+    this.lastLightningAt = this.time;
+    this.lastInitiation = {x, y, kind, dens: cloudDens, emag, Ebd, t: this.time,
+                           fromCloud: !!info.fromCloud};
+    this._developLeader(ch, kind, x, y);
     return ch;
   }
 
@@ -1641,11 +1815,13 @@ class StormSim {
     const f = this.field;
     const isIC = kind === 'IC' || kind === 'CC';
     // Propagation threshold. CG stepped leaders need a strong ambient field
-    // (~150 kV/m here); intra-cloud leaders run inside a densely charged
-    // layer and keep extending at a few tens of kV/m, which is why IC flashes
-    // spread for kilometres while CG leaders stay relatively compact.
+    // (~150 kV/m here) and stay relatively compact. Intra-cloud leaders are
+    // driven by the CLOUD instead: they extend through dense mixed-phase cloud
+    // and peter out when the cloud thins, which is why IC flashes spread for
+    // kilometres while CG leaders do not.
     const Eprop = isIC ? 2.5e4 : 1.5e5;
-    const maxNodes = isIC ? 900 : 1100;
+    const densThr = Math.max(this.cloudTriggerThreshold, 1e-6);
+    const maxNodes = isIC ? 640 : 1100;
     const heightM = this.env.hCells * this.env.cellSizeM;
     const capRadius = Math.max(f.dx, f.dy) * 0.55;   // charge capture radius
     const stepBase = Math.min(f.dx, f.dy) * 0.28;    // sub-cell zigzag
@@ -1653,7 +1829,10 @@ class StormSim {
     let connected = false, connectNode = -1, toGround = false;
     let steps = 0;
     let extent = 0;
-    const maxSteps = isIC ? 3200 : 6000;
+    const maxSteps = isIC ? 2400 : 6000;
+    // Longest plausible single IC channel (real flashes span 10-20 km, but a
+    // 40 km 2D domain does not need one channel crossing it end to end).
+    const maxLen = isIC ? Math.min(0.55 * f.dx * f.nx, 16000) : Infinity;
     // An IC channel has to actually spread through the layer before its far
     // end can "connect" to an opposite pocket; without this a flash born in
     // a charge dipole would close after a single step and render as a dot.
@@ -1663,6 +1842,13 @@ class StormSim {
     // component below) is what makes IC flashes look like the wide, flat,
     // multiply-forked spiders they are instead of short vertical stubs.
     const band = isIC ? this._cloudBandAt(bx, by) : null;
+    // IC channels spread as a quasi-horizontal sheet through the layer they
+    // were born in (they do not fill the whole cloud depth). Allowing only a
+    // few hundred metres of vertical excursion around the initiation level is
+    // what turns them into the wide, flat "spider" shapes real IC flashes
+    // have instead of isotropic blobs.
+    const yLo = isIC ? Math.max(by - 750, band ? band.lo : 0) : 0;
+    const yHi = isIC ? Math.min(by + 750, band ? band.hi : heightM) : heightM;
 
     while (ch.tips.length && !connected && steps++ < maxSteps && ch.nodesX.length < maxNodes) {
       // process one tip at a time (round robin from end)
@@ -1674,7 +1860,21 @@ class StormSim {
       f.fieldAt(x, y, fOut);
       let ex = fOut.ex, ey = fOut.ey;
       let emag = Math.sqrt(ex * ex + ey * ey);
-      if (emag < Eprop) { // tip stalls in weak field
+      // ---- cloud-density propagation gate (IC) ------------------------
+      // An intra-cloud channel lives in the cloud, not in the field: as long
+      // as the tip sits inside dense mixed-phase cloud it keeps extending,
+      // whatever the solved |E| happens to be (in-cloud leaders in nature run
+      // at a few kV/m, orders of magnitude below dry-air breakdown). The
+      // tip dies when the cloud thins out, which is what bounds an IC flash
+      // to the electrified core it was born in.
+      let densHere = 0;
+      if (isIC) {
+        densHere = this._cloudDensityAt(x, y);
+        if (densHere < 0.45 * densThr) {
+          ch.tips.splice(tipIdx, 1); ch.tipSign.splice(tipIdx, 1);
+          continue;
+        }
+      } else if (emag < Eprop) { // CG stepped leaders stall in weak field
         ch.tips.splice(tipIdx, 1); ch.tipSign.splice(tipIdx, 1);
         continue;
       }
@@ -1684,41 +1884,59 @@ class StormSim {
       const dirE = sign < 0 ? 1 : -1;
       const inv = emag > 0 ? dirE / emag : 0;
       let dxx = ex * inv, dyy = ey * inv;
-      // --- charge-pattern seeking: steer toward increasing opposite charge ---
-      // (E already encodes the field of the charge distribution; this explicit
-      //  gradient bias makes tips reliably thread into opposite-charge pockets,
-      //  which is also what channels physically discharge)
-      const seek = this.field.chargeSeekDir(x, y, sign, Math.max(f.dx, f.dy) * 2.2);
-      if (seek.strength > 0.02) {
-        const w = 0.55 * seek.strength; // 0..0.55 guided by charge organization
-        dxx = dxx * (1 - w) + seek.x * w;
-        dyy = dyy * (1 - w) + seek.y * w;
-        const nm = Math.hypot(dxx, dyy) || 1;
-        dxx /= nm; dyy /= nm;
-      }
-      // Intra-cloud leaders are driven along the charge layer, so damp the
-      // vertical component of the field direction before adding jitter.
       if (isIC) {
-        dyy *= 0.30;
-        if (Math.abs(dxx) < 0.18) dxx += (this.rng() - 0.5) * 0.7;
+        // --- cloud-density steering ------------------------------------
+        // Intra-cloud channels ramify through the dense part of the cloud
+        // rather than following the charge gradient: probe the cloud a
+        // couple of cells either side and bias the heading toward the denser
+        // flank. Vertical motion stays strongly damped, which is what makes
+        // IC flashes the wide, flat "spider" shapes they are.
+        const probe = Math.max(f.dx, f.dy) * 1.6;
+        const dR = this._cloudDensityAt(x + probe, y);
+        const dL = this._cloudDensityAt(x - probe, y);
+        const gx = (dR - dL) / Math.max(dR + dL, 1e-6);   // -1 .. 1
+        // Outward (radial) drive: the space charge piled up at the leader
+        // tips repels them away from the flash origin, which is what keeps a
+        // real IC channel advancing instead of folding back over itself.
+        const outX = x >= bx ? 0.45 : -0.45;
+        dxx = dxx * 0.45 + gx * 0.55 + outX;
+        dyy *= 0.22;
+        if (Math.abs(dxx) < 0.12) dxx += (this.rng() - 0.5) * 0.7;
         const nm = Math.hypot(dxx, dyy) || 1;
         dxx /= nm; dyy /= nm;
+      } else {
+        // --- charge-pattern seeking (CG/CA) -----------------------------
+        // E already encodes the field of the charge distribution; this
+        // explicit gradient bias makes tips reliably thread into the
+        // opposite-charge pockets such a leader actually discharges into.
+        const seek = this.field.chargeSeekDir(x, y, sign, Math.max(f.dx, f.dy) * 2.2);
+        if (seek.strength > 0.02) {
+          const w = 0.55 * seek.strength; // 0..0.55 guided by charge organization
+          dxx = dxx * (1 - w) + seek.x * w;
+          dyy = dyy * (1 - w) + seek.y * w;
+          const nm = Math.hypot(dxx, dyy) || 1;
+          dxx /= nm; dyy /= nm;
+        }
       }
-      // stochastic angular jitter (branchy, lightning-like)
-      const jitter = 0.55 * (Eprop / Math.max(emag, Eprop));
+      // stochastic angular jitter (branchy, lightning-like). IC channels
+      // keep a tighter cone than CG leaders: their heading is set by the
+      // cloud, not by the (much noisier) local field.
+      const jitter = isIC ? 0.32 : 0.55 * (Eprop / Math.max(emag, Eprop));
       const baseAng = Math.atan2(dyy, dxx);
       const ang = baseAng + (this.rng() - 0.5) * 2.4 * jitter;
       const bias = kind === 'CG' && sign < 0 ? -0.35 : 0; // CG negative leads earthward
       const dx = Math.cos(ang) * stepBase;
-      const verticalScale = isIC ? 0.35 : 1.0;
+      const verticalScale = isIC ? 0.22 : 1.0;
       const dy = Math.sin(ang) * stepBase * verticalScale * (1 + 0.15 * (this.rng() - 0.5)) +
         (bias * stepBase * this.rng());
       let nx = x + dx, ny = y + dy;
-      // Stay inside the cloud layer that hosts an IC channel (soft reflect).
-      if (isIC && band) {
-        if (ny < band.lo) ny = band.lo + (band.lo - ny) * 0.35;
-        else if (ny > band.hi) ny = band.hi - (ny - band.hi) * 0.35;
-        ny = clampNum(ny, band.lo, band.hi);
+      // Stay inside the horizontal sheet that hosts an IC channel (soft
+      // reflect off both edges so the channel glides along instead of
+      // piling up against them).
+      if (isIC) {
+        if (ny < yLo) ny = yLo + (yLo - ny) * 0.35;
+        else if (ny > yHi) ny = yHi - (ny - yHi) * 0.35;
+        ny = clampNum(ny, yLo, yHi);
       }
       // stay in domain
       if (this.wrapX) nx = ((nx % (f.dx * f.nx)) + f.dx * f.nx) % (f.dx * f.nx);
@@ -1742,10 +1960,24 @@ class StormSim {
         break;
       }
       if (ny >= ceil) { ch.tips.splice(tipIdx, 1); ch.tipSign.splice(tipIdx, 1); continue; }
-      // IC leaders stop when they reach the edge of the cloudy charge layer
-      if (isIC && this.env.sample(nx / this.env.cellSizeM, ny / this.env.cellSizeM, fOut, this.wrapX).cloud < 0.025) {
-        ch.tips.splice(tipIdx, 1); ch.tipSign.splice(tipIdx, 1);
-        continue;
+      // IC leaders stop when they leave the dense cloud that hosts them
+      let densNext = 0;
+      if (isIC) {
+        const eo = this._envOut4 || (this._envOut4 = {});
+        this.env.sample(nx / this.env.cellSizeM, ny / this.env.cellSizeM, eo, this.wrapX);
+        densNext = eo.cloud + eo.precip;
+        if (densNext < 0.45 * densThr) {
+          ch.tips.splice(tipIdx, 1); ch.tipSign.splice(tipIdx, 1);
+          continue;
+        }
+      }
+
+      // ------ IC/CC: channel has run its full extent through the cloud ------
+      if (isIC && extent > maxLen) {
+        const nn = ch.addNode(nx, ny);
+        ch.addSegment(nodeIdx, nn, this.time);
+        connected = true; connectNode = nn; toGround = false;
+        break;
       }
 
       // ------ IC/CC: tip reached a region of opposite charge ------
@@ -1771,9 +2003,12 @@ class StormSim {
       ch.tips[tipIdx] = nn;
 
       // ------ branching ------
-      // IC channels are heavily forked (the classic "spider" look); CG
-      // leaders keep the sparser dendritic branching they had before.
-      const pBranch = (isIC ? 0.085 : 0.045) * clampNum(emag / 8e5, 0, 2);
+      // IC channels are heavily forked (the classic "spider" look) and the
+      // denser the cloud the bushier they get; CG leaders keep the sparser
+      // dendritic branching they had before.
+      const pBranch = isIC ?
+        clampNum(0.02 + 0.10 * clampNum(densHere / densThr, 0, 2), 0, 0.16) :
+        0.045 * clampNum(emag / 8e5, 0, 2);
       if (this.rng() < pBranch) {
         ch.tips.push(nn);
         ch.tipSign.push(sign);
