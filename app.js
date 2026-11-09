@@ -506,10 +506,10 @@ const guiControls_default = {
   hdrQuality : '100%',
   bloomQuality : '100%',
   bloomEnabled : true,
-  filmicToneMapping : true,
-  fxaaEnabled : true,
+  filmicToneMapping : false,
+  fxaaEnabled : false,
   volumetricCloudLighting : true,
-  temporalAAEnabled : true,
+  temporalAAEnabled : false,
   showWeatherStations : true,
   shareWeatherDataToLan : false,
   sound : true,
@@ -2097,8 +2097,8 @@ class LoadingBar
           <path fill="#ffd76a" d="M13 2 L5 13 h4 L8 24 L19.5 10 h-4.5 L17 2 Z"></path>
         </svg>
         <div class="loading-title">2D Weather Sandbox</div>
-        <div class="loading-tagline">Particle microphysics &middot; charge separation &middot; emergent lightning —
-          the storm runs its own electrical physics</div>
+        <div class="loading-tagline">Particle microphysics &middot; cloud dynamics &middot; emergent lightning —
+          every storm grows out of the fluid physics</div>
       </div>
       <div class="loading-progress">
         <span class="loading-percentage"></span>
@@ -5156,10 +5156,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         hdrQuality: '100%',
         bloomQuality: '100%',
         bloomEnabled: true,
-        filmicToneMapping: true,
-        fxaaEnabled: true,
+        filmicToneMapping: false,
+        fxaaEnabled: false,
         volumetricCloudLighting: true,
-        temporalAAEnabled: true
+        temporalAAEnabled: false
       },
       Quality: {
         hdrQuality: '100%',
@@ -7041,7 +7041,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   frameBuff_0 = gl.createFramebuffer(); // global for weather stations
   const frameBuff_1 = gl.createFramebuffer();
-  window.frameBuff_1 = frameBuff_1; // storm overlay (stormview.js) samples this for its storm environment
 
   const curlFrameBuff = gl.createFramebuffer();
   const vortForceFrameBuff = gl.createFramebuffer();
@@ -7900,10 +7899,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
               gl.useProgram(precipitationProgram);
               gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'iterNum'), iterNum);
-              // when the storm physics engine is active it owns lightning:
-              // silence the legacy random-spawn bolts (uniform gate)
-              gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'legacyLightningGate'),
-                (typeof stormOverlay !== 'undefined' && stormOverlay) ? stormOverlay.lightningGate() : 1.0);
+              // cloud-density lightning is owned by the precipitation shader
+              // (lightningCloudDensityThreshold / lightningChanceMultiplier)
+              gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'legacyLightningGate'), 1.0);
               gl.enable(gl.BLEND);
               gl.blendFunc(gl.ONE, gl.ONE); // add everything together
               gl.activeTexture(gl.TEXTURE0);
@@ -8580,17 +8578,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
     updateClockTextContrast();
 
-    // particle-based storm microphysics, charge separation & lightning overlay
-    if (typeof stormOverlay !== 'undefined' && stormOverlay) {
-      try { stormOverlay.frame(); }
-      catch (e) {
-        if (!window.__stormOverlayFailed) {
-          window.__stormOverlayFailed = true;
-          console.error('storm overlay error (overlay disabled):', e);
-        }
-      }
-    }
-
     updateDiagnosticOverlays();
     frameNum++;
     requestAnimationFrame(draw);
@@ -9057,7 +9044,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     let filename = 'shaders/' + type + '/' + nameIn;
 
-    var shaderSource = await loadSourceFile(filename);
+    // version tag: browsers otherwise happily serve a stale .vert/.frag from
+    // cache after the sources change (e.g. the cloud-density lightning tuning)
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-09.2');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
