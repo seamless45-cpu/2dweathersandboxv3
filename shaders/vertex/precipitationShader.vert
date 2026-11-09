@@ -106,7 +106,7 @@ void main()
 
       float spawnChance = ((water[CLOUD] - threshold) / (inactiveDroplets + 10.0)) * resolution.x * resolution.y * spawnChanceMult; // 20.0  50.0
 
-      //    float nrmRand = random2d(vec2(mass[WATER] * 0.2324, iterNum * 0.1783 + random(mass[ICE]))); // normalized random value
+      //    float nrmRand = random2d(vec2(mass[WATER] * 0.98, iterNum * 0.98 + random(mass[ICE]))); // normalized random value
 
       float nrmRand = fract(pow(water[CLOUD] * 10.0, 2.0));
 
@@ -130,10 +130,10 @@ void main()
           float lightningSpawnChance = max((cloudPlusPrecipDensity - lightningCloudDensityThreshold) * lightningChanceMultiplier, 0.);
           lightningSpawnChance *= legacyLightningGate; // 0 when the storm physics engine owns lightning
 
-          const float minIterationsSinceLastLightningBolt = 30.; // 50.
+          const float minIterationsSinceLastLightningBolt = 0.; // 50.
 
           if (lightningData[START_ITERNUM] < iterNum - minIterationsSinceLastLightningBolt &&
-              random2d(vec2(base[TEMPERATURE] * 0.2324, water[TOTAL] * 7.7)) < lightningSpawnChance) { // Spawn lightning
+              random2d(vec2(base[TEMPERATURE] * 0.99, water[TOTAL] * 17.2)) < lightningSpawnChance) { // Spawn lightning
             lightningSpawned = true;
             isActive = false;
             gl_PointSize = 1.0;
