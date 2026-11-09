@@ -70,6 +70,17 @@ check('strike dispatch uses LIGHTNING_IC_MAX_INTENSITY',
   displayShader.includes('lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY'));
 check('IC flashes are drawn with the generator artwork',
   displayShader.includes('displayICLightning') && appSource.includes("mode : 'IC'"));
+// the four atlas tiles are four different IC shapes, and every flash adds its
+// own stretch/mirroring on top of that
+const generatorSource = fs.readFileSync(path.join(ROOT, 'lightningGenerator.js'), 'utf8');
+const icVariants = (generatorSource.match(/const IC_VARIANTS = \[([^\]]*)\]/) || [])[1];
+check('the IC generator offers four different patterns',
+  icVariants && icVariants.split(',').length === 4,
+  'IC_VARIANTS = ' + icVariants);
+check('each atlas tile asks for its own pattern',
+  /variant : tileIndex/.test(appSource) && /msg\.variant/.test(generatorSource));
+check('every flash mirrors and stretches its artwork',
+  /mirror/i.test(displayShader) && /icSpriteSize\.x \* stretch\.x/.test(displayShader));
 check('IC light is masked to where the cloud is',
   /emittedLight \+= lightningICLight \* icCloudMask/.test(displayShader) &&
   /float icCloudMask = smoothstep\([^)]*cloudOpacity\)/.test(displayShader));

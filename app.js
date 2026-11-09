@@ -6615,8 +6615,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-13.1'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-13.1')
+    loadSourceFile('shaders/common.glsl?v=2026-11-14.1'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-14.1')
   ]);
 
   const [
@@ -7428,12 +7428,16 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       icLightningWorker.terminate();
       startICLightningTextureWorker();
     };
-    // A fixed seed per tile keeps the four flashes reproducible between runs
-    // while still being clearly different from each other.
+    // A fixed seed per tile keeps the four flashes reproducible between runs,
+    // and the variant makes each tile a different shape ('spider', 'crawler',
+    // 'canopy', 'web' - see IC_VARIANTS in lightningGenerator.js). The display
+    // shader also mirrors and stretches each flash, so no two strikes look the
+    // same.
     icLightningWorker.postMessage({
       width : icLightningTileWidth,
       height : icLightningTileHeight,
       mode : 'IC',
+      variant : tileIndex,
       seed : 1013 + tileIndex * 7919
     });
   }
@@ -9302,7 +9306,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-13.1');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-14.1');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
