@@ -22,6 +22,8 @@ uniform sampler2D surfaceTextureMap;
 uniform sampler2D curlTex;
 uniform sampler2D lightningTex;
 uniform sampler2D lightningDataTex;
+uniform sampler2D icLightningTex; // 2x2 atlas of intra-cloud artwork, one tile per slot
+uniform vec2 icSpriteSize;        // size of one intra-cloud flash, in normalized sim coords
 
 uniform sampler2D ambientLightTex;
 
@@ -55,6 +57,13 @@ uniform bool volumetricCloudLighting;
 out vec4 fragmentColor;
 
 #include "common.glsl"
+
+// Lightning rods: masts standing on the terrain, placed with the Lightning Rod
+// tool. (Declared after common.glsl so MAX_LIGHTNING_RODS is known.)
+uniform vec2 rodPositions[MAX_LIGHTNING_RODS];
+uniform int rodCount;
+uniform float rodThickness; // half width of the mast, in cells
+uniform float rodHeight;    // height of the mast, in cells
 
 #include "commonDisplay.glsl"
 
@@ -132,18 +141,31 @@ float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
   return max((1. / (0.05 + pow(T * 2.0, 3.))) - 0.005, 0.) * pow(intensity, 2.0); // fading out curve
 }
 
-vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity)
+// Height of whatever the bolt is landing on. A strike that was captured by a
+// lightning rod ends on the rod's tip instead of on the ground plane.
+float lightningGroundHeight(vec2 pos)
 {
+  for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
+    if (i >= rodCount)
+      break;
+    if (abs(pos.x - rodPositions[i].x) < 1e-6 && pos.y > rodPositions[i].y)
+      return rodPositions[i].y;
+  }
+  return 0.0;
+}
+
+vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity, float groundY)
+{
+  float boltHeight = max(pos.y - groundY, 0.02); // cloud base down to the ground / rod tip
   vec2 lightningTexCoord = texCoord;
 
   lightningTexCoord.x -= mod(pos.x, 1.);
 
-  lightningTexCoord.y -= pos.y;
+  lightningTexCoord.y = (pos.y - lightningTexCoord.y) / boltHeight; // 0 at cloud base, 1 at ground
 
-  float scaleMult = 1. / pos.y; // 1.0 means lightning is as tall as the simheight
+  float scaleMult = 1. / boltHeight; // 1.0 means lightning is as tall as the simheight
 
   lightningTexCoord.x *= scaleMult * aspectRatios[0] / lightningTexAspect;
-  lightningTexCoord.y *= -scaleMult;
 
   lightningTexCoord.x += 0.5;                                                                                               // center lightning bolt
 
@@ -179,6 +201,48 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   vec3 outputColor = max(pixVal * lightningCol, vec3(0));
 
   return outputColor;
+}
+
+
+// Intra-cloud flash.
+//
+// The artwork comes from lightningGenerator.js ('IC' mode): a wide, flat, very
+// heavily forked "spider" that spreads through the charge layer and never
+// touches the ground. The generator renders four different flashes into a 2x2
+// atlas, so every lightning slot samples its own tile and two flashes that
+// overlap in time never look identical.
+const float icAtlasTiles = 2.0;
+
+vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningIntensity, int slot)
+{
+  // position inside the flash, -0.5 .. 0.5
+  vec2 local = vec2((texCoord.x - mod(pos.x, 1.)) / max(icSpriteSize.x, 1e-5),
+                    (texCoord.y - pos.y) / max(icSpriteSize.y, 1e-5));
+  if (abs(local.x) > 0.5 || abs(local.y) > 0.5)
+    return vec3(0.0);
+
+  // slot -> tile of the atlas (slot % 2, slot / 2)
+  vec2 tile = vec2(float(slot - (slot / 2) * 2), float(slot / 2));
+  const float inset = 0.005; // keep linear filtering away from the tile seam
+  vec2 uv = tile + vec2(inset) + vec2(local.x + 0.5, 0.5 - local.y) * (1.0 - 2.0 * inset);
+  float pixVal = texture(icLightningTex, uv / icAtlasTiles).r;
+
+  // The flash spreads outwards from the origin: channels appear at the centre
+  // first and the outer branches light up as lightningTime grows.
+  float radial = max(abs(local.x), abs(local.y)) * 2.0; // 0 centre .. 1 edge
+  float spread = clamp(lightningTime * 2.4, 0.0, 1.0);
+  float reveal = clamp((spread - radial * 0.9) / 0.3, 0.0, 1.0);
+  if (reveal <= 0.0)
+    return vec3(0.0);
+
+  // The artwork is mostly soft halo with thin bright channels; the power curve
+  // keeps the channels while stopping the halo from blowing out the scene.
+  const float icBrightness = 90.0; // a CG return stroke peaks at 100000
+  pixVal = pow(max(pixVal, 0.0), 1.8) * reveal * currentLightningIntensity * icBrightness;
+
+  const vec3 icCol = vec3(0.58, 0.66, 1.0); // cooler than the CG stroke
+
+  return max(pixVal * icCol, vec3(0.0));
 }
 
 
@@ -288,7 +352,8 @@ vec4 getAirColor(vec2 fragCoordIn)
 
   // Every strike in the slot array is drawn until its own animation is over.
   // Slots are independent, so a new strike never truncates a running one.
-  vec3 lightningBoltLight = vec3(0.0);
+  vec3 lightningBoltLight = vec3(0.0); // cloud-to-ground strokes
+  vec3 lightningICLight = vec3(0.0);   // intra-cloud flashes
   for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
     vec4 lightningData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
     float lightningStartIterNum = lightningData[START_ITERNUM];
@@ -304,8 +369,10 @@ vec4 getAirColor(vec2 fragCoordIn)
     if (currentLightningIntensity <= 0.0)
       continue;
 
-    if (lightningData[INTENSITY] > 1.0) // CG
-      lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity);
+    if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY) // cloud-to-ground return stroke
+      lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight(lightningPos));
+    else                                                       // intra-cloud flash
+      lightningICLight += displayICLightning(lightningPos, lightningTime, currentLightningIntensity, slot);
 
     vec2 dist = vec2(lightningPos.x - texCoord.x, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1), 0.));
     dist.x *= aspectRatios[0];
@@ -315,6 +382,9 @@ vec4 getAirColor(vec2 fragCoordIn)
   }
 
   emittedLight += lightningBoltLight / (1. + cloudDensity * 100.0);
+  // IC flashes happen *inside* the cloud: the charge layer hides the channels
+  // only partially, which is what makes the cloud glow from within.
+  emittedLight += lightningICLight / (1. + cloudDensity * 2.5);
 
   return vec4(color, opacity);
 }
@@ -635,6 +705,43 @@ void main()
     // lightIntensity += arrow;
   }
 
+
+  // ------------------------------------------------------------ lightning rods
+  // Drawn last so the mast stands in front of the terrain it is planted on, and
+  // lit by the same sunlight / lightning light as everything else.
+  for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
+    if (i >= rodCount)
+      break;
+    vec2 rod = rodPositions[i];
+    float dxCells = (texCoord.x - rod.x) * resolution.x; // horizontal offset in cells
+    float dyCells = (texCoord.y - rod.y) * resolution.y; // height above the surface, in cells
+    if (dyCells < -1.0 || dyCells > rodHeight)
+      continue;
+
+    float alongRod = clamp(dyCells / max(rodHeight, 1.), 0., 1.);        // 0 base .. 1 tip
+    float halfWidth = max(rodThickness * mix(1.0, 0.25, alongRod), 0.35); // tapered mast
+    if (abs(dxCells) > halfWidth)
+      continue;
+
+    float acrossRod = abs(dxCells) / halfWidth;                           // 0 centre .. 1 edge
+    color = mix(vec3(0.07, 0.08, 0.10), vec3(0.50, 0.54, 0.62), 1. - acrossRod * 0.8);
+    shadowLight = max(shadowLight, 0.35);                                 // never fully black
+    opacity = 1.0;
+
+    // The mast tip glows a little on its own and lights up when it takes a hit.
+    float tipGlow = smoothstep(0.72, 1.0, alongRod);
+    float strikeGlow = 0.0;
+    for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
+      vec4 strikeData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
+      if (strikeData[START_ITERNUM] <= 0.0 || abs(strikeData.x - rod.x) > 1e-6)
+        continue;
+      float strikeAge = iterNum - strikeData[START_ITERNUM];
+      if (strikeAge < 0.0 || strikeAge > LIGHTNING_ANIM_ITERS)
+        continue;
+      strikeGlow = max(strikeGlow, lightningIntensityOverTime(calcLightningTime(strikeData[START_ITERNUM]), strikeData.xy, strikeData[INTENSITY]));
+    }
+    emittedLight += tipGlow * (vec3(0.10, 0.13, 0.30) + vec3(0.55, 0.68, 1.0) * strikeGlow * 60000.0);
+  }
 
   float scatering = clamp(map_range(abs(sunAngle), 75. * deg2rad, 90. * deg2rad, 0., 1.), 0., 1.); // how red the sunlight is
 

@@ -333,7 +333,7 @@ void main()
           int texFragX = int(fragCoord.x) % 80;
 
           if (wall[VERT_DISTANCE] == 5 && (texFragX == 18 || texFragX == 22)) { // cooling towers
-            water[TOTAL] += 0.25;
+            water[TOTAL] += 2.5; // 0.25 before the vapor output was raised 10x
             // base[TEMPERATURE] += 0.02;
             base.xy *= 0.5;
             base.y += 0.05;
