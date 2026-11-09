@@ -139,7 +139,7 @@ void main()
             gl_PointSize = 1.0;
             feedback.xy = texCoord;
             feedback[START_ITERNUM] = iterNum;
-            feedback[INTENSITY] = clamp(cloudPlusPrecipDensity / 10.0 + (random2d(texCoord) - 0.75), 0.15, 2.5);
+            feedback[INTENSITY] = clamp(cloudPlusPrecipDensity / 10.0 + (random2d(texCoord) - 0.15), 0.75, 4.5);
             gl_Position = vec4(vec2(-1. + texelSize.x * 3., -1. + texelSize.y), 0.0, 1.0); // render to bottem left corner (1, 0)
           }
         } else {
