@@ -215,22 +215,35 @@ const float icAtlasTiles = 2.0;
 
 vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningIntensity, int slot)
 {
+  // Every flash gets its own stretch, mirroring and growth speed, derived from
+  // its start time and slot, so two flashes that happen to use the same atlas
+  // tile still do not look alike: four shapes x four orientations x a range of
+  // aspect ratios.
+  float seedA = fract(lightningTime * 13.71 + float(slot) * 0.317);
+  float seedB = fract(lightningTime * 71.13 + float(slot) * 0.911);
+  vec2 stretch = vec2(0.75 + seedA * 0.60, 0.85 + seedB * 0.45); // 0.75..1.35 by 0.85..1.30
+  float revealSpeed = 2.0 + seedA * 1.4;
+
   // position inside the flash, -0.5 .. 0.5
-  vec2 local = vec2((texCoord.x - mod(pos.x, 1.)) / max(icSpriteSize.x, 1e-5),
-                    (texCoord.y - pos.y) / max(icSpriteSize.y, 1e-5));
+  vec2 local = vec2((texCoord.x - mod(pos.x, 1.)) / max(icSpriteSize.x * stretch.x, 1e-5),
+                    (texCoord.y - pos.y) / max(icSpriteSize.y * stretch.y, 1e-5));
   if (abs(local.x) > 0.5 || abs(local.y) > 0.5)
     return vec3(0.0);
+
+  // mirror each axis independently -> four orientations per tile
+  vec2 mirrored = vec2(local.x * (seedA < 0.5 ? -1.0 : 1.0),
+                       local.y * (seedB < 0.5 ? -1.0 : 1.0));
 
   // slot -> tile of the atlas (slot % 2, slot / 2)
   vec2 tile = vec2(float(slot - (slot / 2) * 2), float(slot / 2));
   const float inset = 0.005; // keep linear filtering away from the tile seam
-  vec2 uv = tile + vec2(inset) + vec2(local.x + 0.5, 0.5 - local.y) * (1.0 - 2.0 * inset);
+  vec2 uv = tile + vec2(inset) + vec2(mirrored.x + 0.5, 0.5 - mirrored.y) * (1.0 - 2.0 * inset);
   float pixVal = texture(icLightningTex, uv / icAtlasTiles).r;
 
   // The flash spreads outwards from the origin: channels appear at the centre
   // first and the outer branches light up as lightningTime grows.
   float radial = max(abs(local.x), abs(local.y)) * 2.0; // 0 centre .. 1 edge
-  float spread = clamp(lightningTime * 2.4, 0.0, 1.0);
+  float spread = clamp(lightningTime * revealSpeed, 0.0, 1.0);
   float reveal = clamp((spread - radial * 0.9) / 0.3, 0.0, 1.0);
   if (reveal <= 0.0)
     return vec3(0.0);
@@ -388,13 +401,20 @@ vec4 getAirColor(vec2 fragCoordIn)
 
   emittedLight += lightningBoltLight / (1. + cloudDensity * 100.0);
   // An intra-cloud flash happens *inside* the cloud, so its channels may only
-  // be seen where the cloud actually is. Masking by cloudOpacity is what keeps
-  // the artwork from spilling out into clear air (emitted light is added to the
-  // frame even where there is no cloud at all, and with no mask the branches
-  // reached far beyond the cloud that is supposed to contain them). The
-  // attenuation dims them where the cloud is dense: a flash is seen through the
-  // medium around it, not on top of it.
-  float icCloudMask = smoothstep(0.01, 0.10, cloudOpacity);
+  // be seen where the cloud actually is. Emitted light is added to the frame
+  // even where there is no cloud at all (main() even folds it into opacity), so
+  // without this mask the branches were drawn straight through the cloud edge
+  // and out into clear air.
+  //
+  // The mask starts *inside* the visible edge of the cloud rather than at it.
+  // Emitted light is folded into opacity further down (opacity +=
+  // length(emittedLight)), so a flash drawn into the faint fringe of a cloud
+  // does not just look exposed - it makes that fringe opaque and visibly grows
+  // the cloud around itself. Below ~0.15 opacity (thin haze, the soft rim of a
+  // cloud) the flash therefore contributes nothing, and it reaches full
+  // strength only in the body of the cloud (~0.38), which is where a strike can
+  // actually form.
+  float icCloudMask = smoothstep(0.15, 0.38, cloudOpacity);
   emittedLight += lightningICLight * icCloudMask / (1. + cloudDensity * 2.5);
 
   return vec4(color, opacity);
