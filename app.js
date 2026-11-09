@@ -6520,8 +6520,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl'),
-    loadSourceFile('shaders/commonDisplay.glsl')
+    loadSourceFile('shaders/common.glsl?v=2026-11-10.1'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-10.1')
   ]);
 
   const [
@@ -7025,7 +7025,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const precipitationDepositionTexture = gl.createTexture();
   const rainDepositionAccumulationTexture = gl.createTexture();
   const zeroColorClearValue = new Float32Array(4);
-  const lightningDataTexture = gl.createTexture(); // single pixel texture holding location and timing of current lightning strike
+  // Lightning slot array: one texel per strike (position, start iteration,
+  // intensity). A strike owns its slot for its whole animation, so a newer
+  // strike can never interrupt one that is still flashing. Two textures are
+  // ping-ponged because the slot manager samples the previous state while it
+  // writes the next one (sampling and rendering the same texture in one draw
+  // is a feedback loop). Keep numLightningSlots in sync with LIGHTNING_SLOTS
+  // in shaders/common.glsl.
+  const numLightningSlots = 4;
+  const START_ITERNUM_INDEX = 2; // matches #define START_ITERNUM in shaders/common.glsl
+  const lightningDataTextures = [gl.createTexture(), gl.createTexture()];
+  let lightningDataSrc = 0; // index of the slot array that is currently valid
 
   // Static texures:
   const noiseTexture = gl.createTexture();
@@ -7048,7 +7058,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   lightFrameBuff_0 = gl.createFramebuffer();
   const lightFrameBuff_1 = gl.createFramebuffer();
   precipitationFeedbackFrameBuff = gl.createFramebuffer();
-  const lightningDataFrameBuff = gl.createFramebuffer();
+  const lightningDataFrameBuffs = [gl.createFramebuffer(), gl.createFramebuffer()];
 
   // Set up Textures
   async function setupTextures()
@@ -7182,13 +7192,20 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
   gl.clearBufferfv(gl.COLOR, 2, zeroColorClearValue);
 
-  gl.bindTexture(gl.TEXTURE_2D, lightningDataTexture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 1, 1, 0, gl.RGBA, gl.FLOAT, null);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  for (let i = 0; i < 2; i++) {
+    gl.bindTexture(gl.TEXTURE_2D, lightningDataTextures[i]);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, numLightningSlots, 1, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-  gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuff);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, lightningDataTexture, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuffs[i]);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, lightningDataTextures[i], 0);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+    // all slots idle
+    gl.clearBufferfv(gl.COLOR, 0, zeroColorClearValue);
+  }
 
   // Load images together so one request does not delay the rest.
   const [
@@ -7561,6 +7578,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   gl.useProgram(lightningLocationProgram);
   gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'precipFeedbackTex'), 0);
+  gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'lightningDataTex'), 1);
   gl.uniform2f(gl.getUniformLocation(lightningLocationProgram, 'resolution'), sim_res_x, sim_res_y);
   gl.uniform2f(gl.getUniformLocation(lightningLocationProgram, 'texelSize'), texelSizeX, texelSizeY);
 
@@ -7611,7 +7629,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   var destTF;
   let lastLightningSoundIteration = 0;
   let lastLightningSoundCheckIteration = 0;
-  const lightningDataValues = new Float32Array(4);
+  const lightningDataValues = new Float32Array(numLightningSlots * 4);
 
   // preload uniform locations for tiny performance gain
   var uniformLocation_boundaryProgram_iterNum = gl.getUniformLocation(boundaryProgram, 'iterNum');
@@ -7909,7 +7927,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               gl.activeTexture(gl.TEXTURE1);
               gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
               gl.activeTexture(gl.TEXTURE2);
-              gl.bindTexture(gl.TEXTURE_2D, lightningDataTexture);
+              gl.bindTexture(gl.TEXTURE_2D, lightningDataTextures[lightningDataSrc]);
 
               gl.bindVertexArray(srcVAO);
               gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, destTF);
@@ -7937,16 +7955,22 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               precipitationEven = !precipitationEven;
 
 
-              // Extract lightningLocation from precipitationfeedback
+              // Strike slot manager: a new strike takes a free slot and every
+              // running strike keeps its own until its animation is over, so
+              // strikes never cut each other short. Ping-pong the slot array.
+              const lightningDst = 1 - lightningDataSrc;
               gl.useProgram(lightningLocationProgram);
               gl.uniform1f(gl.getUniformLocation(lightningLocationProgram, 'iterNum'), iterNum);
 
               gl.activeTexture(gl.TEXTURE0);
               gl.bindTexture(gl.TEXTURE_2D, precipitationFeedbackTexture);
+              gl.activeTexture(gl.TEXTURE1);
+              gl.bindTexture(gl.TEXTURE_2D, lightningDataTextures[lightningDataSrc]);
 
-              gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuff);
+              gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuffs[lightningDst]);
               gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+              lightningDataSrc = lightningDst;
 
             }
 
@@ -7969,18 +7993,28 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         if (guiControls.sound && guiControls.enablePrecipitation &&
             iterNum != lastLightningSoundCheckIteration) {
           lastLightningSoundCheckIteration = iterNum;
-          gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuff);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuffs[lightningDataSrc]);
           gl.readBuffer(gl.COLOR_ATTACHMENT0);
-          gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, lightningDataValues);
+          gl.readPixels(0, 0, numLightningSlots, 1, gl.RGBA, gl.FLOAT, lightningDataValues);
 
-          const lightningIteration = Math.round(lightningDataValues[2]);
-          if (lightningIteration > lastLightningSoundIteration && lightningIteration <= iterNum) {
+          // thunder belongs to the newest strike in the slot array that we have
+          // not heard yet (several strikes can be in flight at once now)
+          let newestSlot = -1;
+          let newestIteration = lastLightningSoundIteration;
+          for (let slot = 0; slot < numLightningSlots; slot++) {
+            const start = Math.round(lightningDataValues[slot * 4 + START_ITERNUM_INDEX]);
+            if (start > newestIteration && start <= iterNum) {
+              newestIteration = start;
+              newestSlot = slot;
+            }
+          }
+          if (newestSlot >= 0) {
             soundSystem.soundThunder(
-              lightningDataValues[0],
-              lightningDataValues[1],
-              Math.pow(lightningDataValues[3], 2.0)
+              lightningDataValues[newestSlot * 4 + 0],
+              lightningDataValues[newestSlot * 4 + 1],
+              Math.pow(lightningDataValues[newestSlot * 4 + 3], 2.0)
             );
-            lastLightningSoundIteration = lightningIteration;
+            lastLightningSoundIteration = newestIteration;
           }
         } else {
           lastLightningSoundIteration = iterNum;
@@ -8223,7 +8257,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.activeTexture(gl.TEXTURE7);
       gl.bindTexture(gl.TEXTURE_2D, lightningTextures[lightningTexNum]);
       gl.activeTexture(gl.TEXTURE8);
-      gl.bindTexture(gl.TEXTURE_2D, lightningDataTexture);
+      gl.bindTexture(gl.TEXTURE_2D, lightningDataTextures[lightningDataSrc]);
 
       gl.activeTexture(gl.TEXTURE9);
       gl.bindTexture(gl.TEXTURE_2D, ambientLightFBOs[0].texture);
@@ -9046,7 +9080,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-09.2');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-10.1');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
