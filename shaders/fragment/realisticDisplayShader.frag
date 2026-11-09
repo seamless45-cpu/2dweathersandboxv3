@@ -284,26 +284,37 @@ vec4 getAirColor(vec2 fragCoordIn)
   vec3 color = (smokeOrFireCol * smokeOpacity / opacity) + (cloudCol * cloudOpacity * (1. - smokeOpacity) / opacity); // color blending
 
 
-  vec4 lightningData = texture(lightningDataTex, vec2(0.5));
-  vec2 lightningPos = lightningData.xy;
-  float lightningStartIterNum = lightningData[START_ITERNUM];
-
-  float lightningTime = calcLightningTime(lightningStartIterNum);
-  float currentLightningIntensity = lightningIntensityOverTime(lightningTime, lightningPos, lightningData[INTENSITY]);
-
-
-  if (lightningData[INTENSITY] > 1.0) { // CG
-    emittedLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity);
-    emittedLight /= 1. + cloudDensity * 100.0;
-  }
-
 #define lightningOnLightBrightness 0.004 // 0.002
 
-  vec2 dist = vec2(lightningPos.x - texCoord.x, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1), 0.));
-  dist.x *= aspectRatios[0];
-  float lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03);
-  lightningOnLight *= currentLightningIntensity;
-  onLight += vec3(lightningOnLight);
+  // Every strike in the slot array is drawn until its own animation is over.
+  // Slots are independent, so a new strike never truncates a running one.
+  vec3 lightningBoltLight = vec3(0.0);
+  for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
+    vec4 lightningData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
+    float lightningStartIterNum = lightningData[START_ITERNUM];
+    if (lightningStartIterNum <= 0.0)
+      continue;                                              // never used / released
+    float lightningAge = iterNum - lightningStartIterNum;
+    if (lightningAge < 0.0 || lightningAge > LIGHTNING_ANIM_ITERS)
+      continue;                                              // animation already finished
+
+    vec2 lightningPos = lightningData.xy;
+    float lightningTime = calcLightningTime(lightningStartIterNum);
+    float currentLightningIntensity = lightningIntensityOverTime(lightningTime, lightningPos, lightningData[INTENSITY]);
+    if (currentLightningIntensity <= 0.0)
+      continue;
+
+    if (lightningData[INTENSITY] > 1.0) // CG
+      lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity);
+
+    vec2 dist = vec2(lightningPos.x - texCoord.x, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1), 0.));
+    dist.x *= aspectRatios[0];
+    float lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03);
+    lightningOnLight *= currentLightningIntensity;
+    onLight += vec3(lightningOnLight);
+  }
+
+  emittedLight += lightningBoltLight / (1. + cloudDensity * 100.0);
 
   return vec4(color, opacity);
 }

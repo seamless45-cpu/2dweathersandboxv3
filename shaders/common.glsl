@@ -91,6 +91,18 @@ precision highp isampler2D;
 #define START_ITERNUM 2
 #define INTENSITY 3
 
+// Lightning slot array. Every strike owns one slot for its entire animation,
+// so a newer strike can never cut a running one short. Keep this in sync with
+// numLightningSlots in app.js.
+#define LIGHTNING_SLOTS 4
+// Longest possible strike animation, in iterations. lightningTime advances 5
+// iterations per unit (calcLightningTime), the flicker period is < 3 units,
+// the flicker count is floor(< 2 * intensity - 1) <= 6 for the maximum
+// intensity of 4, and the brightness reaches exactly zero at T = 2.924
+// (lightningIntensityOverTime). So the longest flash is
+// 5 * (3 * 6 + 2.924 + 1) = 109.6 iterations; 112 keeps a small margin.
+#define LIGHTNING_ANIM_ITERS 112.0
+
 // Precipitation deposition
 #define RAIN_DEPOSITION 0
 #define SNOW_DEPOSITION 1

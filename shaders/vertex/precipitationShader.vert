@@ -120,19 +120,32 @@ void main()
           feedback[HEAT] += newMass[ICE] * meltingHeat;                  // add heat of freezing
           newDensity = snowDensity;
 
-          vec4 lightningData = texture(lightningDataTex, vec2(0.5)); // data from last lightning bolt
-
           const float lightningCloudDensityThreshold = 0.72;         // 3.0 -> 2.5 -> 1.6 -> 0.72
           const float lightningChanceMultiplier = 2.72;              // 0.0011 -> 0.0033 -> 0.0075 -> 2.72
 
           float cloudPlusPrecipDensity = water[CLOUD] + water[PRECIPITATION];
 
           float lightningSpawnChance = max((cloudPlusPrecipDensity - lightningCloudDensityThreshold) * lightningChanceMultiplier, 0.);
-          lightningSpawnChance *= legacyLightningGate; // 0 when the storm physics engine owns lightning
+          lightningSpawnChance *= legacyLightningGate; // 0 when legacy cloud-density lightning is disabled
 
           const float minIterationsSinceLastLightningBolt = 0.; // 50.
 
-          if (lightningData[START_ITERNUM] < iterNum - minIterationsSinceLastLightningBolt &&
+          // Lightning slots: every running strike owns one slot until its
+          // animation has finished (see lightningLocationShader.frag), so a
+          // new strike may only start when a slot is idle. This is what makes
+          // strikes uninterruptible: nothing ever overwrites a running flash.
+          float newestStrikeIterNum = 0.;
+          bool lightningSlotFree = false;
+          for (int i = 0; i < LIGHTNING_SLOTS; i++) {
+            float slotStart = texelFetch(lightningDataTex, ivec2(i, 0), 0)[START_ITERNUM];
+            if (slotStart > 0. && iterNum - slotStart < LIGHTNING_ANIM_ITERS)
+              newestStrikeIterNum = max(newestStrikeIterNum, slotStart);
+            else
+              lightningSlotFree = true;
+          }
+
+          if (lightningSlotFree &&
+              iterNum - newestStrikeIterNum >= minIterationsSinceLastLightningBolt &&
               random2d(vec2(base[TEMPERATURE] * 0.99, water[TOTAL] * 17.2)) < lightningSpawnChance) { // Spawn lightning
             lightningSpawned = true;
             isActive = false;
