@@ -14,7 +14,13 @@
  *               channels are dimmer/softer than a CG return stroke. The
  *               generator reproduces that: several layered filaments spread
  *               out from the flash origin with many fine side branches, all
- *               confined to a horizontal band of the image.
+ *               confined to a horizontal band of the image, on top of a soft
+ *               elliptical halo and a bright core.
+ *
+ *               app.js renders four of these into a 2x2 atlas (one tile per
+ *               lightning slot) and realisticDisplayShader.frag draws them for
+ *               every strike whose intensity is at or below
+ *               LIGHTNING_IC_MAX_INTENSITY, i.e. every intra-cloud flash.
  *
  * Protocol (unchanged for the legacy caller):
  *   worker.postMessage({width, height})             -> CG bolt bitmap
@@ -180,15 +186,17 @@ function generateIntraCloudBolt(width, height, seed)
 
   const cx = width * 0.5;
   const cy = height * 0.5;
-  const band = height * 0.42;            // vertical extent of the charge layer
+  // Vertical thickness of the charge layer the flash spreads through. A little
+  // variation per flash keeps the four atlas tiles from looking alike.
+  const band = height * (0.36 + rand() * 0.14);
   const bandLo = cy - band * 0.5;
   const bandHi = cy + band * 0.5;
   const stepLen = Math.max(0.9, width / 640);
-  const marginX = width * 0.025;
+  const marginX = Math.max(8, width * 0.03); // keeps atlas tiles free of bleed
 
   /* single-channel tone: wider channels are brighter, IC stays soft */
   function tone(w, gain) {
-    const v = Math.pow(Math.max(w, 0.05), 1.7) * 46.0 * gain;
+    const v = Math.pow(Math.max(w, 0.05), 1.7) * 60.0 * gain;
     const c = Math.max(0, Math.min(255, Math.round(v)));
     return 'rgb(' + c + ',' + c + ',' + c + ')';
   }
@@ -263,15 +271,41 @@ function generateIntraCloudBolt(width, height, seed)
 
   const queue = [];
 
+  /*
+   * Soft halo first. Real IC flashes light up the whole charge layer around
+   * them, and without this the artwork reads as a few loose wires pasted on
+   * top of the cloud instead of light coming from inside it. The halo is an
+   * ellipse that fades to zero before the tile edge, so packing four tiles into
+   * one atlas and sampling it with linear filtering cannot bleed across seams.
+   */
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(1, (band * 1.15) / Math.max(width * 0.5, 1));
+  const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, width * 0.5);
+  halo.addColorStop(0.0, 'rgba(255,255,255,0.07)');
+  halo.addColorStop(0.55, 'rgba(255,255,255,0.03)');
+  halo.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.fillStyle = halo;
+  ctx.fillRect(-width, -width, width * 2, width * 2);
+  ctx.restore();
+
+  // bright core where the bidirectional leader starts
+  const coreGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, width * 0.2);
+  coreGlow.addColorStop(0.0, 'rgba(255,255,255,0.12)');
+  coreGlow.addColorStop(0.45, 'rgba(255,255,255,0.02)');
+  coreGlow.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.fillStyle = coreGlow;
+  ctx.fillRect(0, 0, width, height);
+
   /* --- primary filaments: several layered spiders around the origin --- */
-  const nPrimary = 6 + Math.floor(rand() * 3);          // 6..8
+  const nPrimary = 7 + Math.floor(rand() * 3);          // 7..9
   for (let i = 0; i < nPrimary; i++) {
     const side = (i % 2 === 0) ? 1 : -1;                // spread both ways
     const yJitter = (rand() - 0.5) * band * 0.62;
     const startX = clamp(cx + (rand() - 0.5) * width * 0.07, marginX, width - marginX);
     const startY = clamp(cy + yJitter, bandLo, bandHi);
     const len = Math.round((width * (0.34 + rand() * 0.16)) / stepLen);
-    const w = 1.7 + rand() * 1.1;
+    const w = 2.6 + rand() * 1.4;
     growFilament(startX, startY, side > 0 ? 0 + (rand() - 0.5) * 0.40
                                           : Math.PI + (rand() - 0.5) * 0.40,
                  len, w, 1.0, 0, queue);

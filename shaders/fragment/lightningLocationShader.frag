@@ -22,6 +22,14 @@ uniform float dryLapse;
 
 #include "common.glsl"
 
+// Lightning rods (placed with the Lightning Rod tool in app.js). rodPositions[].x
+// is the normalized horizontal position of the mast, .y the normalized height of
+// the terrain surface it stands on. A rod only affects cloud-to-ground strikes:
+// an intra-cloud flash keeps the place it formed in.
+uniform vec2 rodPositions[MAX_LIGHTNING_RODS];
+uniform int rodCount;
+uniform float rodAttractRadius; // horizontal reach, in normalized sim width
+
 // Lightning slot manager.
 //
 // The lightning data texture is LIGHTNING_SLOTS x 1: one texel per strike.
@@ -38,6 +46,39 @@ bool slotBusy(vec4 data)
 {
   float start = data[START_ITERNUM];
   return start > 0.0 && (iterNum - start) < LIGHTNING_ANIM_ITERS;
+}
+
+// Pull a newly formed CG strike onto the nearest rod it can reach. Strikes that
+// form close to a mast almost always land on it, far ones rarely do; this is
+// what makes a rod read as an attractor instead of a decoration.
+vec4 attractToRod(vec4 strike)
+{
+  if (strike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY)
+    return strike; // intra-cloud: no ground contact, so nothing to attract
+
+  int nearestRod = -1;
+  float nearestDist = rodAttractRadius;
+  for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
+    if (i >= rodCount)
+      break;
+    float dx = abs(strike.x - rodPositions[i].x);
+    if (dx < nearestDist) {
+      nearestDist = dx;
+      nearestRod = i;
+    }
+  }
+  if (nearestRod < 0)
+    return strike;
+
+  // chance falls off linearly with distance from the mast
+  float pull = 1.0 - nearestDist / max(rodAttractRadius, 1e-5);
+  if (random2d(vec2(strike.y * 149.7, strike[START_ITERNUM] * 7.31)) > pull)
+    return strike;
+
+  strike.x = rodPositions[nearestRod].x;
+  // a captured strike is always a full return stroke
+  strike[INTENSITY] = max(strike[INTENSITY], LIGHTNING_IC_MAX_INTENSITY + 0.6);
+  return strike;
 }
 
 void main()
@@ -76,7 +117,7 @@ void main()
 
   vec4 result = previous;
   if (hasNewStrike && !duplicate && slot == freeSlot)
-    result = incoming;
+    result = attractToRod(incoming);
 
   lightningLocation = result;
 }

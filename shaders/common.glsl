@@ -103,6 +103,17 @@ precision highp isampler2D;
 // 5 * (3 * 6 + 2.924 + 1) = 109.6 iterations; 112 keeps a small margin.
 #define LIGHTNING_ANIM_ITERS 112.0
 
+// Strikes at or below this intensity are intra-cloud (IC) flashes: they stay
+// inside the cloud, are drawn with the IC artwork from lightningGenerator.js
+// and never reach the ground. Above it the strike is a cloud-to-ground (CG)
+// return stroke drawn with the tall bolt artwork.
+#define LIGHTNING_IC_MAX_INTENSITY 1.0
+
+// Lightning rods. A rod is placed with the Lightning Rod tool; it is a mast
+// standing on the terrain that pulls nearby CG strikes onto itself. Keep in
+// sync with MAX_LIGHTNING_RODS in app.js.
+#define MAX_LIGHTNING_RODS 6
+
 // Precipitation deposition
 #define RAIN_DEPOSITION 0
 #define SNOW_DEPOSITION 1

@@ -1942,6 +1942,21 @@ class Weatherstation
 
 let weatherStations = []; // array holding all weather stations
 
+// Lightning rods. The Lightning Rod tool plants one of these masts on the
+// terrain; clicking the open sky does nothing. Each rod is { x, y } in
+// normalized sim coordinates, where y is the height of the terrain surface it
+// stands on. Keep MAX_LIGHTNING_RODS in sync with #define MAX_LIGHTNING_RODS in
+// shaders/common.glsl. Rods belong to the running simulation, so they are
+// cleared whenever a new simulation (or a save file) is loaded.
+let lightningRods = [];
+const MAX_LIGHTNING_RODS = 6;
+const lightningRodStatus = { placed : '0 / ' + MAX_LIGHTNING_RODS };
+
+function updateLightningRodStatus()
+{
+  lightningRodStatus.placed = lightningRods.length + ' / ' + MAX_LIGHTNING_RODS;
+}
+
 async function loadData()
 {
   const fileInput = document.getElementById('fileInput');
@@ -2210,6 +2225,11 @@ async function prepareSounding()
 
 async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initialRainDrops)
 {
+  // A rod belongs to the terrain it was planted on, so a new simulation (or a
+  // loaded save file) starts without any.
+  lightningRods = [];
+  updateLightningRodStatus();
+
   let sliderGradientObserver;
   let loadedShaderCount = 0;
   const totalShaderCount = 30;
@@ -4786,9 +4806,28 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         'Wind' : 'TOOL_WIND',
         'Wind Push' : 'TOOL_WIND_PUSH',
         'Weather Station' : 'TOOL_STATION',
+        'Lightning Rod' : 'TOOL_LIGHTNING_ROD',
       })
       .name('Tool')
       .listen();
+
+    // Lightning rods: pick the Lightning Rod tool and click the terrain to
+    // plant one. The counter and the clear button make it obvious what the
+    // clicks are doing.
+    updateLightningRodStatus();
+    const lightningRodController = UI_folder.add(lightningRodStatus, 'placed')
+      .name('Lightning Rods')
+      .listen();
+    const lightningRodInput = lightningRodController.domElement.querySelector('input');
+    if (lightningRodInput) {
+      lightningRodInput.readOnly = true;
+      lightningRodInput.title = 'Pick the Lightning Rod tool, then click the ground in the simulation to place a rod. Clicking open sky does nothing.';
+    }
+    UI_folder.add({ clearLightningRods : function() {
+                      lightningRods = [];
+                      updateLightningRodStatus();
+                    } }, 'clearLightningRods')
+      .name('Clear Lightning Rods');
     const windPushControllers = [
       UI_folder.add(guiControls, 'windPushStrengthMph', 0, 300, 1).name('Wind Push Strength (mph)'),
       UI_folder.add(guiControls, 'windPushDirection', {
@@ -6196,6 +6235,57 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     return null;
   }
 
+  // Height of the terrain surface in one column, as a cell index, or -1 when
+  // the column is empty air all the way down. Wall cells have DISTANCE == 0;
+  // the surface is the highest one.
+  var terrainColumnValues = new Int8Array(0);
+  function findTerrainSurfaceCell(simXpos)
+  {
+    if (terrainColumnValues.length != 4 * sim_res_y)
+      terrainColumnValues = new Int8Array(4 * sim_res_y);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_1);
+    gl.readBuffer(gl.COLOR_ATTACHMENT2); // wall texture
+    gl.readPixels(simXpos, 0, 1, sim_res_y, gl.RGBA_INTEGER, gl.BYTE, terrainColumnValues);
+    for (let simYpos = sim_res_y - 1; simYpos >= 0; simYpos--) {
+      if (terrainColumnValues[simYpos * 4 + 1] == 0) // DISTANCE == 0 -> solid wall
+        return simYpos;
+    }
+    return -1;
+  }
+
+  // Plant a lightning rod where the user clicked. Returns true when a rod was
+  // placed; clicking the open sky (or a column without ground) does nothing,
+  // because a mast standing in mid-air looks wrong.
+  function tryPlaceLightningRod(simXpos, simYpos)
+  {
+    if (!Number.isFinite(simXpos) || !Number.isFinite(simYpos))
+      return false;
+    const cellX = clamp(Math.floor(clamp(simXpos, 0, 0.999999) * sim_res_x), 0, sim_res_x - 1);
+    const cellY = clamp(Math.floor(clamp(simYpos, 0, 0.999999) * sim_res_y), 0, sim_res_y - 1);
+    const surfaceCell = findTerrainSurfaceCell(cellX);
+    if (surfaceCell < 0)
+      return false; // nothing solid in this column
+
+    const maxAirCells = Math.max(2, Math.round(sim_res_y * 0.02)); // ~240 m above the ground
+    if (cellY > surfaceCell + maxAirCells)
+      return false; // clicked the sky instead of the terrain
+
+    const rodX = (cellX + 0.5) / sim_res_x;
+    if (lightningRods.some(rod => Math.abs(rod.x - rodX) * sim_res_x < 2))
+      return false; // a rod already stands here
+    if (lightningRods.length >= MAX_LIGHTNING_RODS)
+      lightningRods.shift(); // the oldest mast makes way for the new one
+    lightningRods.push({ x : rodX, y : (surfaceCell + 1) / sim_res_y });
+    updateLightningRodStatus();
+    return true;
+  }
+
+  function placeLightningRodAtClientPoint(clientX, clientY)
+  {
+    const rect = canvas.getBoundingClientRect();
+    return tryPlaceLightningRod(screenToSimX(clientX - rect.left), screenToSimY(clientY - rect.top));
+  }
+
   function mouseDownEvent(e)
   {
     // event.preventDefault(); // caused problems with dat.gui
@@ -6211,6 +6301,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         if (simXpos >= 0 && simXpos < sim_res_x && Number.isInteger(simYpos) &&
             simYpos >= 0 && simYpos < sim_res_y)
           weatherStations.push(new Weatherstation(simXpos, simYpos)); // add weather station
+      } else if (guiControls.tool == 'TOOL_LIGHTNING_ROD') {
+        // the Lightning Rod tool plants a mast on the terrain under the pointer
+        placeLightningRodAtClientPoint(e.clientX, e.clientY);
       }
     } else if (e.button == 1) {
       // middle mouse button
@@ -6248,6 +6341,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       if (SETUP_MODE) {
         startSimulation();
+      } else if (guiControls.tool == 'TOOL_LIGHTNING_ROD' && event.changedTouches.length) {
+        placeLightningRodAtClientPoint(event.changedTouches[0].clientX, event.changedTouches[0].clientY);
       }
     }
   }, {passive : false});
@@ -6520,8 +6615,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-10.1'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-10.1')
+    loadSourceFile('shaders/common.glsl?v=2026-11-12.1'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-12.1')
   ]);
 
   const [
@@ -7048,6 +7143,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const lightningTextures = [];
   const numLightningTextures = 10;
 
+  // Intra-cloud artwork. lightningGenerator.js draws one IC flash per 1024x512
+  // tile and they are packed into a 2x2 atlas, so each lightning slot can show
+  // a different flash (see displayICLightning in realisticDisplayShader.frag).
+  const icLightningTileWidth = 1024;
+  const icLightningTileHeight = 512;
+  const numICLightningTiles = numLightningSlots;
+  const icLightningAtlas = gl.createTexture();
+
 
   frameBuff_0 = gl.createFramebuffer(); // global for weather stations
   const frameBuff_1 = gl.createFramebuffer();
@@ -7294,6 +7397,48 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   }
 
 
+  // Upload one generated IC flash into its tile of the atlas.
+  function generateICLightningTexture(tile, bitmap)
+  {
+    const column = tile % 2;
+    const row = Math.floor(tile / 2);
+    gl.bindTexture(gl.TEXTURE_2D, icLightningAtlas);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, column * icLightningTileWidth, row * icLightningTileHeight,
+                     gl.RED, gl.UNSIGNED_BYTE, bitmap);
+    bitmap.close();
+  }
+
+
+  let nextICLightningTextureIndex = 0;
+  function startICLightningTextureWorker()
+  {
+    if (nextICLightningTextureIndex >= numICLightningTiles)
+      return;
+
+    const tileIndex = nextICLightningTextureIndex++;
+    const icLightningWorker = new Worker('./lightningGenerator.js');
+    icLightningWorker.onmessage = event => {
+      generateICLightningTexture(tileIndex, event.data);
+      icLightningWorker.terminate();
+      startICLightningTextureWorker();
+    };
+    icLightningWorker.onerror = event => {
+      console.error('Intra-cloud lightning texture generation failed.', event.message);
+      icLightningWorker.terminate();
+      startICLightningTextureWorker();
+    };
+    // A fixed seed per tile keeps the four flashes reproducible between runs
+    // while still being clearly different from each other.
+    icLightningWorker.postMessage({
+      width : icLightningTileWidth,
+      height : icLightningTileHeight,
+      mode : 'IC',
+      seed : 1013 + tileIndex * 7919
+    });
+  }
+
+
   let nextLightningTextureIndex = 0;
   function startLightningTextureWorker()
   {
@@ -7327,6 +7472,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   }
   for (let i = 0; i < Math.min(2, numLightningTextures); i++)
     startLightningTextureWorker();
+
+  // IC atlas: empty (black) until the workers have filled the four tiles, so a
+  // flash that happens very early simply does not draw artwork yet.
+  gl.bindTexture(gl.TEXTURE_2D, icLightningAtlas);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, icLightningTileWidth * 2, icLightningTileHeight * 2, 0,
+                gl.RED, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  startICLightningTextureWorker();
 
   await loadingBar.set(78, 'Preparing render buffers');
 
@@ -7534,6 +7690,16 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'dryLapse'), dryLapse);
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'cellHeight'), cellHeight);
 
+  // Intra-cloud flashes: the generator artwork is 2:1 and a real IC flash spans
+  // several kilometres, so the sprite is sized in metres and keeps the same
+  // physical size at any resolution.
+  const icFlashWidthMeters = 9000.0;
+  const icFlashHeightMeters = 4500.0;
+  gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'icLightningTex'), 10);
+  gl.uniform2f(gl.getUniformLocation(realisticDisplayProgram, 'icSpriteSize'),
+               icFlashWidthMeters / (cellHeight * sim_res_x),
+               icFlashHeightMeters / (cellHeight * sim_res_y));
+
   gl.useProgram(precipitationProgram);
   gl.uniform1i(gl.getUniformLocation(precipitationProgram, 'baseTex'), 0);
   gl.uniform1i(gl.getUniformLocation(precipitationProgram, 'waterTex'), 1);
@@ -7582,6 +7748,54 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform2f(gl.getUniformLocation(lightningLocationProgram, 'resolution'), sim_res_x, sim_res_y);
   gl.uniform2f(gl.getUniformLocation(lightningLocationProgram, 'texelSize'), texelSizeX, texelSizeY);
 
+  // Lightning rods. Geometry is expressed in cells so a mast keeps the same
+  // physical size at any resolution; the placed rods themselves are uploaded
+  // every frame because the Lightning Rod tool can add one at any time.
+  const rodPositionData = new Float32Array(MAX_LIGHTNING_RODS * 2);
+  const rodUniformLocations = new Map();
+  const rodThickness = clamp(sim_res_x * 0.0025, 2.5, 28.0); // half width, in cells
+  const rodHeight = clamp(600.0 / cellHeight, 6.0, 60.0);    // mast height, in cells
+  const rodAttractRadius = 0.08;                             // reach, normalized sim width
+
+  function lightningRodUniforms(program)
+  {
+    let locations = rodUniformLocations.get(program);
+    if (locations == null) {
+      locations = {
+        positions : gl.getUniformLocation(program, 'rodPositions[0]'),
+        count : gl.getUniformLocation(program, 'rodCount'),
+        thickness : gl.getUniformLocation(program, 'rodThickness'),
+        height : gl.getUniformLocation(program, 'rodHeight'),
+        attractRadius : gl.getUniformLocation(program, 'rodAttractRadius')
+      };
+      rodUniformLocations.set(program, locations);
+    }
+    return locations;
+  }
+
+  function uploadLightningRodUniforms(program)
+  {
+    const locations = lightningRodUniforms(program);
+    gl.useProgram(program); // uniform locations are only valid for the active program
+    const count = Math.min(lightningRods.length, MAX_LIGHTNING_RODS);
+    rodPositionData.fill(0);
+    for (let i = 0; i < count; i++) {
+      rodPositionData[i * 2] = lightningRods[i].x;
+      rodPositionData[i * 2 + 1] = lightningRods[i].y;
+    }
+    if (locations.positions != null)
+      gl.uniform2fv(locations.positions, rodPositionData);
+    if (locations.count != null)
+      gl.uniform1i(locations.count, count);
+    if (locations.thickness != null)
+      gl.uniform1f(locations.thickness, rodThickness);
+    if (locations.height != null)
+      gl.uniform1f(locations.height, rodHeight);
+    if (locations.attractRadius != null)
+      gl.uniform1f(locations.attractRadius, rodAttractRadius);
+  }
+
+  uploadLightningRodUniforms(lightningLocationProgram);
 
   // console.time('Set uniforms');
   setGuiUniforms(); // all uniforms changed by gui
@@ -7961,6 +8175,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               const lightningDst = 1 - lightningDataSrc;
               gl.useProgram(lightningLocationProgram);
               gl.uniform1f(gl.getUniformLocation(lightningLocationProgram, 'iterNum'), iterNum);
+              uploadLightningRodUniforms(lightningLocationProgram); // rods capture CG strikes
 
               gl.activeTexture(gl.TEXTURE0);
               gl.bindTexture(gl.TEXTURE_2D, precipitationFeedbackTexture);
@@ -8036,7 +8251,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       cursorType = 3.0; // configurable wind push area
     } else if (guiControls.wholeWidth) {
       cursorType = 2.0;   // cursor whole width brush
-    } else if (SETUP_MODE || (inputType <= 0 && !bPressed && (guiControls.tool == 'TOOL_NONE' || guiControls.tool == 'TOOL_STATION'))) {
+    } else if (SETUP_MODE || (inputType <= 0 && !bPressed && (guiControls.tool == 'TOOL_NONE' || guiControls.tool == 'TOOL_STATION' || guiControls.tool == 'TOOL_LIGHTNING_ROD'))) {
       cursorType = 0;     // cursor off sig
     }
 
@@ -8262,6 +8477,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.activeTexture(gl.TEXTURE9);
       gl.bindTexture(gl.TEXTURE_2D, ambientLightFBOs[0].texture);
 
+      gl.activeTexture(gl.TEXTURE10);
+      gl.bindTexture(gl.TEXTURE_2D, icLightningAtlas);
+
+      uploadLightningRodUniforms(realisticDisplayProgram);
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to hdr framebuffer
 
@@ -9080,7 +9299,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-10.1');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-12.1');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
