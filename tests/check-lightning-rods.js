@@ -70,6 +70,15 @@ check('strike dispatch uses LIGHTNING_IC_MAX_INTENSITY',
   displayShader.includes('lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY'));
 check('IC flashes are drawn with the generator artwork',
   displayShader.includes('displayICLightning') && appSource.includes("mode : 'IC'"));
+check('IC light is masked to where the cloud is',
+  /emittedLight \+= lightningICLight \* icCloudMask/.test(displayShader) &&
+  /float icCloudMask = smoothstep\([^)]*cloudOpacity\)/.test(displayShader));
+check('IC flashes are cloud-scale, not storm-scale',
+  /const icFlashWidthMeters = (\d+)/.test(appSource) &&
+  Number(appSource.match(/const icFlashWidthMeters = (\d+)/)[1]) <= 6000 &&
+  Number(appSource.match(/const icFlashHeightMeters = (\d+)/)[1]) <= 3000,
+  'width ' + (appSource.match(/const icFlashWidthMeters = (\d+)/) || [])[1] +
+  ', height ' + (appSource.match(/const icFlashHeightMeters = (\d+)/) || [])[1]);
 check('rod snaps are gated to cloud-to-ground strikes',
   locationShader.includes('strike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY'));
 
