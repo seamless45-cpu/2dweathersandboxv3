@@ -235,10 +235,15 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   if (reveal <= 0.0)
     return vec3(0.0);
 
+  // Fade the outer part of the sprite out, so a branch never ends in a hard
+  // cut where the artwork stops, nor where the cloud mask below clips it.
+  vec2 edge = abs(local) * 2.0; // 0 at the centre, 1 at the sprite border
+  float window = (1.0 - smoothstep(0.55, 0.95, edge.x)) * (1.0 - smoothstep(0.55, 0.95, edge.y));
+
   // The artwork is mostly soft halo with thin bright channels; the power curve
   // keeps the channels while stopping the halo from blowing out the scene.
   const float icBrightness = 90.0; // a CG return stroke peaks at 100000
-  pixVal = pow(max(pixVal, 0.0), 1.8) * reveal * currentLightningIntensity * icBrightness;
+  pixVal = pow(max(pixVal, 0.0), 1.8) * reveal * window * currentLightningIntensity * icBrightness;
 
   const vec3 icCol = vec3(0.58, 0.66, 1.0); // cooler than the CG stroke
 
@@ -382,9 +387,15 @@ vec4 getAirColor(vec2 fragCoordIn)
   }
 
   emittedLight += lightningBoltLight / (1. + cloudDensity * 100.0);
-  // IC flashes happen *inside* the cloud: the charge layer hides the channels
-  // only partially, which is what makes the cloud glow from within.
-  emittedLight += lightningICLight / (1. + cloudDensity * 2.5);
+  // An intra-cloud flash happens *inside* the cloud, so its channels may only
+  // be seen where the cloud actually is. Masking by cloudOpacity is what keeps
+  // the artwork from spilling out into clear air (emitted light is added to the
+  // frame even where there is no cloud at all, and with no mask the branches
+  // reached far beyond the cloud that is supposed to contain them). The
+  // attenuation dims them where the cloud is dense: a flash is seen through the
+  // medium around it, not on top of it.
+  float icCloudMask = smoothstep(0.01, 0.10, cloudOpacity);
+  emittedLight += lightningICLight * icCloudMask / (1. + cloudDensity * 2.5);
 
   return vec4(color, opacity);
 }
