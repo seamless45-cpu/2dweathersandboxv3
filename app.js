@@ -6615,8 +6615,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-14.1'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-14.1')
+    loadSourceFile('shaders/common.glsl?v=2026-11-15.1'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-15.1')
   ]);
 
   const [
@@ -7694,14 +7694,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'dryLapse'), dryLapse);
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'cellHeight'), cellHeight);
 
-  // Intra-cloud flashes: the generator artwork is 2:1. A real IC flash spreads a
-  // few kilometres sideways through the charge layer but is only about a
-  // kilometre or two thick, so the sprite is sized in metres (the same physical
-  // size at any resolution) and kept close to the thickness of a cloud layer. It
-  // is masked by the cloud in realisticDisplayShader.frag, so anything that does
-  // reach past the cloud is simply not drawn.
-  const icFlashWidthMeters = 5000.0;
-  const icFlashHeightMeters = 2500.0;
+  // Intra-cloud flashes: the generator artwork is 2:1. A flash is a compact
+  // cluster inside the charge layer, not a banner across the sky, so the sprite
+  // is kept small - roughly the thickness of a cloud layer - and sets the same
+  // physical size at any resolution. It is masked by the cloud in
+  // realisticDisplayShader.frag, so anything that does reach past the cloud is
+  // simply not drawn.
+  const icFlashWidthMeters = 3600.0;
+  const icFlashHeightMeters = 1800.0;
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'icLightningTex'), 10);
   gl.uniform2f(gl.getUniformLocation(realisticDisplayProgram, 'icSpriteSize'),
                icFlashWidthMeters / (cellHeight * sim_res_x),
@@ -9306,7 +9306,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-14.1');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-15.1');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

@@ -215,29 +215,22 @@ const float icAtlasTiles = 2.0;
 
 vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningIntensity, int slot)
 {
-  // Every flash gets its own stretch, mirroring and growth speed, derived from
-  // its start time and slot, so two flashes that happen to use the same atlas
-  // tile still do not look alike: four shapes x four orientations x a range of
-  // aspect ratios.
-  float seedA = fract(lightningTime * 13.71 + float(slot) * 0.317);
-  float seedB = fract(lightningTime * 71.13 + float(slot) * 0.911);
-  vec2 stretch = vec2(0.75 + seedA * 0.60, 0.85 + seedB * 0.45); // 0.75..1.35 by 0.85..1.30
-  float revealSpeed = 2.0 + seedA * 1.4;
+  // The flash is always the same size and orientation for a given slot: the
+  // artwork is deliberately not mirrored or stretched per strike, so a flash
+  // does not change shape every time it happens. Variety comes from the four
+  // atlas tiles, one shape each.
+  const float revealSpeed = 2.4;
 
   // position inside the flash, -0.5 .. 0.5
-  vec2 local = vec2((texCoord.x - mod(pos.x, 1.)) / max(icSpriteSize.x * stretch.x, 1e-5),
-                    (texCoord.y - pos.y) / max(icSpriteSize.y * stretch.y, 1e-5));
+  vec2 local = vec2((texCoord.x - mod(pos.x, 1.)) / max(icSpriteSize.x, 1e-5),
+                    (texCoord.y - pos.y) / max(icSpriteSize.y, 1e-5));
   if (abs(local.x) > 0.5 || abs(local.y) > 0.5)
     return vec3(0.0);
-
-  // mirror each axis independently -> four orientations per tile
-  vec2 mirrored = vec2(local.x * (seedA < 0.5 ? -1.0 : 1.0),
-                       local.y * (seedB < 0.5 ? -1.0 : 1.0));
 
   // slot -> tile of the atlas (slot % 2, slot / 2)
   vec2 tile = vec2(float(slot - (slot / 2) * 2), float(slot / 2));
   const float inset = 0.005; // keep linear filtering away from the tile seam
-  vec2 uv = tile + vec2(inset) + vec2(mirrored.x + 0.5, 0.5 - mirrored.y) * (1.0 - 2.0 * inset);
+  vec2 uv = tile + vec2(inset) + vec2(local.x + 0.5, 0.5 - local.y) * (1.0 - 2.0 * inset);
   float pixVal = texture(icLightningTex, uv / icAtlasTiles).r;
 
   // The flash spreads outwards from the origin: channels appear at the centre
@@ -254,9 +247,13 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   float window = (1.0 - smoothstep(0.55, 0.95, edge.x)) * (1.0 - smoothstep(0.55, 0.95, edge.y));
 
   // The artwork is mostly soft halo with thin bright channels; the power curve
-  // keeps the channels while stopping the halo from blowing out the scene.
-  const float icBrightness = 90.0; // a CG return stroke peaks at 100000
-  pixVal = pow(max(pixVal, 0.0), 1.8) * reveal * window * currentLightningIntensity * icBrightness;
+  // keeps the channels while stopping the halo from blowing out the scene. The
+  // brightness is deliberately modest: an IC flash is several times dimmer than
+  // a CG return stroke (which peaks at 100000), and pushing it higher makes the
+  // dense middle of the artwork clip to a white blob instead of reading as
+  // channels.
+  const float icBrightness = 45.0;
+  pixVal = pow(max(pixVal, 0.0), 2.0) * reveal * window * currentLightningIntensity * icBrightness;
 
   const vec3 icCol = vec3(0.58, 0.66, 1.0); // cooler than the CG stroke
 

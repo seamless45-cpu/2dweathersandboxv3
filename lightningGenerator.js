@@ -197,12 +197,13 @@ function generateIntraCloudBolt(width, height, seed, variant)
 
   const cx = width * 0.5;
   const cy = height * 0.5;
-  // Vertical thickness of the charge layer the flash spreads through.
-  const band = height * (0.36 + rand() * 0.14);
+  // Vertical thickness of the charge layer the flash spreads through. Kept
+  // narrow on purpose: a flash that fills the whole tile reads as a scribble.
+  const band = height * (0.30 + rand() * 0.08);
   const bandLo = cy - band * 0.5;
   const bandHi = cy + band * 0.5;
   const stepLen = Math.max(0.9, width / 640);
-  const marginX = Math.max(8, width * 0.03); // keeps atlas tiles free of bleed
+  const marginX = Math.max(10, width * 0.06); // keeps atlas tiles free of bleed
 
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
@@ -297,11 +298,16 @@ function generateIntraCloudBolt(width, height, seed, variant)
   function horizontalTrunk(yStart, trunkWidth, gain, opts) {
     const branchEvery = Math.max(0, Math.round(opts.branchEvery || 0));
     const branchLen = opts.branchLen || 0;
-    let x = marginX;
+    // A trunk covers the middle of the tile (opts.fromFrac .. opts.toFrac) and
+    // not the full width: a channel running from edge to edge looks like a wire
+    // stretched across the cloud instead of a flash inside it.
+    const spanStart = marginX + (width - marginX * 2) * (opts.fromFrac === undefined ? 0.12 : opts.fromFrac);
+    const spanEnd = marginX + (width - marginX * 2) * (opts.toFrac === undefined ? 0.88 : opts.toFrac);
+    let x = spanStart;
     let y = clamp(yStart, bandLo, bandHi);
     let a = 0;                                     // travelling to the right
     const pts = [x, y];
-    const steps = Math.ceil((width - marginX * 2) / stepLen);
+    const steps = Math.ceil((spanEnd - spanStart) / stepLen);
 
     for (let i = 0; i < steps; i++) {
       a += (rand() - 0.5) * (opts.wander || 0.30);
@@ -310,7 +316,7 @@ function generateIntraCloudBolt(width, height, seed, variant)
       while (da < -Math.PI) da += Math.PI * 2;
       a += da * (opts.pull || 0.22);
 
-      x = Math.min(x + Math.cos(a) * stepLen, width - marginX);
+      x = Math.min(x + Math.cos(a) * stepLen, spanEnd);
       y = clamp(y + Math.sin(a) * stepLen, bandLo, bandHi);
       pts.push(x, y);
 
@@ -362,22 +368,22 @@ function generateIntraCloudBolt(width, height, seed, variant)
     }
   }
 
-  const spiderStyle = { wander : 0.55, pull : 0.05, fork0 : 0.014, forkN : 0.026, spread : 0.55, vertical : false };
-  const branchStyle = { wander : 0.50, pull : 0.03, fork0 : 0.020, forkN : 0.030, spread : 0.70, vertical : true };
-  const webStyle = { wander : 0.70, pull : 0.04, fork0 : 0.030, forkN : 0.050, spread : 0.80, vertical : false };
+  const spiderStyle = { wander : 0.40, pull : 0.08, fork0 : 0.016, forkN : 0.028, spread : 0.50, vertical : false };
+  const branchStyle = { wander : 0.42, pull : 0.06, fork0 : 0.018, forkN : 0.026, spread : 0.60, vertical : true };
+  const webStyle = { wander : 0.45, pull : 0.08, fork0 : 0.024, forkN : 0.032, spread : 0.55, vertical : false };
 
   if (style === 'spider') {
-    drawHalo(0.07, 0.12);
+    drawHalo(0.05, 0.07);
 
     /* --- primary filaments: several layered spiders around the origin --- */
-    const nPrimary = 7 + Math.floor(rand() * 3);          // 7..9
+    const nPrimary = 8 + Math.floor(rand() * 3);          // 8..10
     for (let i = 0; i < nPrimary; i++) {
       const side = (i % 2 === 0) ? 1 : -1;                // spread both ways
       const yJitter = (rand() - 0.5) * band * 0.62;
-      const startX = clamp(cx + (rand() - 0.5) * width * 0.07, marginX, width - marginX);
+      const startX = clamp(cx + (rand() - 0.5) * width * 0.05, marginX, width - marginX);
       const startY = clamp(cy + yJitter, bandLo, bandHi);
-      const len = Math.round((width * (0.34 + rand() * 0.16)) / stepLen);
-      const w = 2.6 + rand() * 1.4;
+      const len = Math.round((width * (0.17 + rand() * 0.09)) / stepLen); // short strands
+      const w = 1.7 + rand() * 0.8;
       growFilament(startX, startY, side > 0 ? 0 + (rand() - 0.5) * 0.40
                                             : Math.PI + (rand() - 0.5) * 0.40,
                    len, w, 1.0, 0, queue, spiderStyle);
@@ -386,10 +392,10 @@ function generateIntraCloudBolt(width, height, seed, variant)
     /* --- dense core burst around the origin ---------------------------- */
     // Real IC flashes have a bright, chaotic core where the bidirectional
     // leader starts; without it the texture reads as a few loose strands.
-    for (let i = 0; i < 7; i++) {
-      const ang = (i / 7) * Math.PI * 2 * 0.18 + (rand() - 0.5) * 0.9;
+    for (let i = 0; i < 6; i++) {
+      const ang = (i / 6) * Math.PI * 2 * 0.18 + (rand() - 0.5) * 0.9;
       const dir = i % 2 === 0 ? ang : Math.PI + ang;
-      const len = Math.round((width * (0.06 + rand() * 0.10)) / stepLen);
+      const len = Math.round((width * (0.04 + rand() * 0.06)) / stepLen);
       growFilament(cx + (rand() - 0.5) * width * 0.03,
                    clamp(cy + (rand() - 0.5) * band * 0.35, bandLo, bandHi),
                    dir, len, 1.1 + rand() * 0.9, 0.9, 1, queue, spiderStyle);
@@ -399,22 +405,26 @@ function generateIntraCloudBolt(width, height, seed, variant)
     for (let i = 0; i < 3; i++) {
       const startY = clamp(cy + (rand() - 0.5) * band, bandLo, bandHi);
       const startX = cx + (rand() - 0.5) * width * 0.20;
-      const len = Math.round((width * (0.20 + rand() * 0.18)) / stepLen);
-      growFilament(startX, startY, (rand() < 0.5 ? 0 : Math.PI) + (rand() - 0.5) * 0.9,
+      const len = Math.round((width * (0.12 + rand() * 0.08)) / stepLen);
+      growFilament(startX, startY, (rand() < 0.5 ? 0 : Math.PI) + (rand() - 0.5) * 0.7,
                    len, 0.9 + rand() * 0.6, 0.70, 1, queue, spiderStyle);
     }
   } else if (style === 'crawler') {
-    drawHalo(0.05, 0.09);
+    drawHalo(0.04, 0.06);
 
     /* one long channel sweeps the whole layer, dropping a comb of short, steep
        branches as it goes: the "crawler" look */
-    horizontalTrunk(cy + (rand() - 0.5) * band * 0.25, 4.4 + rand() * 1.0, 1.0,
-                    { branchEvery : 13 + Math.floor(rand() * 8), branchLen : (band * 0.42) / stepLen, branchUp : 0 });
-    if (rand() < 0.85)
-      horizontalTrunk(cy + (rand() - 0.5) * band * 0.9, 2.2 + rand() * 0.8, 0.75,
-                      { branchEvery : 20 + Math.floor(rand() * 10), branchLen : (band * 0.30) / stepLen, branchUp : 0 });
+    horizontalTrunk(cy + (rand() - 0.5) * band * 0.20, 3.6 + rand() * 0.8, 1.0,
+                    { fromFrac : 0.10, toFrac : 0.90, wander : 0.45, pull : 0.06,
+                      branchEvery : 11 + Math.floor(rand() * 6),
+                      branchLen : (band * 0.34) / stepLen, branchUp : 0 });
+    if (rand() < 0.5)
+      horizontalTrunk(cy + (rand() - 0.5) * band * 0.75, 2.0 + rand() * 0.6, 0.75,
+                      { fromFrac : 0.18, toFrac : 0.82, wander : 0.45, pull : 0.06,
+                        branchEvery : 18 + Math.floor(rand() * 8),
+                        branchLen : (band * 0.24) / stepLen, branchUp : 0 });
   } else if (style === 'lattice') {
-    drawHalo(0.06, 0.10);
+    drawHalo(0.045, 0.07);
 
     /*
      * Two trunks running through the layer at different heights, tied together
@@ -424,53 +434,53 @@ function generateIntraCloudBolt(width, height, seed, variant)
      */
     const upperY = cy - band * (0.18 + rand() * 0.14);
     const lowerY = cy + band * (0.18 + rand() * 0.14);
-    const trunkOpts = { wander : 0.52, pull : 0.06 };          // undulating, not a ruler
-    horizontalTrunk(upperY, 3.0 + rand() * 0.9, 1.0, trunkOpts);
-    horizontalTrunk(lowerY, 2.8 + rand() * 0.9, 0.95, trunkOpts);
+    const trunkOpts = { fromFrac : 0.10, toFrac : 0.90, wander : 0.45, pull : 0.07 }; // undulating, not a ruler
+    horizontalTrunk(upperY, 2.8 + rand() * 0.7, 1.0, trunkOpts);
+    horizontalTrunk(lowerY, 2.6 + rand() * 0.7, 0.95, trunkOpts);
 
     /* cross-channels between the two trunks, at assorted angles */
-    for (let i = 0; i < 9; i++) {
+    for (let i = 0; i < 7; i++) {
       const fromTop = rand() < 0.5;
-      const x = marginX + rand() * (width - marginX * 2);
+      const x = marginX + (0.12 + rand() * 0.76) * (width - marginX * 2);
       growFilament(x, (fromTop ? upperY : lowerY) + (rand() - 0.5) * band * 0.1,
-                   fromTop ? (Math.PI * 0.5 + (rand() - 0.5) * 1.1) : (-Math.PI * 0.5 + (rand() - 0.5) * 1.1),
-                   Math.round((band * (0.25 + rand() * 0.45)) / stepLen),
-                   1.0 + rand() * 1.0, 0.85, 1, queue, branchStyle);
+                   fromTop ? (Math.PI * 0.5 + (rand() - 0.5) * 0.8) : (-Math.PI * 0.5 + (rand() - 0.5) * 0.8),
+                   Math.round((band * (0.20 + rand() * 0.30)) / stepLen),
+                   1.0 + rand() * 0.8, 0.85, 1, queue, branchStyle);
     }
 
     /* a few forks along the trunks so they do not read as clean lines */
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 3; i++) {
       const onLower = rand() < 0.5;
-      growFilament(marginX + rand() * (width - marginX * 2), onLower ? lowerY : upperY,
+      growFilament(marginX + (0.15 + rand() * 0.70) * (width - marginX * 2), onLower ? lowerY : upperY,
                    (rand() < 0.5 ? 0 : Math.PI) + (rand() - 0.5) * 0.5,
-                   Math.round((width * (0.10 + rand() * 0.14)) / stepLen),
+                   Math.round((width * (0.06 + rand() * 0.08)) / stepLen),
                    1.0 + rand() * 0.6, 0.75, 1, queue, webStyle);
     }
   } else { // 'web'
-    drawHalo(0.04, 0.05);
+    drawHalo(0.035, 0.04);
 
     /*
      * Several small centres, each throwing out short rays: the mesh of a dense
      * charge layer rather than one flash with a single origin.
      */
-    const centres = 4 + Math.floor(rand() * 3);           // 4..6
+    const centres = 4 + Math.floor(rand() * 2);           // 4..5
     for (let c = 0; c < centres; c++) {
-      const ox = clamp(cx + (rand() - 0.5) * width * 0.74, marginX, width - marginX);
-      const oy = clamp(cy + (rand() - 0.5) * band * 0.85, bandLo, bandHi);
-      const rays = 3 + Math.floor(rand() * 3);            // 3..5
+      const ox = clamp(cx + (rand() - 0.5) * width * 0.42, marginX, width - marginX);
+      const oy = clamp(cy + (rand() - 0.5) * band * 0.70, bandLo, bandHi);
+      const rays = 4 + Math.floor(rand() * 2);            // 4..5
       for (let r = 0; r < rays; r++) {
-        const ang = (r / rays) * Math.PI * 2 + (rand() - 0.5) * 0.85;
-        const len = Math.round((width * (0.05 + rand() * 0.09)) / stepLen);
-        growFilament(ox, oy, ang, len, 1.3 + rand() * 0.9, 0.85, 1, queue, webStyle);
+        const ang = (r / rays) * Math.PI * 2 + (rand() - 0.5) * 0.60;
+        const len = Math.round((width * (0.035 + rand() * 0.055)) / stepLen);
+        growFilament(ox, oy, ang, len, 1.3 + rand() * 0.8, 0.85, 1, queue, webStyle);
       }
     }
 
-    /* a couple of long filaments tie the mesh together */
+    /* a couple of short filaments tie the mesh together */
     for (let i = 0; i < 2; i++) {
-      growFilament(clamp(cx + (rand() - 0.5) * width * 0.45, marginX, width - marginX),
-                   clamp(cy + (rand() - 0.5) * band * 0.55, bandLo, bandHi),
+      growFilament(clamp(cx + (rand() - 0.5) * width * 0.30, marginX, width - marginX),
+                   clamp(cy + (rand() - 0.5) * band * 0.45, bandLo, bandHi),
                    rand() < 0.5 ? 0 : Math.PI,
-                   Math.round((width * (0.22 + rand() * 0.14)) / stepLen),
+                   Math.round((width * (0.10 + rand() * 0.08)) / stepLen),
                    1.1 + rand() * 0.5, 0.70, 1, queue, webStyle);
     }
   }
