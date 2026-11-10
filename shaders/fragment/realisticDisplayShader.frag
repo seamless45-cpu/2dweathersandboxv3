@@ -2,6 +2,7 @@
 precision highp float;
 precision highp sampler2D;
 precision highp isampler2D;
+precision highp sampler2DArray;
 
 in vec2 fragCoord;    // pixel
 in vec2 texCoord;     // this normalized
@@ -22,9 +23,8 @@ uniform sampler2D surfaceTextureMap;
 uniform sampler2D curlTex;
 uniform sampler2D lightningTex;
 uniform sampler2D lightningDataTex;
-uniform sampler2D icLightningTex; // 4x2 atlas of intra-cloud artwork, eight patterns
+uniform sampler2DArray icLightningTex; // one layer of intra-cloud artwork per pattern
 uniform vec2 icSpriteSize;        // size of one intra-cloud flash, in normalized sim coords
-uniform float icArtZoom;          // fraction of each tile that is sampled (1.0 = whole tile)
 
 uniform sampler2D ambientLightTex;
 
@@ -221,22 +221,46 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
 
 // Intra-cloud flash.
 //
-// The artwork comes from lightningGenerator.js ('IC' mode): hair-thin curling
-// channels spread through a charge layer and never reaching the ground. The
-// generator renders eight different shapes into a 4x2 atlas, and every strike
-// picks one of them from its own start iteration and position, so two flashes
-// rarely look alike.
-const vec2 icAtlasTiles = vec2(4.0, 2.0);
+// The artwork comes from lightningGenerator.js ('IC' mode): a network of
+// hair-thin channels spreading through a charge layer and never reaching the
+// ground. The generator draws eight different networks into a 4x2 atlas, and
+// every strike picks one of them - and a mirroring of it - from its own start
+// iteration and position, so two flashes rarely look alike.
+//
+// One atlas tile is the whole flash: the tile is drawn at the size a flash
+// covers on screen, so the artwork is sampled at roughly one artwork pixel per
+// screen pixel and its strokes arrive as strokes. An earlier version sampled a
+// quarter of a much bigger tile, which minified the artwork four to one - a
+// hair then fell between screen pixels and the flash dissolved into a sprinkle
+// of hot dots.
+//
+// The artwork lives in a 2D array texture, one layer per pattern, so each layer
+// gets its own mip chain and the flash is filtered correctly at every camera
+// zoom: crisp where a channel is several pixels wide, and a smooth glow where the
+// whole flash is a hundred pixels across. An atlas would have needed an inset per
+// tile and would have bled one pattern into the next as soon as it was mipmapped.
 const float icTileCount = 8.0;
 // Keep in step with icLightningTileWidth in app.js.
-const float icTileWidthPx = 1024.0;
+const float icTileWidthPx = 256.0;
+
+// The light a channel carries per unit of artwork luminance. The artwork's own
+// tone already separates a trunk (1.0) from an arm (0.60) from a hair (0.35);
+// this constant only sets what one unit of that tone is worth in HDR light.
+//
+// It is small on purpose. The knee in computeICLight() is fed
+// channel * icBrightness * icPower * icEnergy * cloudGain, which at the default
+// camera is about 10x the artwork tone (icEnergy 2.56 x cloud gain 3), so the
+// constant has to be well below one for the tiers to land apart instead of all
+// arriving as the same pure white: at 0.5 a trunk reaches 0.95 of the knee, an
+// arm 0.75 and a hair 0.5, which is a hierarchy the eye can see.
+const float icBrightness = 0.5;
 
 vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningIntensity,
                         float tileSeed, float artPerPixel)
 {
-  // The flash is always the same size and orientation: the artwork is
-  // deliberately not mirrored or stretched, so a flash does not flip around
-  // while it is on screen. Variety comes from the eight atlas tiles.
+  // The flash is always the same size and orientation on screen: the artwork is
+  // deliberately never stretched, so a flash does not swim while it is on. Its
+  // variety comes from the eight tiles and the mirroring below.
   const float revealSpeed = 2.4;
 
   // position inside the flash, -0.5 .. 0.5
@@ -245,23 +269,17 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   if (abs(local.x) > 0.5 || abs(local.y) > 0.5)
     return vec3(0.0);
 
-  // Only the middle of each tile is sampled (icArtZoom < 1). A flash is roughly
-  // a hundred pixels wide on screen while the artwork is 1024 pixels wide, so
-  // showing the whole tile squeezes every bend of a channel into one or two
-  // pixels and the channels read as straight lines no matter how curved the
-  // artwork is. Sampling a fraction of the tile makes each channel several
-  // times bigger on screen, which is where the curve becomes visible.
-  vec2 artLocal = local * icArtZoom;
-
-  // Which of the eight patterns this strike uses. The hash runs on the strike's
-  // own start iteration and position, so it is fixed for the whole flash and
-  // changes with the next one.
+  // Which of the eight networks this strike uses, and which way round it is
+  // mirrored. The hash runs on the strike's own start iteration and position, so
+  // it is fixed for the whole flash and different for the next one. Eight tiles
+  // times four mirrorings is thirty-two looks out of an atlas of eight.
   float tileHash = fract(sin(tileSeed * 12.9898 + dot(pos, vec2(41.7, 91.3))) * 43758.5453);
-  float tileIndex = floor(tileHash * icTileCount);
-  vec2 tile = vec2(mod(tileIndex, icAtlasTiles.x), floor(tileIndex / icAtlasTiles.x));
-  const float inset = 0.005; // keep linear filtering away from the tile seam
-  vec2 uv = tile + vec2(inset) + vec2(artLocal.x + 0.5, 0.5 - artLocal.y) * (1.0 - 2.0 * inset);
-  float pixVal = texture(icLightningTex, uv / icAtlasTiles).r;
+  float layer = min(floor(tileHash * icTileCount), icTileCount - 1.0);
+  float look = floor(fract(tileHash * 17.31) * 4.0);
+  vec2 artCoord = vec2(mod(look, 2.0) < 0.5 ? local.x : -local.x,
+                       look < 2.0 ? local.y : -local.y);
+  vec2 uv = vec2(artCoord.x + 0.5, 0.5 - artCoord.y);
+  float channel = max(texture(icLightningTex, vec3(uv, layer)).r, 0.0);
 
   // The flash spreads outwards from the origin: channels appear at the centre
   // first and the outer branches light up as lightningTime grows.
@@ -271,37 +289,26 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   if (reveal <= 0.0)
     return vec3(0.0);
 
-  // Fade the outer part of the sprite out, so a branch never ends in a hard
-  // cut where the artwork stops (there is no cloud mask to hide the edge).
+  // Fade the outer part of the sprite out, so a branch never ends in a hard cut
+  // where the artwork stops. The artwork keeps a margin of its own, so this only
+  // has to soften the last few percent.
   vec2 edge = abs(local) * 2.0; // 0 at the centre, 1 at the sprite border
-  float window = (1.0 - smoothstep(0.45, 0.9, edge.x)) * (1.0 - smoothstep(0.45, 0.9, edge.y));
+  float window = (1.0 - smoothstep(0.80, 0.99, edge.x)) * (1.0 - smoothstep(0.80, 0.99, edge.y));
 
-  // The artwork is the light itself: a channel's luminance is how much light it
-  // emits, and the constants below only set what one full tile is worth.
-  //
-  // A channel is now a hair, and a hair loses almost all of its light to
-  // filtering: a flash covers ~60-120 px while the sampled artwork is 512 px
-  // wide, so a half-pixel channel is averaged down to a few percent of itself.
-  // Multiplying by that minification (artPerPixel, worked out per pixel from the
-  // screen-space derivative before the slot loop) keeps a hair as bright as it
-  // is thin, at every zoom. That is what replaced the flat 60x fudge: the fudge
-  // made even the dimmest skirt saturate, so every channel came out the same
-  // clipped white and the whole flash read as one glowing slab.
-  const float icBrightness = 5.5;
-  float icEnergy = clamp(artPerPixel, 1.0, 8.0);
+  // A channel loses light to filtering as the sprite shrinks, so the artwork is
+  // scaled by how many artwork pixels one screen pixel covers. The clamp is
+  // deliberately narrow: outside it this becomes a licence to overdrive the
+  // whole flash, and an overdriven flash clips to one flat white slab in which
+  // the thickness of a channel means nothing.
+  float icEnergy = clamp(artPerPixel, 1.0, 3.0);
 
   // The strike intensity curve peaks around 20 for a couple of iterations.
   // Driving the artwork straight from it pushed every channel past white at the
-  // peak, where the whole flash clipped into a solid slab and its thickness
-  // stopped meaning anything. Compressing the peak keeps the flicker but holds
-  // the flash in the range a thin channel can carry.
+  // peak, so the peak is compressed: the flash still flickers, but it stays in
+  // the range a thin channel can carry.
   float icPower = currentLightningIntensity / (1.0 + currentLightningIntensity * 0.85);
 
-  pixVal = max(pixVal, 0.0) * reveal * window * icPower * icBrightness * icEnergy;
-
-  const vec3 icCol = vec3(0.58, 0.66, 1.0); // cooler than the CG stroke
-
-  return max(pixVal * icCol, vec3(0.0));
+  return vec3(channel * reveal * window * icPower * icBrightness * icEnergy);
 }
 
 
@@ -324,7 +331,7 @@ vec3 computeICLight()
   // How many artwork pixels one screen pixel covers, worked out once, outside
   // the slot loop: screen-space derivatives inside a loop with `continue` are
   // undefined, and every flash shares the same sprite scale anyway.
-  float artPerPixel = fwidth(texCoord.x) * icArtZoom * icTileWidthPx / max(icSpriteSize.x, 1e-5);
+  float artPerPixel = fwidth(texCoord.x) * icTileWidthPx / max(icSpriteSize.x, 1e-5);
   for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
     vec4 lightningData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
     float lightningStartIterNum = lightningData[START_ITERNUM];
@@ -352,19 +359,29 @@ vec3 computeICLight()
 
   // Seen through the cloud it is in. A channel has to stay readable against the
   // cloud around it, and a sunlit cloud is ~1.0 in HDR units - about 230/255 on
-  // screen - while a hairline channel only carries a fraction of that. How much
+  // screen - while a thin channel only carries a fraction of that. How much
   // light gets from a flash to the viewer grows with the amount of cloud in the
   // way, because that is the medium scattering it, so the light is scaled by the
   // cloud it is seen through. In clear air there is nothing to scatter and no
-  // bright backdrop to beat, so the gain is 1 there and a flash outside a cloud
-  // looks exactly as before.
+  // bright backdrop to beat, so the gain is 1 there.
   // Same smooth 2x2 water sample the scene pass uses, so the gain follows the
   // cloud instead of stepping from cell to cell along a channel.
   float cloudWater = max(bilerpWallVis(waterTex, wallTex, fragCoord)[CLOUD], 0.0);
   float cloudDensity = cloudWater * 13.6; // same scale as getAirColor
   float cloudOpacity = clamp(1.0 - 1.0 / (1.0 + cloudDensity), 0.0, 1.0);
-  const float icCloudScatter = 3.5;
-  return max(icLight, vec3(0.0)) * (1.0 + icCloudScatter * cloudOpacity);
+  const float icCloudScatter = 2.0;
+  vec3 gained = max(icLight, vec3(0.0)) * (1.0 + icCloudScatter * cloudOpacity);
+
+  // ... and then compressed with a soft knee before it reaches the frame.
+  //
+  // The default display path has no tone mapping (ACES off), so anything above
+  // 1.0 in HDR is simply clipped: without a knee, a bright trunk and a faint
+  // hair both arrive as the same pure white and the channel structure - the one
+  // thing that makes a flash look like a flash - is thrown away exactly where
+  // the flash is brightest. 1 - exp(-x) passes small values almost untouched,
+  // gives the trunk a shoulder, and cannot exceed 1, so every tier stays a
+  // different colour on screen instead of all of them clipping together.
+  return vec3(1.0) - exp(-gained);
 }
 
 

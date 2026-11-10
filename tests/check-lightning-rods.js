@@ -60,20 +60,10 @@ check('app.js MAX_LIGHTNING_RODS matches common.glsl',
 check('app.js numLightningSlots matches LIGHTNING_SLOTS',
   appNumSlots === LIGHTNING_SLOTS,
   'app.js ' + appNumSlots + ' vs common.glsl ' + LIGHTNING_SLOTS);
-check('the IC atlas holds eight patterns in a 4x2 grid',
-  String(appICtiles).trim() === 'icLightningAtlasColumns * icLightningAtlasRows' &&
-  /const icLightningAtlasColumns = 4;/.test(appSource) &&
-  /const icLightningAtlasRows = 2;/.test(appSource),
-  'got ' + appICtiles);
-check('the shader atlas grid matches app.js',
-  /const vec2 icAtlasTiles = vec2\(4\.0, 2\.0\);/.test(displayShader) &&
-  /const float icTileCount = 8\.0;/.test(displayShader) &&
-  /const float icTileWidthPx = 1024\.0;/.test(displayShader) &&
-  /const icLightningTileWidth = 1024;/.test(appSource));
-check('the atlas texture is sized from those constants',
-  /icLightningTileWidth \* icLightningAtlasColumns/.test(appSource) &&
-  /icLightningTileHeight \* icLightningAtlasRows/.test(appSource) &&
-  /tile % icLightningAtlasColumns/.test(appSource));
+check('the IC artwork has eight patterns',
+  /const numICLightningTiles = 8;/.test(appSource) &&
+  /const float icTileCount = 8\.0;/.test(displayShader),
+  'app.js: ' + appICtiles);
 check('both lightning programs declare the rod uniforms',
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(locationShader) &&
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(displayShader));
@@ -82,216 +72,66 @@ check('strike dispatch uses LIGHTNING_IC_MAX_INTENSITY',
 check('IC flashes are drawn with the generator artwork',
   displayShader.includes('displayICLightning') && appSource.includes("mode : 'IC'"));
 
+/*
+ * Intra-cloud artwork.
+ *
+ * The deep checks for the IC model live in tests/check-ic-lightning.js, which
+ * renders the real generator through a stubbed canvas and measures the artwork
+ * and the display maths. What belongs here is only what this file is about: the
+ * contract between app.js, the shader and the generator - the tile size, the
+ * filtering, and the additive pass that makes a flash visible inside a cloud.
+ */
 const generatorSource = fs.readFileSync(path.join(ROOT, 'lightningGenerator.js'), 'utf8');
 
-// Eight genuinely different shapes, and every one of them is reachable: a name
-// in IC_VARIANTS that no branch draws would be a pattern that never appears.
-const icVariants = (generatorSource.match(/const IC_VARIANTS = \[([^\]]*)\]/) || [])[1];
-const variantNames = icVariants
-  ? icVariants.split(',').map((name) => name.trim().replace(/^'|'$/g, '')).filter(Boolean)
-  : [];
-check('the IC generator offers eight different patterns',
-  variantNames.length === 8,
-  'IC_VARIANTS = ' + icVariants);
-check('every IC pattern has its own drawing branch',
-  variantNames.length > 0 && variantNames.every((name) =>
-    new RegExp("style === '" + name + "'").test(generatorSource)),
-  variantNames.filter((name) => !new RegExp("style === '" + name + "'").test(generatorSource)).join(','));
-check('each atlas tile asks for its own pattern',
-  /variant : tileIndex % 8/.test(appSource) && /msg\.variant/.test(generatorSource));
+check('the IC generator draws one flash per tile request',
+  /msg\.mode === 'IC'/.test(generatorSource) && /generateIntraCloudBolt\(/.test(generatorSource));
+check('every tile asks the generator for its own drawing',
+  /variant : tileIndex/.test(appSource) && /msg\.variant/.test(generatorSource));
+check('the IC artwork is generated off the main thread',
+  /new Worker\('\.\/lightningGenerator\.js\?v=/.test(appSource) &&
+  /postMessage\(bitmap, \[bitmap\]\)/.test(generatorSource));
 
-// A strike no longer shows the tile belonging to its slot: it picks one of the
-// eight from its own start iteration and position, so consecutive flashes
-// differ. That hash is the whole reason "the same patterns every time" is gone.
-check('every strike picks its own tile instead of inheriting its slot\'s',
+// The tile is the whole flash now, so the artwork is only correct if app.js and
+// the shader agree on its size: the shader samples the tile edge to edge.
+{
+  const appW = Number((appSource.match(/const icLightningTileWidth = (\d+);/) || [])[1]);
+  const appH = Number((appSource.match(/const icLightningTileHeight = (\d+);/) || [])[1]);
+  const shaderW = Number((displayShader.match(/const float icTileWidthPx = ([\d.]+);/) || [])[1]);
+  check('app.js and the shader agree on the IC tile size',
+    appW === shaderW && appW > 0 && appH > 0 && Math.abs(appW / appH - 2) < 1e-6,
+    'app.js ' + appW + 'x' + appH + ', shader ' + shaderW);
+}
+check('a strike picks its layer and its mirroring from its own hash',
   /float tileHash = fract\(sin\(tileSeed/.test(displayShader) &&
-  /float tileIndex = floor\(tileHash \* icTileCount\);/.test(displayShader) &&
-  /vec2 tile = vec2\(mod\(tileIndex, icAtlasTiles\.x\), floor\(tileIndex \/ icAtlasTiles\.x\)\);/.test(displayShader) &&
+  /float look = floor\(fract\(tileHash \* ([\d.]+)\) \* 4\.0\);/.test(displayShader) &&
   /lightningStartIterNum \* 0\.6180339 \+ float\(slot\) \* 11\.7/.test(displayShader));
+check('a flash never changes shape while it is on screen',
+  // the mirroring comes from the strike hash, not from the flash's age
+  !/look = floor\(fract\(lightningTime/.test(displayShader) &&
+  !/artCoord \* lightningTime/.test(displayShader) &&
+  !/stretch\.x/.test(displayShader));
 
-// curvature has to survive the trip to the screen: the artwork is sampled
-// zoomed-in (icArtZoom < 1) inside the same window the generator draws into
-check('IC artwork is sampled zoomed-in so its curves reach the screen',
-  /uniform float icArtZoom/.test(displayShader) && /local \* icArtZoom/.test(displayShader) &&
-  /const icArtZoom = 0\.\d+/.test(appSource) &&
-  parseFloat((appSource.match(/const icArtZoom = (0\.\d+)/) || [])[1]) < 1.0);
-check('the generator draws only inside the window the shader samples',
-  /const IC_STAGE_FRACTION = 0\.\d+/.test(generatorSource) &&
-  Number(generatorSource.match(/const IC_STAGE_FRACTION = (0\.\d+)/)[1]) ===
-    parseFloat(appSource.match(/const icArtZoom = (0\.\d+)/)[1]));
-
-// Hair, not ribbon: the stroke widths are the point of this round.
-const widthConst = (name) => {
-  const match = generatorSource.match(new RegExp('const ' + name + ' = ([\\d.]+);'));
-  return match ? Number(match[1]) : NaN;
-};
-check('IC strands are drawn hair-thin, not as ribbons',
-  !/STROKE_SCALE = [\d.]+ \*/.test(generatorSource) &&
-  widthConst('HAIR_W') > 0 && widthConst('HAIR_W') <= 0.6 &&
-  widthConst('ARM_W') <= 1.6 && widthConst('TRUNK_W') <= 2.0,
-  'HAIR_W=' + widthConst('HAIR_W') + ' ARM_W=' + widthConst('ARM_W') + ' TRUNK_W=' + widthConst('TRUNK_W'));
-check('nothing widens a stroke after it is measured for tone',
-  /ctx\.lineWidth = Math\.max\(0\.35, w\);/.test(generatorSource));
-check('the strands taper, as a filament does',
-  /const taper = st\.taper === undefined/.test(generatorSource) && /w = Math\.max\(minW, w \* taper\)/.test(generatorSource));
-
-// The shader shows the tile as light, so a stroke that is nearly black is a
-// channel that emits nothing: it reads as a dark silhouette instead of a
-// channel. Every stroke has to stay above a floor.
-check('no IC stroke is painted as a black silhouette',
-  /const TONE_FLOOR = (\d+)/.test(generatorSource) &&
-  Number(generatorSource.match(/const TONE_FLOOR = (\d+)/)[1]) >= 32 &&
-  /Math\.max\(TONE_FLOOR, Math\.min\(255/.test(generatorSource));
-// Strokes must not erase the halo (source-over) nor pile up into a saturated
-// slab ('lighter'): 'lighten' takes the brighter of stroke and backdrop.
+// Glow layers are what a fading flash leaves behind as a dark rim, so an IC
+// channel has to be the stroke and nothing else, like a CG bolt.
+check('IC channels carry no glow layer',
+  !/drawHalo/.test(generatorSource) &&
+  (() => {
+    const fn = (generatorSource.match(/function stroke\(pts, w, tone\)[\s\S]*?\n  \}/) || [''])[0];
+    return (fn.match(/ctx\.stroke\(\)/g) || []).length === 1;
+  })());
+// Strokes must not erase what is under them (source-over) nor pile up into a
+// saturated slab ('lighter'): 'lighten' takes the brighter of stroke and
+// backdrop, so crossing channels cannot churn the tile into dark troughs.
 check('IC strokes only ever brighten the artwork',
   /globalCompositeOperation = 'lighten'/.test(generatorSource) &&
-  !/globalCompositeOperation = 'lighter'/.test(generatorSource));
+  !/globalCompositeOperation = 'lighter'/.test(generatorSource) &&
+  !/globalCompositeOperation = 'screen'/.test(generatorSource));
 
-// The heading model is the round-7 change: noise-driven curvature instead of a
-// heading that holds and kinks, which is what collapsed every IC channel into a
-// horizontal noodle.
-check('IC channels are grown from a drifting curvature (curls, not kinks)',
-  /function stepHeading\(/.test(generatorSource) &&
-  /s\.curvTarget \+= \(rand\(\) - 0\.5\) \* st\.curlDrift;/.test(generatorSource) &&
-  /s\.curv \+= \(s\.curvTarget - s\.curv\) \* st\.curlResponse;/.test(generatorSource) &&
-  /s\.axis \+= s\.curv;/.test(generatorSource));
-check('no sine wave, no meander, no heading momentum',
-  !/meanderAmp|meanderWave|meanderPhase/.test(generatorSource) &&
-  !/wanderVel|maxCurve/.test(generatorSource) &&
-  !/s\.runLeft/.test(generatorSource) &&
-  !/Math\.sin\(s\.axis/.test(generatorSource) &&
-  !/Math\.sin\(/.test((generatorSource.match(/function stepHeading[\s\S]*?\n\}/) || [''])[0]));
-check('every IC channel class is tuned for curling (drift, response, maxCurv)',
-  (generatorSource.match(/curlDrift : [\d.]+, curlResponse : [\d.]+, maxCurv : [\d.]+/g) || []).length >= 5);
-
-{
-  // The heading model is pure maths, so drive it here instead of trusting the
-  // source: extract stepHeading() and makeRng() and run a long channel through
-  // them, well inside the layer so the edge steering never fires.
-  const fnSrc = (re) => (generatorSource.match(re) || [''])[0];
-  const rngSrc = fnSrc(/function makeRng\(seed\) \{[\s\S]*?\n\}/);
-  const headingSrc = fnSrc(/function stepHeading\(s, st, y, bandLo, bandHi, rand\) \{[\s\S]*?\n\}/);
-  check('the IC heading model can be tested without a canvas', rngSrc.length > 0 && headingSrc.length > 0);
-
-  const stepHeading = new Function(rngSrc + '\n' + headingSrc + '\nreturn stepHeading;')();
-  const makeRng = new Function(rngSrc + '\nreturn makeRng;')();
-  const rand = makeRng(20261124);
-
-  const styleSrc = (generatorSource.match(/const armStyle = \{[\s\S]*?\};/) || [''])[0];
-  const num = (name) => Number((styleSrc.match(new RegExp(name + ' : ([\\d.]+)')) || [])[1]);
-  const st = {
-    curlDrift : num('curlDrift'), curlResponse : num('curlResponse'), maxCurv : num('maxCurv'),
-    kink : num('kink'), kinkChance : num('kinkChance'), bend : num('bend')
-  };
-  check('the arm style is readable', st.curlDrift > 0 && st.maxCurv > 0 && st.curlResponse > 0);
-
-  const STEP_LEN_PX = 1024 / 900; // stepLen, in artwork pixels
-  const N = 4000;
-  const s = { axis : 0, curv : 0, curvTarget : 0 };
-  const headings = new Float64Array(N);
-  for (let i = 0; i < N; i++) headings[i] = stepHeading(s, st, 0, -1000, 1000, rand);
-
-  const curv = [];
-  for (let i = 1; i < N; i++) {
-    let d = headings[i] - headings[i - 1];
-    while (d > Math.PI) d -= Math.PI * 2;
-    while (d < -Math.PI) d += Math.PI * 2;
-    curv.push(d);
-  }
-  const absSorted = curv.map(Math.abs).sort((a, b) => a - b);
-  const q = (p) => absSorted[Math.min(absSorted.length - 1, Math.floor(p * absSorted.length))];
-  const radius = (c) => STEP_LEN_PX / Math.max(c, 1e-9);
-  const medianRadius = radius(q(0.5));
-  const tightRadius = radius(q(0.95));
-  const totalTurn = curv.reduce((a, b) => a + Math.abs(b), 0);
-
-  // How much of the channel runs at a real angle instead of hugging horizontal.
-  const steep = Array.from(headings).filter((a) => Math.abs(Math.sin(a)) >= 0.25).length / N;
-  // Direction reversals: a curler doubles back, a straight line never does.
-  let reversals = 0;
-  for (let i = 1; i < N; i++) {
-    if (Math.cos(headings[i]) * Math.cos(headings[i - 1]) < 0) reversals++;
-  }
-
-  // Curl varies along a strand: window the curvature and see how much the local
-  // amount of bending changes.
-  const windows = [];
-  for (let w = 0; w + 200 <= curv.length; w += 200) {
-    let sum = 0;
-    for (let i = w; i < w + 200; i++) sum += Math.abs(curv[i]);
-    windows.push(sum / 200);
-  }
-  const windowMean = windows.reduce((a, b) => a + b, 0) / windows.length;
-  const windowSpread = Math.sqrt(windows.reduce((a, b) => a + (b - windowMean) ** 2, 0) / windows.length)
-    / Math.max(windowMean, 1e-9);
-
-  check('an IC channel curls, it does not run straight',
-    totalTurn >= Math.PI * 2,
-    'the channel turns through ' + (totalTurn / Math.PI).toFixed(1) + ' pi over the run');
-  check('the curl is hair-sized, not a coil',
-    medianRadius >= 12 && medianRadius <= 120,
-    'median arc radius ' + medianRadius.toFixed(0) + ' artwork px');
-  check('and it tightens into real curls at times',
-    tightRadius <= 30,
-    'the tightest 5% of steps curl on a radius of ' + tightRadius.toFixed(0) + ' artwork px');
-  check('an IC channel doubles back on itself like a hair',
-    reversals >= N / 400,
-    reversals + ' direction reversals in ' + N + ' steps');
-  check('an IC channel is not a straight line hugging the horizontal',
-    steep >= 0.45,
-    'only ' + (steep * 100).toFixed(0) + '% of the channel runs at 14 degrees or more off horizontal');
-
-  check('the curl keeps changing along a strand',
-    windowSpread >= 0.25,
-    'bending varies by ' + (windowSpread * 100).toFixed(0) + '% between stretches');
-  check('the curl never exceeds the tightest radius the style allows',
-    absSorted[absSorted.length - 1] <= st.maxCurv + st.kink + 1e-9,
-    'largest step turn ' + absSorted[absSorted.length - 1].toFixed(3) + ' rad, limit '
-    + (st.maxCurv + st.kink).toFixed(3));
-}
-
-check('the artwork is generated once per tile from a fixed, versioned seed',
-  /seed : 1013 \+ tileIndex \* 7919/.test(appSource) &&
-  /new Worker\('\.\/lightningGenerator\.js\?v=/.test(appSource));
-check('a flash keeps its pattern for its whole life (no per-frame mirror or stretch)',
-  // the shader must not derive any per-frame variation from the flash's age
-  !/vec2 mirrored/.test(displayShader) && !/stretch\.x/.test(displayShader) &&
-  !/seedA/.test(displayShader) &&
-  /const float revealSpeed = 2\.4;/.test(displayShader));
-// The flash is no longer masked or dimmed by the cloud it is in: light born
-// inside a cloud does not have to get through that cloud, and the cloud is the
-// medium that scatters it towards the viewer.
-const icLightFn = (displayShader.match(/vec3 computeICLight\(\)[\s\S]*?\n\}/) || [''])[0];
-// Light born inside a cloud is not dimmed by that cloud (it is the medium that
-// scatters it towards the viewer), and what *does* depend on the cloud is a
-// gain, so a flash inside one is seen through it.
-check('IC light is not dimmed by the cloud it is in',
-  icLightFn.length > 0 &&
-  !/lightningICLight \//.test(displayShader) &&
-  !/icLight \/ \(1\. \+ cloud/.test(icLightFn) &&
-  /1\.0 \+ icCloudScatter \* cloudOpacity/.test(icLightFn));
-{
-  const gain = Number((displayShader.match(/const float icCloudScatter = ([\d\.]+)/) || [])[1]);
-  check('an IC flash inside a cloud is seen through it',
-    gain > 0 && gain <= 8,
-    'icCloudScatter = ' + gain);
-}
-// The strike curve peaks around 20 for a couple of iterations; driving the
-// artwork straight from it clipped the whole flash to a white slab.
-check('the IC flash brightness is compressed so it cannot clip to a slab',
-  /float icPower = currentLightningIntensity \//.test(displayShader) &&
-  /\* reveal \* window \* icPower \* icBrightness/.test(displayShader));
-
-// A sunlit cloud is brighter than the light of a channel, and alpha blending can
-// only trade a backdrop for a source: a channel had to give up as much cloud as
-// it was opaque and could not pay for it, which is why a flash that was plain
-// against a dark sky was invisible inside a cloud. The light is therefore drawn
-// by its own additive pass on top of the finished scene - addition cannot lose
-// that trade.
+// The light pass returns only the flash light, and is drawn additively on top of
+// the finished scene - the reason a flash is visible inside a cloud at all.
 check('the light pass returns only the flash light',
   /uniform float icLightPass/.test(displayShader) &&
-  /if \(icLightPass > 0\.5\) \{\s*\n\s*fragmentColor = vec4\(computeICLight\(\), 0\.0\);\s*\n\s*return;\s*\n\s*\}/.test(displayShader) &&
+  /if \(icLightPass > 0\.5\) \{[\s\S]{0,200}?fragmentColor = vec4\(computeICLight\(\), 0\.0\);[\s\S]{0,80}?return;/.test(displayShader) &&
   /vec3 computeICLight\(\)/.test(displayShader) &&
   /icLight \+= displayICLightning\(/.test(displayShader));
 check('the scene pass carries no IC light any more',
@@ -312,84 +152,39 @@ check('the scene pass carries no IC light any more',
     ', reset ' + resetIdx + ', restore ' + restoreIdx);
 }
 
-// "Visible inside a cloud" as a number instead of an opinion. Everything below
-// works in HDR units up to the tonemap in postProcessingShader.frag (ACES curve,
-// then a gamma of 2.0 - see shaders/commonDisplay.glsl).
+// Light born inside a cloud is not dimmed by that cloud (it is the medium that
+// scatters it towards the viewer), and what does depend on the cloud is a gain,
+// so a flash inside one is seen through it.
+check('IC light is not dimmed by the cloud it is in',
+  !/icLight \/ \(1\. \+ cloud/.test(displayShader) &&
+  /1\.0 \+ icCloudScatter \* cloudOpacity/.test(displayShader));
+{
+  const gain = Number((displayShader.match(/const float icCloudScatter = ([\d\.]+)/) || [])[1]);
+  check('an IC flash inside a cloud gets a scatter gain',
+    gain > 0 && gain <= 8,
+    'icCloudScatter = ' + gain);
+}
+
+// The default display path has no tonemapping at all, so anything above 1.0 in
+// HDR is clipped: every tier of channel would arrive as the same white. The soft
+// knee is what keeps a trunk, an arm and a hair apart on screen.
+check('the IC light is compressed by a soft knee before it reaches the frame',
+  /return vec3\(1\.0\) - exp\(-gained\);/.test(displayShader) &&
+  /vec3 gained = max\(icLight, vec3\(0\.0\)\) \* \(1\.0 \+ icCloudScatter \* cloudOpacity\);/.test(displayShader));
+
+// Additive light can only add: over the whole plausible range - a flash fading
+// from nothing to full brightness, over backdrops from a night sky to a sunlit
+// cloud - the picture is never darker, and always brighter as the light grows.
 const toneMap = (c) => {
   c = Math.max(c, 0);
   const aces = Math.min(1, Math.max(0, (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14)));
   return 255 * Math.sqrt(aces);
 };
-check('the display model is the tonemap postProcessingShader.frag applies',
-  /\(color \* \(2\.51 \* color \+ 0\.03\)\) \/ \(color \* \(2\.43 \* color \+ 0\.59\) \+ 0\.14\)/.test(
-    fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'postProcessingShader.frag'), 'utf8')) &&
-  /const float GAMMA = 2\.0;/.test(
-    fs.readFileSync(path.join(ROOT, 'shaders', 'commonDisplay.glsl'), 'utf8')));
-
 {
-  const icBrightness = parseFloat((displayShader.match(/const float icBrightness = ([\d\.]+)/) || [])[1]);
-  const icPowerPeak = 20 / (1 + 20 * 0.85); // the strike curve peaks around 20
-  // The shader also multiplies by the minification of the sprite (artPerPixel,
-  // clamped to 1..8): a hair-thin channel loses that much of itself to
-  // filtering, and getting it back is what keeps a hair bright enough to see
-  // without making every stroke a white slab. 4.3 is a flash covering 120 px.
-  const energyClamp = displayShader.match(/clamp\(artPerPixel, 1\.0, ([\d\.]+)\)/);
-  const icEnergyMax = energyClamp ? Number(energyClamp[1]) : 1;
-  const icEnergy = Math.min(icEnergyMax, 4.3);
-  // luminance of a channel, as the shader computes it (reveal and window are 1
-  // at the core of a flash at full brightness)
-  const channelLight = (artwork) => artwork * icPowerPeak * icBrightness * icEnergy;
-  // What a channel samples to after the tile is minified into a flash of ~120
-  // px: measured from the generated tiles (tools-level raster of the eight
-  // patterns), the faintest hairs land near 0.03 and a bright trunk near 0.5.
-  const artworkValues = [0.03, 0.06, 0.12, 0.3, 0.6, 1.0];
-  const backdrops = { 'night sky': 0.02, 'day sky': 0.35, 'shaded cloud': 0.55, 'sunlit cloud': 1.0 };
-  let worst = Infinity, worstWhere = '';
-  for (const [name, backdrop] of Object.entries(backdrops)) {
-    for (const art of artworkValues) {
-      const contrast = toneMap(backdrop + channelLight(art)) - toneMap(backdrop);
-      if (contrast < worst) { worst = contrast; worstWhere = name + ' at artwork ' + art; }
-    }
-  }
-  check('an IC channel is visible inside a sunlit cloud', worst >= 12,
-    'weakest channel is only ' + worst.toFixed(1) + '/255 above the backdrop (' + worstWhere + ')');
-
-  // Seen through the cloud: inside one, the light is scaled by the cloud it is
-  // scattered in, which is what keeps a channel readable against a sunlit cloud.
-  {
-    const scatter = Number((displayShader.match(/const float icCloudScatter = ([\d\.]+)/) || [])[1]);
-    const density = Number((displayShader.match(/float cloudDensity = cloudWater \* ([\d\.]+)/) || [])[1]) || 13.6;
-    const opacityOf = (water) => 1 - 1 / (1 + water * density);
-    let worstInCloud = Infinity, where = '';
-    for (const water of [0.005, 0.02, 0.05, 0.1, 0.2, 0.5]) {
-      const gain = 1 + scatter * opacityOf(water);
-      for (const art of [0.06, 0.12, 0.3, 0.6, 1.0]) {
-        const contrast = toneMap(1.0 + channelLight(art) * gain) - toneMap(1.0);
-        if (contrast < worstInCloud) { worstInCloud = contrast; where = 'cloud water ' + water + ', artwork ' + art; }
-      }
-    }
-    check('a channel stays readable through a cloud (not just on its edge)',
-      worstInCloud >= 20,
-      'weakest is ' + worstInCloud.toFixed(1) + '/255 (' + where + ')');
-  }
-
-  // The square that used to be applied to the artwork (it suppressed the halo)
-  // is what made this impossible: it left a hairline channel with a fraction of
-  // a unit of light.
-  const squared = (artwork) => toneMap(1.0 + artwork * artwork * icPowerPeak * icBrightness) - toneMap(1.0);
-  check('the artwork is not squared any more (that crushed thin channels)',
-    !/pow\(max\(pixVal, 0\.0\), 2\.0\)/.test(displayShader) &&
-    squared(0.08) < 12,
-    'squared curve would give ' + squared(0.08).toFixed(1) + '/255');
-
-  // Additive light can only add: over the whole plausible range - a flash
-  // fading from nothing to full brightness, over backdrops from a night sky to
-  // a sunlit cloud - the picture is never darker, and always brighter as the
-  // light grows.
   let darkening = 0, inversion = 0;
   for (let backdrop = 0.02; backdrop <= 3.0; backdrop += 0.02) {
     let previous = toneMap(backdrop);
-    for (let L = 0; L <= 80; L += 0.05) {
+    for (let L = 0; L <= 4; L += 0.01) {
       const lit = toneMap(backdrop + L);
       if (lit < toneMap(backdrop)) darkening++;
       if (lit < previous - 1e-9) inversion++;
@@ -417,23 +212,11 @@ check('the display model is the tonemap postProcessingShader.frag applies',
       .test(displayShader));
   check('the emission alpha cannot run past opaque',
     /opacity = clamp\(opacity \+ length\(emittedLight\), 0\.0, 1\.0\)/.test(displayShader));
-  // what the tonemap in the post pass does to a value at the cap: finite, white,
-  // not NaN
   const capped = toneMap(ceiling);
   check('a CG strike at the cap is still white, and finite',
     Number.isFinite(capped) && capped >= 254,
     'tonemapped to ' + capped.toFixed(1) + '/255');
 }
-
-// Glow layers are what a fading flash leaves behind as a dark rim, so an IC
-// channel has to be the stroke and nothing else, like a CG bolt.
-check('IC channels carry no glow layer',
-  !/drawHalo/.test(generatorSource) &&
-  !/faint glow pass/.test(generatorSource) &&
-  (() => {
-    const fn = (generatorSource.match(/function strokePath[\s\S]*?\n  \}/) || [''])[0];
-    return (fn.match(/ctx\.stroke\(\)/g) || []).length === 1;
-  })());
 check('IC flashes stay cloud-scale, not storm-scale',
   /const icFlashWidthMeters = (\d+)/.test(appSource) &&
   Number(appSource.match(/const icFlashWidthMeters = (\d+)/)[1]) <= 8000 &&

@@ -2,28 +2,31 @@
  * lightningGenerator.js — procedural lightning artwork, generated off the main
  * thread and transferred as an ImageBitmap.
  *
- * Two shapes are produced from the same single-channel (luminance) canvas:
+ * Two kinds of artwork come out of the same single-channel (luminance) canvas:
  *
  *   mode: 'CG'  Cloud-to-ground bolt. One dominant channel grows downward with
  *               the classic dendritic forks. This is the original artwork used
  *               by the legacy (cloud-density triggered) lightning in app.js.
  *
- *   mode: 'IC'  Intra-cloud flash. Real IC lightning never reaches the ground,
- *               has dimmer channels than a CG return stroke, and its channels
- *               are round filaments that curl like hair rather than the kinked
- *               run of a ground stroke. The generator draws eight different
- *               shapes ('spider', 'crawler', 'lattice', 'web', 'veil', 'braid',
- *               'crown', 'fork' - see generateIntraCloudBolt): the heading of
- *               every strand is driven by noise-driven curvature, strokes are
- *               hair-thin, and there is no halo around them (a CG stroke has
- *               none either; its glow comes from the post-processing bloom).
+ *   mode: 'IC'  Intra-cloud flash. A network of thin filaments that spreads
+ *               through a charge layer and never reaches the ground: a trunk
+ *               throws arms, arms throw hairs, hairs throw wisps, and each tier
+ *               is thinner in tone and in width (see generateIntraCloudBolt).
+ *               The heading of a channel is a run of visible kinks around an aim
+ *               that is steered only when the channel leaves its layer, with two
+ *               bounded smooth octaves on top - jagged like a real channel, but
+ *               unable to wind itself into a loop. There is no halo around a
+ *               stroke (a CG stroke has none either; its glow is the
+ *               post-processing bloom).
  *
- *               app.js renders all eight into a 4x2 atlas and
- *               realisticDisplayShader.frag draws them for every strike whose
- *               intensity is at or below LIGHTNING_IC_MAX_INTENSITY, i.e. every
- *               intra-cloud flash. Which tile a strike uses is chosen per
- *               strike from its own start iteration and position, so two
- *               flashes almost never show the same pattern.
+ *               app.js draws eight tiles, one per layer of a mipmapped 2D array
+ *               texture, and realisticDisplayShader.frag shows them for every
+ *               strike whose intensity is at or below LIGHTNING_IC_MAX_INTENSITY,
+ *               i.e. every intra-cloud flash. Which layer a strike uses - and
+ *               which way round it is mirrored - is chosen per strike from its
+ *               own start iteration and position, so two flashes rarely look
+ *               alike. tests/check-ic-lightning.js renders and measures all of
+ *               this without a GPU.
  *
  * Protocol (unchanged for the legacy caller):
  *   worker.postMessage({width, height})             -> CG bolt bitmap
@@ -221,48 +224,195 @@ function generateLightningBolt(width, height)
 /* ========================= intra-cloud flash (IC) ======================= */
 
 /*
- * IC artwork is drawn as hair.
+ * IC artwork: a network of thin filaments, drawn over a whole tile that the
+ * display shader reads as light.
  *
- * A lightning channel is round, so on screen it is a thread of light: thin, and
- * curving in a way nothing man-made is. Earlier versions drew it as a polyline
- * that held one heading for a dozen steps and then kinked, steered back toward
- * horizontal every single step. That is a fair model for a CG return stroke,
- * which really is a run of kinks, but on a flash that spreads sideways it
- * collapsed every channel into a horizontal noodle - dozens of them stacked in
- * one band read as a single texture, which is why every pattern looked like the
- * same pattern, whatever shape it had been asked for.
+ * What went wrong before
+ * ----------------------
+ * Three separate mistakes made the earlier versions read as bad:
  *
- * The channel model here is curvature (see stepHeading): the heading is turned
- * by a curvature that drifts toward a slowly wandering target, which gives a
- * strand a chain of arcs of different radius - hooks, S-bends and the
- * occasional loop, with no wavelength and no preferred direction, the way a
- * hair lies on a table. Strokes are hair-thin; what keeps them visible after
- * the tile is minified is their tone, not their width.
+ *  1. The heading model. A channel that holds one heading for a dozen steps and
+ *     then kinks is a fair model of a CG return stroke, but a flash that spreads
+ *     sideways became a stack of horizontal noodles. Replacing it with a random
+ *     walk of the curvature over-corrected into balls of wool, and driving it
+ *     with a sine put a visible wavelength into every channel. Both extremes are
+ *     gone here: the heading is a run of short random steps around a slowly
+ *     moving aim (see icStepHeading).
+ *  2. The stroke width. A hair drawn 0.45 px wide has half of its energy thrown
+ *     away by the canvas' own antialiasing, so it arrives in the tile as an
+ *     almost-black line - and this tile *is* the light. "Thin" therefore has to
+ *     come from the tone, not from the geometry: every stroke here is at least
+ *     one artwork pixel wide (at the size a flash is drawn on screen one artwork
+ *     pixel is about one screen pixel, so one pixel is a hair) and the tiers of
+ *     channel are separated by how much light they carry.
+ *  3. The shape families. Eight hand-written shapes are eight pictures, so a
+ *     flash that has to pick one of eight looks the same every time it picks the
+ *     same one. A family here fixes only the layout; every other number in the
+ *     drawing comes from the tile's own seed, so the eight tiles are eight
+ *     different networks rather than eight drawings - and the shader mirrors
+ *     each of them per strike as well.
  *
- * Eight different shapes are drawn, and app.js packs all eight into one atlas
- * and lets every individual strike pick a tile (see displayICLightning in
- * realisticDisplayShader.frag), so consecutive flashes differ instead of the
- * same four pictures taking turns:
+ * The channel model
+ * -----------------
+ * A channel is grown step by step. Its heading is
  *
- *   'spider'   a bright core with long curling arms radiating in every direction
- *   'crawler'  one long strand crawling through the layer, hairs trailing off it
- *   'lattice'  trunks at several heights tied together by steep cross strands
- *   'web'      several small cores joined by short curling rays
- *   'veil'     a curtain of long, differently curling strands, no strong core
- *   'braid'    two or three strands twisting around each other
- *   'crown'    a core low in the layer, a fan of arms curling upward
- *   'fork'     one trunk that keeps splitting, a proper branching tree
+ *     aim + smooth(s) + jitter
  *
- * Everything is drawn inside the central STAGE of the tile. The shader samples
- * only that (icArtZoom in app.js), so artwork outside it is never seen - which
- * is why the old generator's edge-to-edge strokes looked like a crop of
- * something rather than a flash.
+ *   - `aim` is the course of the channel: where the channel is going at the
+ *     scale of the whole flash. It is steered (never snapped) when the channel
+ *     leaves its charge layer, so the fine structure survives every turn.
+ *   - `smooth(s)` is two smooth value-noise octaves along the arc length, at 20
+ *     and 60 artwork pixels. It is a *bounded* function, so the channel cannot
+ *     wind itself into a loop, and the two scales share no common period, so the
+ *     bend never repeats.
+ *   - `jitter` is the electric part: a damped random step of +-0.22 rad per
+ *     artwork pixel. This is what a real channel has and a drawn curve does not
+ *     - short, sharp, uncorrelated direction changes - and it is aperiodic by
+ *     construction.
+ *
+ * Structure comes from the branch tree, which is grown like a root system: every
+ * channel throws children that are shorter, thinner and dimmer by a fixed ratio
+ * (0.5 of the length, 0.72 of the width, 0.72 of the tone, 25-40 degrees off the
+ * parent). Four tiers are allowed - trunk, arm, hair, wisp - and the budget per
+ * tier is capped so one branch cannot starve the tree.
  */
-const IC_VARIANTS = ['spider', 'crawler', 'lattice', 'web', 'veil', 'braid', 'crown', 'fork'];
 
-/* Fraction of the tile the shader samples. Keep in step with icArtZoom in
- * app.js; the artwork is laid out inside this window so nothing is wasted. */
-const IC_STAGE_FRACTION = 0.5;
+/* Layout families. A family fixes only where the leaders are and which way they
+ * aim; everything else about a tile is drawn from its own seed. */
+const IC_VARIANTS = ['burst', 'crawler', 'multi', 'fan'];
+
+/* Fraction of the tile kept clear of strokes, so a channel never runs off the
+ * edge of the sprite (the shader fades the outer part of the flash as well). */
+const IC_TILE_MARGIN = 0.035;
+
+/* Stroke widths in artwork pixels, for a 256 px wide tile.
+ *
+ * Never below one: see the note above. One artwork pixel is about 0.4 screen
+ * pixels at the default camera (a flash of 2400 m is a hundred pixels across
+ * while the tile is 256), so a trunk is a little over a screen pixel, an arm
+ * three quarters of one, and a hair is sub-pixel - a hair strand. */
+const IC_WIDTH = { trunk : 2.6, arm : 2.0, hair : 1.3, wisp : 1.0 };
+
+/* Tone per tier. This - not the width - is what makes a hair a hair. */
+const IC_TONE = { trunk : 0.92, arm : 0.60, hair : 0.35, wisp : 0.20 };
+
+/* The branch tree, coarsest first. `budget` is how many children one channel of
+ * that tier may create, so a single trunk cannot take over the tile. */
+const IC_TIERS = [
+  { name : 'trunk', width : IC_WIDTH.trunk, tone : IC_TONE.trunk, budget : 9 },
+  { name : 'arm', width : IC_WIDTH.arm, tone : IC_TONE.arm, budget : 9 },
+  { name : 'hair', width : IC_WIDTH.hair, tone : IC_TONE.hair, budget : 7 },
+  { name : 'wisp', width : IC_WIDTH.wisp, tone : IC_TONE.wisp, budget : 3 }
+];
+
+/* Heading: the smooth part, as two octaves of value noise along the arc length. */
+const IC_SMOOTH_SCALE = { mid : 20.0, long : 60.0 };
+const IC_SMOOTH_AMP = { mid : 0.08, long : 0.10 };
+
+/* The jitter part: a random step every IC_JITTER_PERIOD artwork pixels, pulled
+ * back toward the aim so the process is stationary instead of diffusing.
+ *
+ * The period matters more than the amplitude. A step per artwork pixel is
+ * invisible once the tile is shown at roughly one artwork pixel per screen
+ * pixel: it averages out into a smooth line, which is exactly how the first
+ * attempts at this ended up as airbrushed noodles. A step every five pixels is a
+ * visible kink, which is what a channel actually looks like. */
+const IC_STEP_NOISE = 0.55;
+const IC_JITTER_PERIOD = 4.5;
+const IC_RESTORE = 0.12;
+const IC_JITTER_CLAMP = 1.05;
+
+/* Occasional real kinks, on top of the jitter. */
+const IC_KINK = 0.14;
+const IC_KINK_CHANCE = 0.004;
+
+/* How far a heading may stray from its aim, whatever the noise does. This is the
+ * number that rules out loops: a loop needs a full turn (pi). */
+const IC_MAX_DEVIATION = IC_SMOOTH_AMP.mid + IC_SMOOTH_AMP.long + IC_JITTER_CLAMP + IC_KINK;
+
+
+/*
+ * Smooth 1D value noise from a seeded table.
+ *
+ * `size` random values interpolated with a smoothstep weight: continuous,
+ * deterministic, and with no period shorter than `size` lattice cells. Two
+ * octaves read the same table at different offsets and rates, which decorrelates
+ * them without needing two tables.
+ */
+function makeNoise1D(rand, size) {
+  const n = size === undefined ? 256 : size;
+  const table = new Float64Array(n);
+  for (let i = 0; i < n; i++)
+    table[i] = rand() * 2 - 1;
+  return function noise(x) {
+    const xi = Math.floor(x);
+    const f = x - xi;
+    const u = f * f * (3 - 2 * f);
+    const a = table[((xi % n) + n) % n];
+    const b = table[(((xi + 1) % n) + n) % n];
+    return a + (b - a) * u;
+  };
+}
+
+
+/*
+ * One step of a channel's heading.
+ *
+ * `state` carries { aim, jitter, travelled }. The aim is steered by the caller
+ * (it is the only part that knows about the charge layer); this function adds
+ * the smooth bend and one jitter step to it.
+ *
+ * `rand` is passed in rather than closed over so a test can drive a channel
+ * deterministically, and so the same sequence can be replayed.
+ */
+function icStepHeading(state, params, rand, noise, offset, curl) {
+  const s = state.travelled;
+  const smooth = curl * (IC_SMOOTH_AMP.mid * noise(offset + s / IC_SMOOTH_SCALE.mid)
+                       + IC_SMOOTH_AMP.long * noise(offset + 131.0 + s / IC_SMOOTH_SCALE.long));
+
+  /* The jitter is re-drawn once every IC_JITTER_PERIOD pixels and held in
+   * between, which is what turns it into kinks instead of fuzz. */
+  if (state.untilKink <= 0) {
+    state.jitter += (rand() - 0.5) * IC_STEP_NOISE;
+    state.jitter -= state.jitter * IC_RESTORE;
+    if (rand() < IC_KINK_CHANCE)
+      state.jitter += (rand() < 0.5 ? -1 : 1) * IC_KINK;
+    if (state.jitter > IC_JITTER_CLAMP) state.jitter = IC_JITTER_CLAMP;
+    else if (state.jitter < -IC_JITTER_CLAMP) state.jitter = -IC_JITTER_CLAMP;
+    state.untilKink = IC_JITTER_PERIOD / Math.max(0.5, state.stepLen || 1);
+  } else {
+    state.untilKink -= 1;
+  }
+
+  return state.aim + smooth + state.jitter;
+}
+
+
+/*
+ * The parameters of one tile.
+ *
+ * The family decides the layout; every number below it is drawn from the tile's
+ * own seed, so two tiles of the same family are still two different flashes.
+ */
+function drawICParams(rand, variant) {
+  const family = IC_VARIANTS[(variant === undefined || variant === null)
+    ? Math.floor(rand() * IC_VARIANTS.length)
+    : Math.abs(Math.round(variant)) % IC_VARIANTS.length];
+  return {
+    family : family,
+    leaders : 2 + Math.floor(rand() * 3),          // leader points
+    aimBase : (rand() - 0.5) * 1.0,                // preferred direction, radians
+    branchRate : 0.10 + rand() * 0.08,             // forks per step, per channel
+    hairRate : 0.05 + rand() * 0.05,               // fine hairs per step
+    maxDepth : 2 + Math.floor(rand() * 2),         // trunk, arm, hair, wisp
+    curl : 0.75 + rand() * 0.5,                    // smooth-bend multiplier
+    trunkSpan : 0.26 + rand() * 0.20,              // fraction of the stage
+    layer : 0.70 + rand() * 0.25,                  // half height of the layer
+    spread : 0.45 + rand() * 0.35,                 // fork angle, radians
+    width : 0.85 + rand() * 0.3,                   // width multiplier
+    taper : 0.9985 + rand() * 0.0008
+  };
+}
 
 
 function generateIntraCloudBolt(width, height, seed, variant)
@@ -273,372 +423,256 @@ function generateIntraCloudBolt(width, height, seed, variant)
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  const rand = makeRng(seed === undefined ? (Math.random() * 4294967296) >>> 0 : seed);
-  const style = IC_VARIANTS[(variant === undefined || variant === null
-    ? Math.floor(rand() * IC_VARIANTS.length)
-    : variant) % IC_VARIANTS.length];
+  const rand = makeRng(seed === undefined ? ((Math.random() * 4294967296) >>> 0) : seed);
+  const noise = makeNoise1D(rand);
+  const params = drawICParams(rand, variant);
 
+  const stepLen = Math.max(0.9, width / 900);
   const cx = width * 0.5;
   const cy = height * 0.5;
-  const stepLen = Math.max(0.9, width / 900);
 
-  /* The window the shader samples, inset a little so a stroke that stops at the
-   * boundary stops where the shader already fades out. */
-  const stageW = width * IC_STAGE_FRACTION;
-  const stageH = height * IC_STAGE_FRACTION;
-  const inset = Math.max(6, width * 0.012);
-  const sx0 = cx - stageW * 0.5 + inset;
-  const sx1 = cx + stageW * 0.5 - inset;
-  const sy0 = cy - stageH * 0.5 + inset;
-  const sy1 = cy + stageH * 0.5 - inset;
+  /* Where a stroke may go: the tile less its margin. */
+  const m = Math.min(width, height) * IC_TILE_MARGIN;
+  const minX = m, maxX = width - m, minY = m, maxY = height - m;
 
-  /* The charge layer: strands are turned back by it, so it is the stage with a
-   * little headroom. */
-  const bandLo = sy0 + stageH * 0.04;
-  const bandHi = sy1 - stageH * 0.04;
+  /* The charge layer a channel is steered back into. A crawler or a multi-core
+   * flash keeps to one; a burst or a fan uses the whole tile. */
+  const inLayer = params.family === 'crawler' || params.family === 'multi';
+  const layerHalf = inLayer ? height * params.layer * 0.5 : height * 0.5 - m;
 
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
-  /*
-   * Single-channel tone: wider channels are brighter, IC stays soft.
-   *
-   * The floor matters as much as the curve. A hair-thin filament works out to a
-   * value of one or two out of 255, i.e. an almost black stroke, and the shader
-   * shows this texture as light: a black stroke is a channel that emits nothing.
-   * The floor keeps every hair above 'barely emitting'; the power curve above
-   * it still makes a trunk several times brighter than a hair.
-   */
-  const TONE_FLOOR = 52;
-  function tone(w, gain) {
-    const v = Math.pow(Math.max(w, 0.05), 1.7) * 60.0 * gain;
-    const c = Math.max(TONE_FLOOR, Math.min(255, Math.round(v)));
+  function grey(v) {
+    const c = Math.max(0, Math.min(255, Math.round(255 * v)));
     return 'rgb(' + c + ',' + c + ',' + c + ')';
   }
 
-  /*
-   * A channel is one narrow stroke and nothing else - no glow pass around it.
-   *
-   * The display shader shows this texture as light and has to give that light an
-   * alpha to blend it in, so the dim parts of the artwork are the expensive
-   * ones: a faint skirt of light around every channel is drawn over the sky with
-   * an alpha it cannot pay for, which leaves a dark rim and, while a flash
-   * fades, a dark silhouette along its segments.
-   *
-   * Strokes are painted with 'lighten', i.e. a stroke only ever replaces what is
-   * underneath it with something brighter, so crossing hairs cannot churn the
-   * tile into a mesh of dark troughs.
-   */
-  function strokePath(pts, w, gain) {
+  /* One stroke, brightest-wins. 'lighten' is what stops crossing channels from
+   * churning the tile into a mesh of dark troughs: a stroke can only ever leave
+   * a pixel brighter than it found it. */
+  function stroke(pts, w, tone) {
     if (pts.length < 4) return;
     ctx.beginPath();
     ctx.moveTo(pts[0], pts[1]);
-    for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
+    for (let i = 2; i < pts.length; i += 2)
+      ctx.lineTo(pts[i], pts[i + 1]);
     ctx.globalCompositeOperation = 'lighten';
     ctx.globalAlpha = 1.0;
-    ctx.lineWidth = Math.max(0.35, w);
-    ctx.strokeStyle = tone(w, gain);
+    ctx.lineWidth = w;
+    ctx.strokeStyle = grey(tone);
     ctx.stroke();
     ctx.globalCompositeOperation = 'source-over';
   }
 
+  /* Strokes are flushed in short runs so the taper follows the channel along its
+   * length instead of one width for the whole strand. */
+  const CHUNK = 5;
+
+  function wrapAngle(a) {
+    while (a > Math.PI) a -= Math.PI * 2;
+    while (a < -Math.PI) a += Math.PI * 2;
+    return a;
+  }
+
+  /* Forks are budgeted per tier so one branch cannot starve the tree. */
+  const spent = [0, 0, 0, 0];
+
   /*
-   * Grow one strand. Forks are queued (never recursed) so a very branchy flash
-   * cannot blow the stack inside a worker. `st` carries the behaviour of this
-   * class of strand (see the style presets below), `forks` how many times it may
-   * still split.
+   * Grow one channel and everything it throws off.
    *
-   * The width tapers along the strand, which is what makes a channel look like a
-   * filament instead of a line of constant thickness.
+   * Children are queued rather than recursed: a very branchy flash must not be
+   * able to blow the stack of the worker.
    */
-  function growFilament(x0, y0, ang, len, w0, gain, depth, queue, st, forks) {
+  function grow(x0, y0, aim0, lengthPx, tierIndex, toneScale, queue) {
+    const tier = IC_TIERS[tierIndex];
+    const steps = Math.max(4, Math.round(lengthPx / stepLen));
+    const offset = rand() * 1024;
+    const curl = Math.min(1.25, params.curl * (1.0 + tierIndex * 0.06));
+    const w0 = tier.width * (tierIndex === 0 ? params.width : 1.0);
+    const minW = Math.max(IC_WIDTH.wisp * 0.9, w0 * 0.55);
+
     let x = x0, y = y0, w = w0;
-    const pts = [x, y];
-    let travelled = 0;
-    const minW = Math.max(0.14, w0 * 0.20);
-    const taper = st.taper === undefined ? 0.9990 : st.taper;
-    let forksLeft = forks === undefined ? (st.forks === undefined ? 1 : st.forks) : forks;
-    const s = { axis : ang, curv : 0, curvTarget : (rand() - 0.5) * st.maxCurv * 0.7 };
-    // A strand may keep to its own thin layer inside the stage (a trunk running
-    // through one charge layer) instead of bouncing off the visible edge, which
-    // is what turned a trunk into a row of 'D' shapes.
-    const lo = st.band === undefined ? bandLo : Math.max(bandLo, y0 - st.band * 0.5);
-    const hi = st.band === undefined ? bandHi : Math.min(bandHi, y0 + st.band * 0.5);
+    let tone = tier.tone * toneScale;
+    let pts = [x, y];
+    let inChunk = 0;
+    const state = { aim : aim0, jitter : 0, travelled : 0, untilKink : 0, stepLen : stepLen };
 
-    for (let i = 0; i < len; i++) {
-      const a = stepHeading(s, st, y, lo, hi, rand);
+    for (let i = 0; i < steps; i++) {
+      /* Steering acts on the aim, never on the heading, so the jitter - the part
+       * that makes a channel look electrical - survives every turn. */
+      let heading = icStepHeading(state, params, rand, noise, offset, curl);
 
-      const nx = x + Math.cos(a) * stepLen;
-      let ny = y + Math.sin(a) * stepLen;
-      if (nx < sx0 || nx > sx1) break;
-      // Bounce off the floor and the ceiling of the charge layer instead of
-      // running along it: a strand held at the boundary piles up with every
-      // other strand held there and paints a bright bar across the flash.
-      if (ny < lo) { ny = lo + (lo - ny) * 0.6; s.axis = -s.axis; s.curvTarget = -s.curvTarget; }
-      else if (ny > hi) { ny = hi - (ny - hi) * 0.6; s.axis = -s.axis; s.curvTarget = -s.curvTarget; }
-      if (ny < sy0 || ny > sy1) break;
+      /* Confinement. Outside its charge layer a channel is flattened back toward
+       * horizontal by damping the vertical part of its heading - never by aiming
+       * it at a fixed direction and never at the middle of the layer.
+       *
+       * Both of those were tried and both are wrong: aiming at the middle makes
+       * the channel dive, leave the layer on the far side and dive back, which
+       * draws a row of identical arcs, and aiming every channel at one direction
+       * pulls them all parallel, so the whole flash reads as a set of nested
+       * curves. Damping only the vertical component keeps each channel going its
+       * own way, keeps the jitter alive, and cannot oscillate. */
+      if (inLayer) {
+        const beyond = Math.abs(y - cy) - layerHalf;
+        if (beyond > 0) {
+          const off = Math.min(2.0, beyond / Math.max(layerHalf, 1));
+          heading -= Math.sin(heading) * 0.20 * (0.4 + off);
+        }
+      }
+      const nx = x + Math.cos(heading) * stepLen;
+      const ny = y + Math.sin(heading) * stepLen;
+      if (nx < minX || nx > maxX || ny < minY || ny > maxY)
+        break; // the channel leaves the sprite: stop rather than run along its edge
 
       x = nx; y = ny;
-      travelled += stepLen;
+      state.travelled += stepLen;
       pts.push(x, y);
-      w = Math.max(minW, w * taper);
+      w = Math.max(minW, w * params.taper);
 
-      if (forksLeft > 0 && depth < 3 && travelled > stepLen * 10 && rand() < st.fork) {
-        forksLeft--;
+      if (++inChunk >= CHUNK) {
+        stroke(pts, w, tone);
+        pts = [x, y];
+        inChunk = 0;
+      }
+
+      /* A fork: the next tier down, 25-40 degrees off this channel and only a
+       * fraction of its length and light. That ratio is what makes a flash read
+       * as a tree rather than as a pile of strands. */
+      const canFork = tierIndex + 1 < IC_TIERS.length && tierIndex < params.maxDepth &&
+                      spent[tierIndex] < IC_TIERS[tierIndex].budget &&
+                      state.travelled > stepLen * 5;
+      if (canFork && rand() < params.branchRate) {
+        spent[tierIndex]++;
         queue.push({
-          x, y,
-          ang : a + (rand() < 0.5 ? -1 : 1) * st.spread * (0.5 + rand()),
-          len : Math.max(8, Math.round(len * (0.30 + rand() * 0.35))),
-          w : Math.max(0.32, w * (0.55 + rand() * 0.30)),
-          gain : gain * 0.88,
-          depth : depth + 1,
-          st : st.hair,
-          forks : forksLeft
+          x : x, y : y,
+          aim : heading + (rand() < 0.5 ? -1 : 1) * params.spread * (0.5 + rand() * 0.7),
+          lengthPx : Math.max(5, (steps - i) * stepLen * (0.40 + rand() * 0.25)),
+          tierIndex : tierIndex + 1,
+          toneScale : toneScale * 0.78,
+          queue : queue
+        });
+      }
+
+      /* A hair: a short, near-perpendicular filament, which is what gives a
+       * channel its furry edge. */
+      const canHair = tierIndex <= 1 && tierIndex + 2 <= 3 && tierIndex < params.maxDepth &&
+                      spent[3] < IC_TIERS[3].budget * 8 && state.travelled > stepLen * 4;
+      if (canHair && rand() < params.hairRate) {
+        spent[3]++;
+        queue.push({
+          x : x, y : y,
+          aim : heading + (rand() < 0.5 ? -1 : 1) * (0.9 + rand() * 0.7),
+          lengthPx : 8 + rand() * 30,
+          tierIndex : tierIndex + 2,
+          toneScale : toneScale * 0.8,
+          queue : queue
         });
       }
     }
-    strokePath(pts, w0, gain);
+    stroke(pts, w, tone);
   }
 
   const queue = [];
+  const push = (item) => queue.push(item);
 
-  /* A small, bright knot where the leader starts, drawn as a few short spokes
-   * through one point. A wandering stroke here turned into a white worm with a
-   * tail; the core has to stay a point the strands leave from. */
-  function drawCore(x, y, size, w) {
-    for (let i = 0; i < 5; i++) {
+  /* A small bright knot where a leader starts: short spokes through one point, so
+   * the core stays a point rather than becoming a worm. */
+  function drawCore(x, y, size) {
+    for (let i = 0; i < 4; i++) {
       const a = rand() * Math.PI * 2;
-      const len = size * (0.5 + rand() * 0.9);
-      strokePath([x - Math.cos(a) * len, y - Math.sin(a) * len,
-                  x + Math.cos(a) * len, y + Math.sin(a) * len],
-                 w * (0.7 + rand() * 0.35), 1.3);
+      const len = size * (0.5 + rand() * 0.7);
+      stroke([x - Math.cos(a) * len, y - Math.sin(a) * len,
+              x + Math.cos(a) * len, y + Math.sin(a) * len],
+             IC_TIERS[0].width * params.width * (0.6 + rand() * 0.25), 0.8);
     }
   }
 
-  /* A fan of strands leaving one point: `dir` is the centre of the fan and
-   * `spread` the total angle it covers. `len` and `w0` are in artwork pixels. */
-  function burst(x, y, count, dir, spread, len, w0, st, hair) {
+  /* One leader point: a core and `count` channels fanning out of it. */
+  function leader(x, y, dir, fan, count, span, withCore) {
+    if (withCore) drawCore(x, y, Math.min(width, height) * 0.012);
     for (let i = 0; i < count; i++) {
       const t = count === 1 ? 0.5 : i / (count - 1);
-      const ang = dir + (t - 0.5) * spread + (rand() - 0.5) * (spread / count) * 1.4;
-      const thisLen = Math.round(len * (0.62 + rand() * 0.75) / stepLen);
-      growFilament(x, y, ang, thisLen, w0 * (0.8 + rand() * 0.4), 0.85 + rand() * 0.15,
-                   0, queue, st);
-      if (hair && rand() < 0.55) {
-        queue.push({
-          x, y,
-          ang : ang + (rand() < 0.5 ? -1 : 1) * (0.35 + rand() * 0.5),
-          len : Math.max(10, Math.round(thisLen * 0.45)),
-          w : Math.max(0.3, w0 * 0.42),
-          gain : 0.72,
-          depth : 1,
-          st : hairStyle,
-          forks : 1
-        });
-      }
+      const aim = dir + (t - 0.5) * fan + (rand() - 0.5) * 0.12;
+      grow(x, y, aim, span * (0.7 + rand() * 0.5), 0, 1.0, queue);
     }
   }
 
-  /*
-   * Per-class strand behaviour.
-   *
-   * `curlDrift` is how far the target curvature wanders each step, `curlResponse`
-   * how quickly the real curvature follows it, `maxCurv` the tightest arc
-   * allowed (stepLen/maxCurv is its radius, ~15 px and up), `kink`/`kinkChance`
-   * the occasional real bend, `bend` how hard a strand is turned back at the
-   * edge of the layer, `fork`/`forks` how often and how often-over it may split,
-   * and `spread` how far a fork leaves its parent.
-   */
-  const trunkStyle = {
-    curlDrift : 0.0060, curlResponse : 0.12, maxCurv : 0.062,
-    kink : 0.080, kinkChance : 0.005, bend : 0.05,
-    fork : 0.006, forks : 6, spread : 0.55
-  };
-  const armStyle = {
-    curlDrift : 0.0085, curlResponse : 0.14, maxCurv : 0.080,
-    kink : 0.105, kinkChance : 0.007, bend : 0.06,
-    fork : 0.008, forks : 3, spread : 0.62
-  };
-  const hairStyle = {
-    curlDrift : 0.0125, curlResponse : 0.17, maxCurv : 0.105,
-    kink : 0.140, kinkChance : 0.010, bend : 0.07,
-    fork : 0.012, forks : 1, spread : 0.70
-  };
-  armStyle.hair = hairStyle;
-  trunkStyle.hair = hairStyle;
+  const stage = Math.min(width, height);
+  const spanX = maxX - minX;
 
-  /* Channel widths, in artwork pixels. A hair is about half a pixel - the tile
-   * loses ~4:1 when it is minified down to the size a flash covers - and only a
-   * trunk or a core gets near two. */
-  const HAIR_W = 0.46;
-  const ARM_W = 1.35;
-  const TRUNK_W = 1.8;
-
-  const stageCenterY = (sy0 + sy1) * 0.5;
-  const spanX = sx1 - sx0;
-
-  if (style === 'spider') {
-    /* one bright core, long curling arms in every direction */
-    const coreX = cx + (rand() - 0.5) * stageW * 0.16;
-    const coreY = clamp(stageCenterY + (rand() - 0.5) * stageH * 0.20, bandLo, bandHi);
-    drawCore(coreX, coreY, stageW * 0.018, 2.0 + rand() * 0.4);
-    burst(coreX, coreY, 7 + Math.floor(rand() * 3), rand() * Math.PI * 2, Math.PI * 2,
-          stageW * 0.42, ARM_W * (0.9 + rand() * 0.4), armStyle, true);
-  } else if (style === 'crawler') {
-    /* one long strand crawling through the layer, trailing hairs as it goes */
-    const dir = (rand() < 0.5 ? 0 : Math.PI) + (rand() - 0.5) * 0.35;
-    const rightward = Math.cos(dir) >= 0; // dir is ~0 or ~PI, so test the cosine
-    const y0 = clamp(stageCenterY + (rand() - 0.5) * stageH * 0.30, bandLo, bandHi);
-    const x0 = rightward ? sx0 + stepLen : sx1 - stepLen;
-    drawCore(x0, y0, stageW * 0.016, 1.9 + rand() * 0.4);
-    growFilament(x0, y0, dir, Math.round(spanX * 0.94 / stepLen),
-                 TRUNK_W * (0.95 + rand() * 0.25), 1.0, 0, queue,
-                 Object.assign({}, trunkStyle, { band : stageH * 0.30, hair : hairStyle }));
-    const hairs = 10 + Math.floor(rand() * 5);
-    for (let i = 0; i < hairs; i++) {
-      const t = 0.08 + (i / hairs) * 0.84 + (rand() - 0.5) * 0.06;
-      const x = rightward ? x0 + spanX * 0.9 * t : x0 - spanX * 0.9 * t;
-      const up = rand() < 0.5 ? -1 : 1;
-      queue.push({
-        x : clamp(x, sx0 + spanX * 0.04, sx1 - spanX * 0.04),
-        y : clamp(y0 + (rand() - 0.5) * stageH * 0.18, bandLo, bandHi),
-        ang : up * (Math.PI * 0.5) + (rand() - 0.5) * 1.0,
-        len : Math.round(stageH * (0.25 + rand() * 0.45) / stepLen),
-        w : HAIR_W * (1.0 + rand() * 0.9),
-        gain : 0.75 + rand() * 0.2,
-        depth : 1,
-        st : hairStyle,
-        forks : 1
-      });
+  if (params.family === 'burst') {
+    /* one core, channels radiating in every direction */
+    const ox = cx + (rand() - 0.5) * width * 0.08;
+    const oy = cy + (rand() - 0.5) * height * 0.12;
+    leader(ox, oy, rand() * Math.PI * 2, Math.PI * 2,
+           4 + Math.floor(rand() * 3), stage * (0.80 + params.trunkSpan * 0.55), true);
+  } else if (params.family === 'crawler') {
+    /* channels crawling through the layer, trailing fine hairs */
+    const trunks = params.leaders;
+    for (let i = 0; i < trunks; i++) {
+      const fromLeft = i % 2 === 0;
+      /* spread the trunks over the whole layer instead of stacking them */
+      const y = cy + (trunks === 1 ? 0 : ((i / (trunks - 1)) - 0.5)) * layerHalf * 1.4;
+      leader(fromLeft ? minX + stepLen : maxX - stepLen, y,
+             (fromLeft ? 0 : Math.PI) + (rand() - 0.5) * 0.4,
+             Math.PI * 0.6, 2 + Math.floor(rand() * 2), spanX * (0.55 + params.trunkSpan * 0.6), i === 0);
     }
-  } else if (style === 'lattice') {
-    /* trunks at a few heights, tied together by steep cross strands */
-    const rows = 2 + Math.floor(rand() * 2);
-    const layerStyle = Object.assign({}, trunkStyle, { band : stageH * 0.26, hair : hairStyle });
-    for (let r = 0; r < rows; r++) {
-      const y = stageCenterY + (rows === 1 ? 0 : (r / (rows - 1) - 0.5)) * stageH * 0.62;
-      const fromLeft = r % 2 === 0;
-      growFilament(fromLeft ? sx0 + stepLen : sx1 - stepLen,
-                   clamp(y, bandLo, bandHi),
-                   (fromLeft ? 0 : Math.PI) + (rand() - 0.5) * 0.30,
-                   Math.round(spanX * (0.80 + rand() * 0.15) / stepLen),
-                   TRUNK_W * (0.85 + rand() * 0.35), 1.0, 0, queue, layerStyle);
-    }
-    const ties = 5 + Math.floor(rand() * 3);
-    for (let i = 0; i < ties; i++) {
-      const up = rand() < 0.5 ? -1 : 1;
-      queue.push({
-        x : sx0 + (0.12 + rand() * 0.76) * spanX,
-        y : clamp(stageCenterY + up * stageH * 0.24, bandLo, bandHi),
-        ang : -up * (Math.PI * 0.5) + (rand() - 0.5) * 0.55,
-        len : Math.round(stageH * (0.35 + rand() * 0.40) / stepLen),
-        w : HAIR_W * (1.1 + rand() * 1.1),
-        gain : 0.8 + rand() * 0.2,
-        depth : 1,
-        st : hairStyle,
-        forks : 1
-      });
-    }
-  } else if (style === 'web') {
-    /* several small cores, each throwing out short curling rays */
-    const cores = 3;
+  } else if (params.family === 'multi') {
+    /* several small cores, each throwing out a short fan */
+    const cores = 2 + Math.floor(rand() * 2);
     for (let c = 0; c < cores; c++) {
-      const ox = clamp(cx + (rand() - 0.5) * stageW * 0.62, sx0, sx1);
-      const oy = clamp(stageCenterY + (rand() - 0.5) * stageH * 0.62, bandLo, bandHi);
-      drawCore(ox, oy, stageW * 0.012, 1.5 + rand() * 0.4);
-      burst(ox, oy, 5 + Math.floor(rand() * 3), rand() * Math.PI * 2, Math.PI * 2,
-            stageW * 0.26, ARM_W * (0.85 + rand() * 0.3), armStyle, true);
+      const ox = minX + (0.10 + rand() * 0.80) * spanX;
+      const oy = cy + (rand() - 0.5) * layerHalf * 1.5;
+      leader(ox, oy, rand() * Math.PI * 2, Math.PI * 1.5,
+             4 + Math.floor(rand() * 3), stage * (0.45 + params.trunkSpan * 0.5), true);
     }
-  } else if (style === 'veil') {
-    /* a curtain of long strands, each curling on its own phase */
-    const strands = 9 + Math.floor(rand() * 4);
-    for (let i = 0; i < strands; i++) {
-      const fromLeft = rand() < 0.5;
-      growFilament(fromLeft ? sx0 + stepLen : sx1 - stepLen,
-                   clamp(bandLo + (bandHi - bandLo) * (0.10 + rand() * 0.80), bandLo, bandHi),
-                   (fromLeft ? 0 : Math.PI) + (rand() - 0.5) * 0.45,
-                   Math.round(spanX * (0.55 + rand() * 0.40) / stepLen),
-                   HAIR_W * (1.2 + rand() * 1.4), 0.7 + rand() * 0.3, 0, queue,
-                   rand() < 0.22 ? armStyle : hairStyle);
-    }
-  } else if (style === 'braid') {
-    /* two or three strands twisting around each other */
-    const n = 2 + Math.floor(rand() * 2);
-    const dir = (rand() < 0.5 ? 0 : Math.PI) + (rand() - 0.5) * 0.25;
-    const rightward = Math.cos(dir) >= 0;
-    const y0 = clamp(stageCenterY + (rand() - 0.5) * stageH * 0.20, bandLo, bandHi);
-    const x0 = rightward ? sx0 + stepLen : sx1 - stepLen;
-    const phase = rand() * Math.PI * 2;
-    drawCore(x0, y0, stageW * 0.014, 1.8 + rand() * 0.3);
-    for (let i = 0; i < n; i++) {
-      const st = {
-        curlDrift : 0.0060, curlResponse : 0.13, maxCurv : 0.062,
-        kink : 0.070, kinkChance : 0.004, bend : 0.05,
-        fork : 0.006, forks : 3, spread : 0.55, hair : hairStyle
-      };
-      growFilament(x0, y0 + Math.sin(phase + i * (Math.PI * 2 / n)) * stageH * 0.18,
-                   dir + Math.cos(phase + i * (Math.PI * 2 / n)) * 0.30,
-                   Math.round(spanX * (0.70 + rand() * 0.25) / stepLen),
-                   HAIR_W * (1.4 + rand() * 1.2), 0.95, 0, queue, st);
-    }
-    const hairs = 6 + Math.floor(rand() * 4);
-    for (let i = 0; i < hairs; i++) {
-      queue.push({
-        x : sx0 + (0.15 + rand() * 0.70) * spanX,
-        y : clamp(y0 + (rand() - 0.5) * stageH * 0.55, bandLo, bandHi),
-        ang : (rand() < 0.5 ? 0 : Math.PI) + (rand() - 0.5) * 1.2,
-        len : Math.round(spanX * (0.10 + rand() * 0.14) / stepLen),
-        w : HAIR_W * (0.9 + rand() * 0.7),
-        gain : 0.72,
-        depth : 1,
-        st : hairStyle,
-        forks : 1
-      });
-    }
-  } else if (style === 'crown') {
-    /* a core low in the layer with a fan of arms curling upward */
-    const coreX = cx + (rand() - 0.5) * stageW * 0.30;
-    const coreY = clamp(stageCenterY + stageH * (0.18 + rand() * 0.14), bandLo, bandHi);
-    drawCore(coreX, coreY, stageW * 0.016, 1.8 + rand() * 0.4);
-    burst(coreX, coreY, 7 + Math.floor(rand() * 3), -Math.PI * 0.5, Math.PI * 1.15,
-          stageW * 0.34, ARM_W * (0.9 + rand() * 0.35), armStyle, true);
-  } else if (style === 'fork') {
-    /* one trunk that keeps splitting: a branching tree */
-    const dir = (rand() < 0.5 ? 0 : Math.PI) + (rand() - 0.5) * 0.30;
-    const rightward = Math.cos(dir) >= 0;
-    const x0 = rightward ? sx0 + stepLen : sx1 - stepLen;
-    const y0 = clamp(stageCenterY + (rand() - 0.5) * stageH * 0.30, bandLo, bandHi);
-    drawCore(x0, y0, stageW * 0.015, 2.0 + rand() * 0.4);
-    const treeStyle = {
-      curlDrift : 0.0040, curlResponse : 0.11, maxCurv : 0.046,
-      kink : 0.090, kinkChance : 0.006, bend : 0.05,
-      fork : 0.035, forks : 9, spread : 0.72, hair : hairStyle
-    };
-    growFilament(x0, y0, dir, Math.round(spanX * 0.86 / stepLen),
-                 TRUNK_W, 1.0, 0, queue, treeStyle);
-    const extra = 3 + Math.floor(rand() * 2);
-    for (let i = 0; i < extra; i++) {
-      queue.push({
-        x : clamp(x0 + (rand() < 0.5 ? 1 : -1) * spanX * rand() * 0.25,
-                  sx0 + spanX * 0.05, sx1 - spanX * 0.05),
-        y : clamp(y0 + (rand() - 0.5) * stageH * 0.25, bandLo, bandHi),
-        ang : dir + (rand() < 0.5 ? -1 : 1) * (0.5 + rand() * 0.8),
-        len : Math.round(spanX * (0.15 + rand() * 0.20) / stepLen),
-        w : HAIR_W * (1.1 + rand() * 1.0),
-        gain : 0.85,
-        depth : 1,
-        st : hairStyle,
-        forks : 2
-      });
-    }
+  } else {
+    /* one core low in the layer with a fan of channels going up */
+    const ox = cx + (rand() - 0.5) * width * 0.16;
+    const oy = cy + layerHalf * (0.25 + rand() * 0.25);
+    leader(ox, oy, -Math.PI * 0.5, Math.PI * 1.6,
+           4 + Math.floor(rand() * 3), stage * (0.85 + params.trunkSpan * 0.6), true);
   }
 
-  /* --- process forks (breadth first keeps all primary strokes first) --- */
+  /* Breadth first, so every trunk is laid down before its branches. */
   let guard = 0;
-  while (queue.length && guard++ < 260) {
-    const fork = queue.shift();
-    growFilament(fork.x, fork.y, fork.ang, fork.len, fork.w, fork.gain, fork.depth, queue, fork.st || hairStyle, fork.forks);
+  while (queue.length && guard++ < 1200) {
+    const strand = queue.shift();
+    grow(strand.x, strand.y, strand.aim, strand.lengthPx,
+         strand.tierIndex, strand.toneScale, queue);
   }
 
   ctx.globalAlpha = 1.0;
   return canvas.transferToImageBitmap();
+}
+
+
+/*
+ * Node entry point, for tests only.
+ *
+ * In the browser this file is loaded with `new Worker(...)` and `module` does not
+ * exist, so the guard leaves the worker path untouched; under node the pure model
+ * (noise, heading, parameters) can be driven directly instead of being checked by
+ * pattern-matching the source.
+ */
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    makeRng : makeRng,
+    makeNoise1D : makeNoise1D,
+    icStepHeading : icStepHeading,
+    drawICParams : drawICParams,
+    generateIntraCloudBolt : generateIntraCloudBolt,
+    IC_VARIANTS : IC_VARIANTS,
+    IC_WIDTH : IC_WIDTH,
+    IC_TONE : IC_TONE,
+    IC_TIERS : IC_TIERS,
+    IC_SMOOTH_SCALE : IC_SMOOTH_SCALE,
+    IC_SMOOTH_AMP : IC_SMOOTH_AMP,
+    IC_STEP_NOISE : IC_STEP_NOISE,
+    IC_RESTORE : IC_RESTORE,
+    IC_JITTER_CLAMP : IC_JITTER_CLAMP,
+    IC_KINK : IC_KINK,
+    IC_KINK_CHANCE : IC_KINK_CHANCE,
+    IC_MAX_DEVIATION : IC_MAX_DEVIATION
+  };
 }
