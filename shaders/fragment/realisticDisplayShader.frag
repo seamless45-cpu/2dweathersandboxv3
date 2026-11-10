@@ -261,7 +261,7 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   // a CG return stroke (which peaks at 100000), and pushing it higher makes the
   // dense middle of the artwork clip to a white blob instead of reading as
   // channels.
-  const float icBrightness = 60.0;
+  const float icBrightness = 55.0;
   pixVal = pow(max(pixVal, 0.0), 2.0) * reveal * window * currentLightningIntensity * icBrightness;
 
   const vec3 icCol = vec3(0.58, 0.66, 1.0); // cooler than the CG stroke
@@ -406,22 +406,14 @@ vec4 getAirColor(vec2 fragCoordIn)
   }
 
   emittedLight += lightningBoltLight / (1. + cloudDensity * 100.0);
-  // An intra-cloud flash happens *inside* the cloud, so its channels may only
-  // be seen where the cloud actually is. Emitted light is added to the frame
-  // even where there is no cloud at all (main() even folds it into opacity), so
-  // without this mask the branches were drawn straight through the cloud edge
-  // and out into clear air.
-  //
-  // The mask starts *inside* the visible edge of the cloud rather than at it.
-  // Emitted light is folded into opacity further down (opacity +=
-  // length(emittedLight)), so a flash drawn into the faint fringe of a cloud
-  // does not just look exposed - it makes that fringe opaque and visibly grows
-  // the cloud around itself. Below ~0.15 opacity (thin haze, the soft rim of a
-  // cloud) the flash therefore contributes nothing, and it reaches full
-  // strength only in the body of the cloud (~0.38), which is where a strike can
-  // actually form.
-  float icCloudMask = smoothstep(0.15, 0.38, cloudOpacity);
-  emittedLight += lightningICLight * icCloudMask / (1. + cloudDensity * 2.5);
+  // No cloud mask: the flash is drawn wherever it is, the way a CG stroke is.
+  // Keeping it inside the cloud is the artwork's job instead - the flash is
+  // small and its channels curl tightly around the strike (see the sprite size
+  // in app.js and the meander in lightningGenerator.js), so a flash never
+  // reaches far enough to stick out of the cloud it formed in. The mild
+  // attenuation with cloud density is depth, not a mask: a flash is seen
+  // through the medium around it.
+  emittedLight += lightningICLight / (1. + cloudDensity * 2.5);
 
   return vec4(color, opacity);
 }
