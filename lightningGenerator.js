@@ -207,10 +207,21 @@ function generateIntraCloudBolt(width, height, seed, variant)
 
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
-  /* single-channel tone: wider channels are brighter, IC stays soft */
+  /*
+   * Single-channel tone: wider channels are brighter, IC stays soft.
+   *
+   * The floor matters as much as the curve. A thin filament works out to a
+   * value of one or two out of 255, i.e. an almost black stroke, and the shader
+   * shows this texture as light: a black stroke is a channel that emits nothing
+   * while the halo around it does, so every thin channel came out as a dark
+   * silhouette instead of a glowing filament. The floor keeps every channel
+   * above 'barely emitting'; the power curve above it still makes a trunk far
+   * brighter than a twig.
+   */
+  const TONE_FLOOR = 45;
   function tone(w, gain) {
     const v = Math.pow(Math.max(w, 0.05), 1.7) * 60.0 * gain;
-    const c = Math.max(0, Math.min(255, Math.round(v)));
+    const c = Math.max(TONE_FLOOR, Math.min(255, Math.round(v)));
     return 'rgb(' + c + ',' + c + ',' + c + ')';
   }
 
@@ -221,18 +232,39 @@ function generateIntraCloudBolt(width, height, seed, variant)
    * STROKE_SCALE times thicker so a channel stays visible once the tile is
    * shrunk; tone() still works from the unscaled width, so the brightness of
    * every channel is unchanged.
+   *
+   * STROKE_SCALE has to stay small: the shader reads the premultiplied red of
+   * this texture, so however wide a channel is here is how wide it is on
+   * screen. What keeps a thin channel visible is the tone floor below, not
+   * extra width.
    */
-  const STROKE_SCALE = 2.2;
+  const STROKE_SCALE = 1.35;
 
-  /* wide faint glow pass + narrow bright core pass */
+  /*
+   * Strokes are painted with 'lighten', i.e. a stroke only ever replaces what is
+   * underneath it with something brighter.
+   *
+   * tone() turns a thin channel into a dark grey, and drawing that over the halo
+   * with the default source-over mode *erases* the halo underneath it: the
+   * texture ends up with dark troughs running along every channel, and since
+   * the shader shows the texture directly, those troughs came out on screen as
+   * thin dark silhouettes cutting through the flash instead of glowing
+   * channels. Adding the strokes instead ('lighter') fixes the troughs but lets
+   * hundreds of overlaps sum up, and the dense middle of a flash saturates into
+   * a solid white slab. 'lighten' takes the brightest of the two, so a dim
+   * channel can neither darken the halo nor pile up on its neighbours.
+   */
   function strokePath(pts, w, gain) {
     if (pts.length < 4) return;
     ctx.beginPath();
     ctx.moveTo(pts[0], pts[1]);
     for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
 
-    ctx.globalAlpha = 0.30;
-    ctx.lineWidth = Math.max(0.9, w * 2.4) * STROKE_SCALE;
+    ctx.globalCompositeOperation = 'lighten';
+
+    // faint glow pass, then the bright core
+    ctx.globalAlpha = 0.16;
+    ctx.lineWidth = Math.max(0.8, w * 1.6) * STROKE_SCALE;
     ctx.strokeStyle = tone(w, gain * 0.5);
     ctx.stroke();
 
@@ -240,6 +272,8 @@ function generateIntraCloudBolt(width, height, seed, variant)
     ctx.lineWidth = Math.max(0.4, w) * STROKE_SCALE;
     ctx.strokeStyle = tone(w, gain);
     ctx.stroke();
+
+    ctx.globalCompositeOperation = 'source-over';
   }
 
   /*

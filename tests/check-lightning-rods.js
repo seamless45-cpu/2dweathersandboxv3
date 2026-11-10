@@ -87,7 +87,19 @@ check('IC artwork is sampled zoomed-in so its curves reach the screen',
   parseFloat((appSource.match(/const icArtZoom = (0\.\d+)/) || [])[1]) < 1.0);
 check('IC strokes are thin enough to read as channels, not slabs',
   /const STROKE_SCALE = [\d\.]+/.test(generatorSource) &&
-  parseFloat(generatorSource.match(/const STROKE_SCALE = ([\d\.]+)/)[1]) <= 2.5);
+  parseFloat(generatorSource.match(/const STROKE_SCALE = ([\d\.]+)/)[1]) <= 1.5);
+// The shader shows the tile as light, so a stroke that is nearly black is a
+// channel that emits nothing: it reads as a dark silhouette instead of a
+// channel. Every stroke has to stay above a floor.
+check('no IC stroke is painted as a black silhouette',
+  /const TONE_FLOOR = (\d+)/.test(generatorSource) &&
+  Number(generatorSource.match(/const TONE_FLOOR = (\d+)/)[1]) >= 32 &&
+  /Math\.max\(TONE_FLOOR, Math\.min\(255/.test(generatorSource));
+// Strokes must not erase the halo (source-over) nor pile up into a saturated
+// slab ('lighter'): 'lighten' takes the brighter of stroke and backdrop.
+check('IC strokes only ever brighten the artwork',
+  /globalCompositeOperation = 'lighten'/.test(generatorSource) &&
+  !/globalCompositeOperation = 'lighter'/.test(generatorSource));
 check('IC channels meander instead of running straight',
   /wanderVel/.test(generatorSource) && /maxCurve/.test(generatorSource) && /kinkChance/.test(generatorSource));
 // The curl is a sine wave along the channel (meanderAmp / meanderWave), not a
@@ -113,6 +125,11 @@ check('a slot always draws the same flash (no per-strike mirror or stretch)',
 check('IC light is not masked by the cloud',
   !/icCloudMask/.test(displayShader) &&
   /emittedLight \+= lightningICLight \//.test(displayShader));
+// The strike curve peaks around 20 for a couple of iterations; driving the
+// artwork straight from it clipped the whole flash to a white slab.
+check('the IC flash brightness is compressed so it cannot clip to a slab',
+  /float icPower = currentLightningIntensity \//.test(displayShader) &&
+  /\* reveal \* window \* icPower \* icBrightness/.test(displayShader));
 check('IC flashes stay cloud-scale, not storm-scale',
   /const icFlashWidthMeters = (\d+)/.test(appSource) &&
   Number(appSource.match(/const icFlashWidthMeters = (\d+)/)[1]) <= 8000 &&
