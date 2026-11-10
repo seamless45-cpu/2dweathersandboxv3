@@ -261,6 +261,26 @@ Pako: Only used for data compression to reduce save file sizes. Size reduction c
   5. Open index.html
   6. Start live server (Go Live), automatically opens page in browser
 
+## Installing as an app (PWA)
+The sandbox is installable: open it from `http://` or `https://` (not `file://`) and use the browser's install action, or the **Install app** button that appears next to *Create new simulation* / *Load existing save* once the browser offers the prompt. Installed copies open in their own window at the shell's size and start without a network.
+
+* `manifest.webmanifest` declares the name, standalone display, theme colours and the 192/512 icons (`any` and `maskable`). Icon sources live in `resources/icons/app`.
+* `sw.js` precaches the app shell on install — HTML, JS, shader sources, fonts, weather icons and the small sprites — about 1.5 MB. The background image, ground texture and noise texture are fetched right after the worker activates, and the 17 MB of mp3 ambience plus thunder fills a separate media cache as it is played, so neither blocks the install or the first offline start.
+* `pwa.js` registers the worker and drives the install button. Everything is guarded, so browsers without service workers, and `file://` copies, behave exactly as before.
+
+Cache keys are stored without their query strings, and freshness comes from a single value: `VERSION` in `sw.js`. **Bump `VERSION` together with the `?v=` cache busters in `index.html` and `app.js` whenever a precached file changes** — `tests/check-pwa.js` fails if they drift apart, and a stale worker would otherwise keep serving the old shell.
+
+Checks (all plain Node, no browser needed):
+
+```text
+node tests/check-pwa.js        # manifest, icons, tags, precache completeness + weight
+node tests/check-sw-offline.js # runs sw.js against a fake cache and network
+node tests/check-shaders.js    # glslangValidator on every shader
+node tests/check-lightning-rods.js
+```
+
+`tests/check-sw-offline.js` executes the real worker in a scripted environment: it must precache every shell file, purge the previous version's cache, warm the large art, answer navigations and versioned asset requests from cache with the network switched off, and leave cross-origin, non-GET, range and `.zip` requests untouched.
+
 ## Deploying a GitHub Pages copy
 
 This project is a static site and can be deployed directly from GitHub Pages. The workflow in `.github/workflows/pages.yml` publishes the repository root whenever code is pushed to `main` or `master`, and can also be started manually from the repository's Actions tab.
