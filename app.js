@@ -6615,8 +6615,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-23.1'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-23.1')
+    loadSourceFile('shaders/common.glsl?v=2026-11-24.1'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-24.1')
   ]);
 
   const [
@@ -7417,7 +7417,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     const tileIndex = nextICLightningTextureIndex++;
-    const icLightningWorker = new Worker('./lightningGenerator.js?v=2026-11-23.1');
+    const icLightningWorker = new Worker('./lightningGenerator.js?v=2026-11-24.1');
     icLightningWorker.onmessage = event => {
       generateICLightningTexture(tileIndex, event.data);
       icLightningWorker.terminate();
@@ -7450,7 +7450,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     const textureIndex = nextLightningTextureIndex++;
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-23.1');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-24.1');
     lightningGeneratorWorker.onmessage = event => {
       generateLightningTexture(textureIndex, event.data);
       lightningGeneratorWorker.terminate();
@@ -8501,6 +8501,18 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to hdr framebuffer
 
+      // Intra-cloud light, added on top of the finished scene with a second
+      // draw of the same program. Additive blending is the whole point: light
+      // can only ever be *added* to what a pixel already shows, so a channel
+      // cannot trade a cloud for itself (which is what made it vanish inside
+      // one) and no fade stage can darken anything. Nothing else changes, since
+      // the pass returns zero whenever no intra-cloud flash is running.
+      gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'icLightPass'), 1.0);
+      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'icLightPass'), 0.0); // scene pass again for the next frame
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
       gl.disable(gl.BLEND);
 
       // Post processing:
@@ -9316,7 +9328,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-23.1');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-24.1');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
