@@ -22,7 +22,7 @@ uniform sampler2D surfaceTextureMap;
 uniform sampler2D curlTex;
 uniform sampler2D lightningTex;
 uniform sampler2D lightningDataTex;
-uniform sampler2D icLightningTex; // 2x2 atlas of intra-cloud artwork, one tile per slot
+uniform sampler2D icLightningTex; // 4x2 atlas of intra-cloud artwork, eight patterns
 uniform vec2 icSpriteSize;        // size of one intra-cloud flash, in normalized sim coords
 uniform float icArtZoom;          // fraction of each tile that is sampled (1.0 = whole tile)
 
@@ -221,19 +221,22 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
 
 // Intra-cloud flash.
 //
-// The artwork comes from lightningGenerator.js ('IC' mode): a wide, flat, very
-// heavily forked "spider" that spreads through the charge layer and never
-// touches the ground. The generator renders four different flashes into a 2x2
-// atlas, so every lightning slot samples its own tile and two flashes that
-// overlap in time never look identical.
-const float icAtlasTiles = 2.0;
+// The artwork comes from lightningGenerator.js ('IC' mode): hair-thin curling
+// channels spread through a charge layer and never reaching the ground. The
+// generator renders eight different shapes into a 4x2 atlas, and every strike
+// picks one of them from its own start iteration and position, so two flashes
+// rarely look alike.
+const vec2 icAtlasTiles = vec2(4.0, 2.0);
+const float icTileCount = 8.0;
+// Keep in step with icLightningTileWidth in app.js.
+const float icTileWidthPx = 1024.0;
 
-vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningIntensity, int slot)
+vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningIntensity,
+                        float tileSeed, float artPerPixel)
 {
-  // The flash is always the same size and orientation for a given slot: the
-  // artwork is deliberately not mirrored or stretched per strike, so a flash
-  // does not change shape every time it happens. Variety comes from the four
-  // atlas tiles, one shape each.
+  // The flash is always the same size and orientation: the artwork is
+  // deliberately not mirrored or stretched, so a flash does not flip around
+  // while it is on screen. Variety comes from the eight atlas tiles.
   const float revealSpeed = 2.4;
 
   // position inside the flash, -0.5 .. 0.5
@@ -250,8 +253,12 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   // times bigger on screen, which is where the curve becomes visible.
   vec2 artLocal = local * icArtZoom;
 
-  // slot -> tile of the atlas (slot % 2, slot / 2)
-  vec2 tile = vec2(float(slot - (slot / 2) * 2), float(slot / 2));
+  // Which of the eight patterns this strike uses. The hash runs on the strike's
+  // own start iteration and position, so it is fixed for the whole flash and
+  // changes with the next one.
+  float tileHash = fract(sin(tileSeed * 12.9898 + dot(pos, vec2(41.7, 91.3))) * 43758.5453);
+  float tileIndex = floor(tileHash * icTileCount);
+  vec2 tile = vec2(mod(tileIndex, icAtlasTiles.x), floor(tileIndex / icAtlasTiles.x));
   const float inset = 0.005; // keep linear filtering away from the tile seam
   vec2 uv = tile + vec2(inset) + vec2(artLocal.x + 0.5, 0.5 - artLocal.y) * (1.0 - 2.0 * inset);
   float pixVal = texture(icLightningTex, uv / icAtlasTiles).r;
@@ -270,14 +277,18 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   float window = (1.0 - smoothstep(0.45, 0.9, edge.x)) * (1.0 - smoothstep(0.45, 0.9, edge.y));
 
   // The artwork is the light itself: a channel's luminance is how much light it
-  // emits, and the brightness below only sets what one full tile is worth. There
-  // used to be a square here, from when every channel sat on a soft halo that
-  // had to be kept from blowing out the scene. With the halo gone the square
-  // only crushed the channels: at the ~60 pixels a flash covers, the tile is
-  // minified about 8:1, so a hairline channel samples to a tenth of its artwork
-  // value, and squaring that left a channel with well under one unit of light -
-  // plain on a dark sky, invisible against a sunlit cloud (which is ~1).
-  const float icBrightness = 60.0;
+  // emits, and the constants below only set what one full tile is worth.
+  //
+  // A channel is now a hair, and a hair loses almost all of its light to
+  // filtering: a flash covers ~60-120 px while the sampled artwork is 512 px
+  // wide, so a half-pixel channel is averaged down to a few percent of itself.
+  // Multiplying by that minification (artPerPixel, worked out per pixel from the
+  // screen-space derivative before the slot loop) keeps a hair as bright as it
+  // is thin, at every zoom. That is what replaced the flat 60x fudge: the fudge
+  // made even the dimmest skirt saturate, so every channel came out the same
+  // clipped white and the whole flash read as one glowing slab.
+  const float icBrightness = 5.5;
+  float icEnergy = clamp(artPerPixel, 1.0, 8.0);
 
   // The strike intensity curve peaks around 20 for a couple of iterations.
   // Driving the artwork straight from it pushed every channel past white at the
@@ -286,7 +297,7 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   // the flash in the range a thin channel can carry.
   float icPower = currentLightningIntensity / (1.0 + currentLightningIntensity * 0.85);
 
-  pixVal = max(pixVal, 0.0) * reveal * window * icPower * icBrightness;
+  pixVal = max(pixVal, 0.0) * reveal * window * icPower * icBrightness * icEnergy;
 
   const vec3 icCol = vec3(0.58, 0.66, 1.0); // cooler than the CG stroke
 
@@ -309,6 +320,11 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
 vec3 computeICLight()
 {
   vec3 icLight = vec3(0.0);
+
+  // How many artwork pixels one screen pixel covers, worked out once, outside
+  // the slot loop: screen-space derivatives inside a loop with `continue` are
+  // undefined, and every flash shares the same sprite scale anyway.
+  float artPerPixel = fwidth(texCoord.x) * icArtZoom * icTileWidthPx / max(icSpriteSize.x, 1e-5);
   for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
     vec4 lightningData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
     float lightningStartIterNum = lightningData[START_ITERNUM];
@@ -326,7 +342,9 @@ vec3 computeICLight()
     if (currentLightningIntensity <= 0.0)
       continue;
 
-    icLight += displayICLightning(lightningPos, lightningTime, currentLightningIntensity, slot);
+    icLight += displayICLightning(lightningPos, lightningTime, currentLightningIntensity,
+                                  lightningStartIterNum * 0.6180339 + float(slot) * 11.7,
+                                  artPerPixel);
   }
 
   if (dot(icLight, vec3(1.0)) <= 0.0)

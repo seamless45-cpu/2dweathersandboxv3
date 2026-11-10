@@ -6615,8 +6615,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-27.1'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-27.1')
+    loadSourceFile('shaders/common.glsl?v=2026-11-27.2'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-27.2')
   ]);
 
   const [
@@ -7144,11 +7144,16 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const numLightningTextures = 10;
 
   // Intra-cloud artwork. lightningGenerator.js draws one IC flash per 1024x512
-  // tile and they are packed into a 2x2 atlas, so each lightning slot can show
-  // a different flash (see displayICLightning in realisticDisplayShader.frag).
+  // tile and eight of them are packed into a 4x2 atlas. A strike picks a tile
+  // from its own start iteration and position (see displayICLightning in
+  // realisticDisplayShader.frag), so consecutive flashes show different
+  // patterns instead of four pictures taking turns. Keep these in step with
+  // icAtlasTiles and icTileWidthPx in the shader.
   const icLightningTileWidth = 1024;
   const icLightningTileHeight = 512;
-  const numICLightningTiles = numLightningSlots;
+  const icLightningAtlasColumns = 4;
+  const icLightningAtlasRows = 2;
+  const numICLightningTiles = icLightningAtlasColumns * icLightningAtlasRows;
   const icLightningAtlas = gl.createTexture();
 
 
@@ -7400,8 +7405,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   // Upload one generated IC flash into its tile of the atlas.
   function generateICLightningTexture(tile, bitmap)
   {
-    const column = tile % 2;
-    const row = Math.floor(tile / 2);
+    const column = tile % icLightningAtlasColumns;
+    const row = Math.floor(tile / icLightningAtlasColumns);
     gl.bindTexture(gl.TEXTURE_2D, icLightningAtlas);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, column * icLightningTileWidth, row * icLightningTileHeight,
@@ -7417,7 +7422,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     const tileIndex = nextICLightningTextureIndex++;
-    const icLightningWorker = new Worker('./lightningGenerator.js?v=2026-11-27.1');
+    const icLightningWorker = new Worker('./lightningGenerator.js?v=2026-11-27.2');
     icLightningWorker.onmessage = event => {
       generateICLightningTexture(tileIndex, event.data);
       icLightningWorker.terminate();
@@ -7428,16 +7433,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       icLightningWorker.terminate();
       startICLightningTextureWorker();
     };
-    // A fixed seed per tile keeps the four flashes reproducible between runs,
+    // A fixed seed per tile keeps the eight flashes reproducible between runs,
     // and the variant makes each tile a different shape ('spider', 'crawler',
-    // 'lattice', 'web' - see IC_VARIANTS in lightningGenerator.js). The tile is
-    // only chosen by the lightning slot, so a flash never changes shape while
-    // it is on screen and never differs between runs.
+    // 'lattice', 'web', 'veil', 'braid', 'crown', 'fork' - see IC_VARIANTS in
+    // lightningGenerator.js). Which tile a strike uses is decided in the shader
+    // from the strike itself, so a flash never changes shape while it is on
+    // screen and still differs from the last one.
     icLightningWorker.postMessage({
       width : icLightningTileWidth,
       height : icLightningTileHeight,
       mode : 'IC',
-      variant : tileIndex,
+      variant : tileIndex % 8,
       seed : 1013 + tileIndex * 7919
     });
   }
@@ -7450,7 +7456,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     const textureIndex = nextLightningTextureIndex++;
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-27.1');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-27.2');
     lightningGeneratorWorker.onmessage = event => {
       generateLightningTexture(textureIndex, event.data);
       lightningGeneratorWorker.terminate();
@@ -7477,10 +7483,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   for (let i = 0; i < Math.min(2, numLightningTextures); i++)
     startLightningTextureWorker();
 
-  // IC atlas: empty (black) until the workers have filled the four tiles, so a
-  // flash that happens very early simply does not draw artwork yet.
+  // IC atlas: empty (black) until the workers have filled the tiles, so a flash
+  // that happens very early simply does not draw artwork yet.
   gl.bindTexture(gl.TEXTURE_2D, icLightningAtlas);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, icLightningTileWidth * 2, icLightningTileHeight * 2, 0,
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8,
+                icLightningTileWidth * icLightningAtlasColumns,
+                icLightningTileHeight * icLightningAtlasRows, 0,
                 gl.RED, gl.UNSIGNED_BYTE, null);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -9328,7 +9336,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-27.1');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-27.2');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
