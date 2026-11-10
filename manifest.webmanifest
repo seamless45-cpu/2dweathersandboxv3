@@ -1,0 +1,46 @@
+{
+  "name": "2D Weather Sandbox",
+  "short_name": "Weather Sandbox",
+  "description": "Real-time 2D weather simulation sandbox: build a sounding, grow convective cells, and watch clouds, precipitation, wind and lightning evolve on a GPU-accelerated grid.",
+  "lang": "en",
+  "dir": "ltr",
+  "id": "./",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "any",
+  "background_color": "#161f2b",
+  "theme_color": "#111820",
+  "categories": ["education", "entertainment", "weather"],
+  "prefer_related_applications": false,
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  },
+  "icons": [
+    {
+      "src": "resources/icons/app/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "resources/icons/app/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "resources/icons/app/icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "resources/icons/app/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

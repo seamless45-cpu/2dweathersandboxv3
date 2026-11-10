@@ -47,8 +47,24 @@ def reject_nonstandard_json_constant(value):
 
 
 class WeatherServerHandler(SimpleHTTPRequestHandler):
+    # `mimetypes` does not know the PWA manifest on every Python version, and a
+    # manifest served as octet-stream makes the app non-installable.
+    extensions_map = {
+        **SimpleHTTPRequestHandler.extensions_map,
+        ".webmanifest": "application/manifest+json",
+    }
+
+    # Revalidate the shell on every load so a redeployed app (new ?v= busters,
+    # new sw.js) is picked up instead of being answered from the HTTP cache.
+    REVALIDATE_PATHS = {"/", "/index.html", "/manifest.webmanifest", "/sw.js", "/pwa.js"}
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
+
+    def end_headers(self):
+        if urlsplit(self.path).path in self.REVALIDATE_PATHS:
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
 
     def send_json(self, status, payload, allow_lan_read=False, allow_local_publish=False):
         encoded = json.dumps(payload, allow_nan=False).encode("utf-8")

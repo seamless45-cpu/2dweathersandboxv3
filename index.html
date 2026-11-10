@@ -3,13 +3,25 @@
 
 <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>2D Weather Sandbox</title>
+    <meta name="description"
+        content="Real-time 2D weather simulation sandbox: build a sounding, grow convective cells, and watch clouds, precipitation, wind and lightning evolve on a GPU-accelerated grid." />
+    <meta name="theme-color" content="#111820" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="Weather Sandbox" />
+    <link rel="apple-touch-icon" sizes="180x180" href="resources/icons/app/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="resources/icons/app/icon-192.png" />
     <script type="text/javascript" src="libraries/dat.gui.min.js"></script>
     <script type="text/javascript" src="libraries/pako.min.js"></script>
     <script type="text/javascript" src="libraries/chart.js"></script>
     <script type="text/javascript" src="libraries/chartjs-adapter-date-fns.js"></script>
     <script type="text/javascript" src="ecosystem.js"></script>
-    <script type="text/javascript" src="app.js?v=2026-11-26.1"></script>
+    <script type="text/javascript" src="app.js?v=2026-11-27.1"></script>
+    <script type="text/javascript" src="pwa.js"></script>
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico">
     <style>
         :root {
@@ -1418,6 +1430,11 @@
             position: relative;
         }
 
+        /* Shown only once the browser fires beforeinstallprompt (pwa.js). */
+        .main-menu-action-wrap[hidden] {
+            display: none;
+        }
+
         .main-menu-action {
             align-items: center;
             background: transparent;
@@ -1715,6 +1732,15 @@
                         </svg>
                     </button>
                     <span class="main-menu-tooltip" role="tooltip">Load existing save</span>
+                </div>
+                <div class="main-menu-action-wrap" id="installAppWrap" hidden aria-hidden="true">
+                    <button class="main-menu-action" type="button" id="installAppButton" aria-label="Install the app">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                            <path d="M12 3v11m0 0 4.2-4.2M12 14l-4.2-4.2" />
+                            <path d="M4.5 15.5V18A2.5 2.5 0 0 0 7 20.5h10a2.5 2.5 0 0 0 2.5-2.5v-2.5" />
+                        </svg>
+                    </button>
+                    <span class="main-menu-tooltip" role="tooltip">Install app</span>
                 </div>
             </div>
             <input class="main-menu-file-input" type="file" id="fileInput" name="fileInput"
