@@ -262,7 +262,15 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   // dense middle of the artwork clip to a white blob instead of reading as
   // channels.
   const float icBrightness = 60.0;
-  pixVal = pow(max(pixVal, 0.0), 2.0) * reveal * window * currentLightningIntensity * icBrightness;
+
+  // The strike intensity curve peaks around 20 for a couple of iterations.
+  // Driving the artwork straight from it pushed every channel past white at the
+  // peak, where the whole flash clipped into a solid slab and its thickness
+  // stopped meaning anything. Compressing the peak keeps the flicker but holds
+  // the flash in the range a thin channel can carry.
+  float icPower = currentLightningIntensity / (1.0 + currentLightningIntensity * 0.85);
+
+  pixVal = pow(max(pixVal, 0.0), 2.0) * reveal * window * icPower * icBrightness;
 
   const vec3 icCol = vec3(0.58, 0.66, 1.0); // cooler than the CG stroke
 
