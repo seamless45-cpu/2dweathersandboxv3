@@ -135,16 +135,31 @@ check('every IC shape is tuned for it (run, turn, pull)',
   // 4000 steps down the middle of the band, so the band reflection never fires:
   // this measures the shape of a channel, nothing else.
   const s = { axis : 0, runLeft : 1 };
-  const turns = [];
-  let previous = null;
+  const turns = [], headings = [], runLengths = [];
+  let previous = null, runSoFar = 0;
   for (let i = 0; i < 4000; i++) {
     const a = stepHeading(s, st, 0, -1000, 1000, rand);
-    if (previous !== null) turns.push(Math.abs(a - previous));
+    headings.push(a);
+    if (previous !== null) {
+      const turn = Math.abs(a - previous);
+      turns.push(turn);
+      if (turn >= 0.20) { runLengths.push(runSoFar); runSoFar = 0; }
+    }
+    runSoFar++;
     previous = a;
   }
   const straight = turns.filter(t => t <= 0.12).length / turns.length;
   const kinks = turns.filter(t => t >= 0.20).length / turns.length;
   const meanRunPx = 1.6 / Math.max(kinks, 1e-9); // stepLen in artwork pixels
+  const sorted = [...turns].sort((a, b) => a - b);
+  const p95Turn = sorted[Math.floor(0.95 * (sorted.length - 1))];
+  // How much of the channel runs at a real angle instead of hugging horizontal:
+  // a ruler-straight channel has almost none, a zigzag has plenty.
+  const steep = headings.filter(a => Math.abs(Math.sin(a)) >= 0.25).length / headings.length;
+  const runs = runLengths.length > 1 ? runLengths : [1];
+  const runMean = runs.reduce((a, b) => a + b, 0) / runs.length;
+  const runStd = Math.sqrt(runs.reduce((a, b) => a + (b - runMean) ** 2, 0) / runs.length);
+  const runVariety = runStd / Math.max(runMean, 1e-9);
 
   check('an IC channel runs straight between kinks, it does not wave',
     straight >= 0.70,
@@ -155,6 +170,21 @@ check('every IC shape is tuned for it (run, turn, pull)',
   check('the straight runs are long enough to read as straight on screen',
     meanRunPx >= 8,
     'a run is ' + meanRunPx.toFixed(0) + ' artwork pixels');
+  // "Straight line patterns" was the next complaint, so the shape has to be
+  // checked for it: the pull that keeps a channel in its charge layer used to
+  // undo every kink before the next one, which left nothing but a horizontal
+  // line with a wobble on it.
+  check('an IC channel is not a straight line hugging the horizontal',
+    steep >= 0.65,
+    'only ' + (steep * 100).toFixed(0) + '% of the channel runs at 14 degrees or '
+    + 'more off horizontal (a straight line has almost none)');
+  check('the kinks are big enough to survive the pull',
+    p95Turn >= 0.40,
+    'the biggest 5% of steps turn ' + p95Turn.toFixed(2) + ' rad ('
+    + (p95Turn * 180 / Math.PI).toFixed(0) + ' degrees)');
+  check('runs vary in length, so a flash is not one repeated pattern',
+    runVariety >= 0.30,
+    'run length spread is ' + (runVariety * 100).toFixed(0) + '% of the mean');
 }
 
 check('the artwork is generated once per tile from a fixed, versioned seed',
@@ -201,7 +231,7 @@ check('the light pass returns only the flash light',
   /vec3 computeICLight\(\)/.test(displayShader) &&
   /icLight \+= displayICLightning\(/.test(displayShader));
 check('the scene pass carries no IC light any more',
-  /fragmentColor = vec4\(max\(color \* finalLight, 0\.\) \+ emittedLight, opacity\)/.test(displayShader) &&
+  /fragmentColor = vec4\(min\(max\(color \* finalLight, 0\.\) \+ emittedLight/.test(displayShader) &&
   !/icAlpha/.test(displayShader) &&
   !/icEmission/.test(displayShader));
 {
@@ -297,6 +327,31 @@ check('the display model is the tonemap postProcessingShader.frag applies',
   }
   check('an IC flash can never darken what it is drawn over', darkening === 0);
   check('a fading IC flash faintly brightens instead of flickering darker', inversion === 0);
+}
+
+// A CG return stroke is 100000 by design and the scene is rendered into an
+// RGBA16F buffer (largest finite value 65504). Uncapped, the light overflowed to
+// infinity and the pumped alpha (~100000 as well) made the blend multiply the
+// destination by a large negative number; both come out of the tonemap as NaN,
+// which the bloom and the AA passes then smear across the frame.
+{
+  const ceilingMatch = displayShader.match(/const float hdrCeiling = ([\d\.]+);/);
+  const ceiling = ceilingMatch ? Number(ceilingMatch[1]) : NaN;
+  const boltBrightness = Number((displayShader.match(/const float mainBoltBrightness = ([\d\.]+);/) || [])[1]);
+  check('the scene light is capped below the 16-bit float limit',
+    ceiling > 1000 && ceiling < 65504 && boltBrightness > ceiling,
+    'ceiling ' + ceiling + ', CG stroke ' + boltBrightness + ', 16F limit 65504');
+  check('the fragment is written through that cap',
+    /fragmentColor = vec4\(min\(max\(color \* finalLight, 0\.\) \+ emittedLight, vec3\(hdrCeiling\)\), opacity\)/
+      .test(displayShader));
+  check('the emission alpha cannot run past opaque',
+    /opacity = clamp\(opacity \+ length\(emittedLight\), 0\.0, 1\.0\)/.test(displayShader));
+  // what the tonemap in the post pass does to a value at the cap: finite, white,
+  // not NaN
+  const capped = toneMap(ceiling);
+  check('a CG strike at the cap is still white, and finite',
+    Number.isFinite(capped) && capped >= 254,
+    'tonemapped to ' + capped.toFixed(1) + '/255');
 }
 
 // Glow layers are what a fading flash leaves behind as a dark rim, so an IC
