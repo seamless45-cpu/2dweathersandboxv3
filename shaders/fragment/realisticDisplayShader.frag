@@ -251,7 +251,7 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
     return vec3(0.0);
 
   // Fade the outer part of the sprite out, so a branch never ends in a hard
-  // cut where the artwork stops, nor where the cloud mask below clips it.
+  // cut where the artwork stops (there is no cloud mask to hide the edge).
   vec2 edge = abs(local) * 2.0; // 0 at the centre, 1 at the sprite border
   float window = (1.0 - smoothstep(0.45, 0.9, edge.x)) * (1.0 - smoothstep(0.45, 0.9, edge.y));
 
@@ -261,7 +261,7 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   // a CG return stroke (which peaks at 100000), and pushing it higher makes the
   // dense middle of the artwork clip to a white blob instead of reading as
   // channels.
-  const float icBrightness = 55.0;
+  const float icBrightness = 60.0;
   pixVal = pow(max(pixVal, 0.0), 2.0) * reveal * window * currentLightningIntensity * icBrightness;
 
   const vec3 icCol = vec3(0.58, 0.66, 1.0); // cooler than the CG stroke
