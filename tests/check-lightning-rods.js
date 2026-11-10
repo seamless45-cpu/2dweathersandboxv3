@@ -124,12 +124,58 @@ check('a slot always draws the same flash (no per-strike mirror or stretch)',
 // the artwork's job (small sprite + tight meander), not a shader mask
 check('IC light is not masked by the cloud',
   !/icCloudMask/.test(displayShader) &&
-  /emittedLight \+= lightningICLight \//.test(displayShader));
+  /icEmission \+= lightningICLight \//.test(displayShader));
 // The strike curve peaks around 20 for a couple of iterations; driving the
 // artwork straight from it clipped the whole flash to a white slab.
 check('the IC flash brightness is compressed so it cannot clip to a slab',
   /float icPower = currentLightningIntensity \//.test(displayShader) &&
   /\* reveal \* window \* icPower \* icBrightness/.test(displayShader));
+
+// A dim emission blended over the sky darkens it (alpha blending with a source
+// darker than the backdrop), which is what drew a dark silhouette along the
+// channels while a flash faded. The IC light is therefore kept out of the
+// generic emission alpha and given an alpha that only starts once the light is
+// bright enough to be brighter than any backdrop: 0 below 1.0, 1.0 at 3.0.
+check('IC light has its own alpha, gated on being brighter than the backdrop',
+  /vec3 icEmission = vec3\(0\.\)/.test(displayShader) &&
+  /float icLuma = length\(icEmission\)/.test(displayShader) &&
+  /float icAlpha = clamp\(\(icLuma - ([\d\.]+)\) \* ([\d\.]+), 0\.0, 1\.0\)/
+    .test(displayShader) &&
+  /vec3 icLight = icAlpha > 0\.0 \? icEmission \/ icAlpha/
+    .test(displayShader) &&
+  /fragmentColor = vec4\(max\(color \* finalLight, 0\.\) \+ emittedLight \+ icLight, opacity\)/
+    .test(displayShader));
+{
+  const m = displayShader.match(/float icAlpha = clamp\(\(icLuma - ([\d\.]+)\) \* ([\d\.]+)/);
+  const knee = parseFloat(m[1]), slope = parseFloat(m[2]);
+  // The IC light is blended as: out = dst + L - a * (dst - base), with the light
+  // pre-divided by its alpha. Check that this is never darker than the backdrop,
+  // over the whole plausible range: a flash fading from nothing to full
+  // brightness, over backgrounds from a dark night sky to a sunlit cloud.
+  let worst = Infinity, where = '';
+  for (let dst = 0.02; dst <= 3.0; dst += 0.02) {
+    for (let base = 0; base <= 0.25; base += 0.05) {
+      for (let L = 0; L <= 80; L += 0.05) {
+        const a = Math.min(1, Math.max(0, (L - knee) * slope));
+        const light = a > 0 ? L / a : 0;
+        const out = dst * (1 - a) + (base + light) * a;
+        if (out - dst < worst) { worst = out - dst; where = 'dst ' + dst.toFixed(2) + ', L ' + L.toFixed(2); }
+      }
+    }
+  }
+  check('an IC flash can never darken what it is drawn over', worst >= -1e-9,
+    'darkened by ' + worst.toFixed(4) + ' at ' + where);
+}
+
+// Glow layers are what a fading flash leaves behind as a dark rim, so an IC
+// channel has to be the stroke and nothing else, like a CG bolt.
+check('IC channels carry no glow layer',
+  !/drawHalo/.test(generatorSource) &&
+  !/faint glow pass/.test(generatorSource) &&
+  (() => {
+    const fn = (generatorSource.match(/function strokePath[\s\S]*?\n  \}/) || [''])[0];
+    return (fn.match(/ctx\.stroke\(\)/g) || []).length === 1;
+  })());
 check('IC flashes stay cloud-scale, not storm-scale',
   /const icFlashWidthMeters = (\d+)/.test(appSource) &&
   Number(appSource.match(/const icFlashWidthMeters = (\d+)/)[1]) <= 8000 &&

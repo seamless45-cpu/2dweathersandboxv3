@@ -77,6 +77,12 @@ float opacity = 1.0;
 
 vec3 emittedLight = vec3(0.); // pure light, like lightning
 
+// Intra-cloud light is kept apart from emittedLight so it can be blended with
+// its own alpha. It is the only emission that is *not* overwhelmingly brighter
+// than the sky, so it is the only one where a dim value can darken what it is
+// drawn over (see the composite at the end of main).
+vec3 icEmission = vec3(0.);
+
 float shadowLight;
 
 vec3 onLight; // extra light that lights up objects, just like sunlight and shadowlight
@@ -421,7 +427,7 @@ vec4 getAirColor(vec2 fragCoordIn)
   // reaches far enough to stick out of the cloud it formed in. The mild
   // attenuation with cloud density is depth, not a mask: a flash is seen
   // through the medium around it.
-  emittedLight += lightningICLight / (1. + cloudDensity * 2.5);
+  icEmission += lightningICLight / (1. + cloudDensity * 2.5);
 
   return vec4(color, opacity);
 }
@@ -800,8 +806,24 @@ void main()
   finalLight += vec3(shadowLight) + onLight;
 
   opacity += length(emittedLight);
-  opacity = clamp(opacity, 0.0, 1.0);
-  fragmentColor = vec4(max(color * finalLight, 0.) + emittedLight, opacity);
+
+  // The intra-cloud flash is the one emission that is not many times brighter
+  // than what it is drawn over, and alpha blending with a source darker than the
+  // background darkens it. A thin channel is bright (tens of units here), but
+  // while a flash fades the same channel spends a while at a fraction of a unit,
+  // and blending that over the sky is what drew the dark silhouette along the
+  // segments. So the IC light only gets alpha once it is bright enough to be
+  // brighter than any background it can land on; below that it contributes
+  // nothing at all, and a flash fades out instead of turning into a shadow.
+  float icLuma = length(icEmission);
+  float icAlpha = clamp((icLuma - 1.0) * 0.5, 0.0, 1.0);
+  // Divide the light by the alpha it is blended with, so the blend *adds* it
+  // instead of diluting it: out = dst + light - alpha * (dst - base). With the
+  // alpha above, that is never below dst for any backdrop up to ~3 (a sunlit
+  // cloud), which is what makes the fade a fade and not a shadow.
+  vec3 icLight = icAlpha > 0.0 ? icEmission / icAlpha : vec3(0.0);
+  opacity = clamp(opacity + icAlpha, 0.0, 1.0);
+  fragmentColor = vec4(max(color * finalLight, 0.) + emittedLight + icLight, opacity);
 
   drawCursor(cursor, view); // over everything else
 }
