@@ -238,21 +238,22 @@ function generateIntraCloudBolt(width, height, seed, variant)
    * screen. What keeps a thin channel visible is the tone floor below, not
    * extra width.
    */
-  const STROKE_SCALE = 1.35;
+  const STROKE_SCALE = 1.15;
 
   /*
-   * Strokes are painted with 'lighten', i.e. a stroke only ever replaces what is
-   * underneath it with something brighter.
+   * A channel is one narrow stroke and nothing else - no glow pass around it.
    *
-   * tone() turns a thin channel into a dark grey, and drawing that over the halo
-   * with the default source-over mode *erases* the halo underneath it: the
-   * texture ends up with dark troughs running along every channel, and since
-   * the shader shows the texture directly, those troughs came out on screen as
-   * thin dark silhouettes cutting through the flash instead of glowing
-   * channels. Adding the strokes instead ('lighter') fixes the troughs but lets
-   * hundreds of overlaps sum up, and the dense middle of a flash saturates into
-   * a solid white slab. 'lighten' takes the brightest of the two, so a dim
-   * channel can neither darken the halo nor pile up on its neighbours.
+   * The display shader shows this texture as light and has to give that light an
+   * alpha to blend it in, so the dim parts of the artwork are the expensive
+   * ones: a faint skirt of light around every channel is drawn over the sky with
+   * an alpha it cannot pay for, which leaves the dark rim and, while a flash
+   * fades, the dark silhouette along its segments. The CG bolt has no such
+   * skirt either - it is just the stroke, plus bloom in post processing. Dropping
+   * the glow passes here is what makes an IC channel look like a CG channel.
+   *
+   * Strokes are painted with 'lighten', i.e. a stroke only ever replaces what is
+   * underneath it with something brighter, so crossing channels cannot churn the
+   * tile into a mesh of dark troughs.
    */
   function strokePath(pts, w, gain) {
     if (pts.length < 4) return;
@@ -261,18 +262,10 @@ function generateIntraCloudBolt(width, height, seed, variant)
     for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
 
     ctx.globalCompositeOperation = 'lighten';
-
-    // faint glow pass, then the bright core
-    ctx.globalAlpha = 0.16;
-    ctx.lineWidth = Math.max(0.8, w * 1.6) * STROKE_SCALE;
-    ctx.strokeStyle = tone(w, gain * 0.5);
-    ctx.stroke();
-
-    ctx.globalAlpha = 0.95;
+    ctx.globalAlpha = 1.0;
     ctx.lineWidth = Math.max(0.4, w) * STROKE_SCALE;
     ctx.strokeStyle = tone(w, gain);
     ctx.stroke();
-
     ctx.globalCompositeOperation = 'source-over';
   }
 
@@ -483,42 +476,18 @@ function generateIntraCloudBolt(width, height, seed, variant)
   }
 
   /*
-   * Soft halo. Real IC flashes light up the whole charge layer around them, and
-   * without this the artwork reads as a few loose wires pasted on top of the
-   * cloud instead of light coming from inside it. The halo is an ellipse that
-   * fades to zero before the tile edge, so packing four tiles into one atlas
-   * and sampling it with linear filtering cannot bleed across seams.
+   * There is deliberately no halo layer any more. A soft ellipse of light under
+   * the channels was the last glow layer left, and it is exactly what read as a
+   * dark silhouette while a flash faded: the halo is dim, the shader still has
+   * to blend it over the sky, and a dim blend darkens. IC flashes now consist of
+   * channels only, like a cloud-to-ground bolt.
    */
-  function drawHalo(alpha, coreAlpha) {
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.scale(1, (band * 1.15) / Math.max(width * 0.5, 1));
-    const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, width * 0.5);
-    halo.addColorStop(0.0, 'rgba(255,255,255,' + alpha.toFixed(3) + ')');
-    halo.addColorStop(0.55, 'rgba(255,255,255,' + (alpha * 0.45).toFixed(3) + ')');
-    halo.addColorStop(1.0, 'rgba(255,255,255,0)');
-    ctx.fillStyle = halo;
-    ctx.fillRect(-width, -width, width * 2, width * 2);
-    ctx.restore();
-
-    if (coreAlpha > 0) {
-      // bright core where the bidirectional leader starts
-      const coreGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, width * 0.2);
-      coreGlow.addColorStop(0.0, 'rgba(255,255,255,' + coreAlpha.toFixed(3) + ')');
-      coreGlow.addColorStop(0.45, 'rgba(255,255,255,' + (coreAlpha * 0.16).toFixed(3) + ')');
-      coreGlow.addColorStop(1.0, 'rgba(255,255,255,0)');
-      ctx.fillStyle = coreGlow;
-      ctx.fillRect(0, 0, width, height);
-    }
-  }
 
   const spiderStyle = { wander : 1.00, pull : 0.022, maxCurve : 0.140, damping : 0.950, fork0 : 0.016, forkN : 0.028, spread : 0.50, kink : 0.014, meanderAmp : 12, meanderWave : 165, vertical : false };
   const branchStyle = { wander : 1.10, pull : 0.022, maxCurve : 0.160, damping : 0.950, fork0 : 0.018, forkN : 0.026, spread : 0.60, kink : 0.018, meanderAmp : 9, meanderWave : 95, vertical : true };
   const webStyle = { wander : 1.10, pull : 0.022, maxCurve : 0.160, damping : 0.950, fork0 : 0.024, forkN : 0.032, spread : 0.55, kink : 0.020, meanderAmp : 10, meanderWave : 130, vertical : false };
 
   if (style === 'spider') {
-    drawHalo(0.012, 0.020);
-
     /* --- primary filaments: several layered spiders around the origin --- */
     const nPrimary = 5 + Math.floor(rand() * 2);          // 5..6
     for (let i = 0; i < nPrimary; i++) {
@@ -554,8 +523,6 @@ function generateIntraCloudBolt(width, height, seed, variant)
                    len, 0.9 + rand() * 0.6, 0.70, 1, queue, spiderStyle);
     }
   } else if (style === 'crawler') {
-    drawHalo(0.010, 0.015);
-
     /* one long channel sweeps the whole layer, dropping a comb of short, steep
        branches as it goes: the "crawler" look */
     horizontalTrunk(cy + (rand() - 0.5) * band * 0.20, 3.6 + rand() * 0.8, 1.0,
@@ -568,8 +535,6 @@ function generateIntraCloudBolt(width, height, seed, variant)
                         branchEvery : 18 + Math.floor(rand() * 8),
                         branchLen : (band * 0.24) / stepLen, branchUp : 0 });
   } else if (style === 'lattice') {
-    drawHalo(0.012, 0.018);
-
     /*
      * Two trunks running through the layer at different heights, tied together
      * by steep cross-channels: a big IC flash lights up more than one layer of
@@ -601,8 +566,6 @@ function generateIntraCloudBolt(width, height, seed, variant)
                    1.0 + rand() * 0.6, 0.75, 1, queue, webStyle);
     }
   } else { // 'web'
-    drawHalo(0.008, 0.012);
-
     /*
      * Several small centres, each throwing out short rays: the mesh of a dense
      * charge layer rather than one flash with a single origin.
