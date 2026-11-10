@@ -301,7 +301,8 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
 // replace a cloud nor darken anything. No cloud mask and no depth attenuation:
 // an intra-cloud flash is *inside* the cloud, so the cloud it was born in is not
 // something the light has to get through - it is the medium that scatters it
-// towards the viewer.
+// towards the viewer, and it is also what the channel has to be readable
+// against.
 //
 // Between the flashes the pass returns zero and the additive draw is a no-op,
 // which is why it can safely run every frame.
@@ -327,7 +328,25 @@ vec3 computeICLight()
 
     icLight += displayICLightning(lightningPos, lightningTime, currentLightningIntensity, slot);
   }
-  return max(icLight, vec3(0.0));
+
+  if (dot(icLight, vec3(1.0)) <= 0.0)
+    return icLight; // nothing running: no cloud sample needed
+
+  // Seen through the cloud it is in. A channel has to stay readable against the
+  // cloud around it, and a sunlit cloud is ~1.0 in HDR units - about 230/255 on
+  // screen - while a hairline channel only carries a fraction of that. How much
+  // light gets from a flash to the viewer grows with the amount of cloud in the
+  // way, because that is the medium scattering it, so the light is scaled by the
+  // cloud it is seen through. In clear air there is nothing to scatter and no
+  // bright backdrop to beat, so the gain is 1 there and a flash outside a cloud
+  // looks exactly as before.
+  // Same smooth 2x2 water sample the scene pass uses, so the gain follows the
+  // cloud instead of stepping from cell to cell along a channel.
+  float cloudWater = max(bilerpWallVis(waterTex, wallTex, fragCoord)[CLOUD], 0.0);
+  float cloudDensity = cloudWater * 13.6; // same scale as getAirColor
+  float cloudOpacity = clamp(1.0 - 1.0 / (1.0 + cloudDensity), 0.0, 1.0);
+  const float icCloudScatter = 3.5;
+  return max(icLight, vec3(0.0)) * (1.0 + icCloudScatter * cloudOpacity);
 }
 
 

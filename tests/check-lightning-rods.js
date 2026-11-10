@@ -100,18 +100,63 @@ check('no IC stroke is painted as a black silhouette',
 check('IC strokes only ever brighten the artwork',
   /globalCompositeOperation = 'lighten'/.test(generatorSource) &&
   !/globalCompositeOperation = 'lighter'/.test(generatorSource));
-check('IC channels meander instead of running straight',
-  /wanderVel/.test(generatorSource) && /maxCurve/.test(generatorSource) && /kinkChance/.test(generatorSource));
-// The curl is a sine wave along the channel (meanderAmp / meanderWave), not a
-// stronger random walk: a random walk on the heading coils into a knot instead
-// of making the channel wavier, which is what made the flash a white smudge.
-check('the curl is a bounded wave along the channel, not a heading random walk',
-  /meanderAmp \* meanderK/.test(generatorSource) &&
-  /Math\.cos\(meanderPhase\)/.test(generatorSource) &&
-  /meanderSign/.test(generatorSource) &&
-  !/a \+= wanderVel \+ Math\.sin\(meanderPhase\)/.test(generatorSource));
-check('every IC shape carries the meander',
-  (generatorSource.match(/meanderAmp : \d+, meanderWave : \d+/g) || []).length >= 6);
+// A lightning channel is straight runs joined by sharp kinks, not a curve. The
+// IC artwork used to superimpose a sine wave on a smoothed heading, which made
+// it look wavy and wobbly next to a CG stroke; the heading model is now the same
+// kind of thing the CG bolt uses (a heading that holds, then turns).
+check('IC channels are built from runs and kinks, like a CG bolt',
+  /function stepHeading\(/.test(generatorSource) &&
+  !/meanderAmp/.test(generatorSource) &&
+  !/meanderWave/.test(generatorSource) &&
+  !/meanderPhase/.test(generatorSource) &&
+  !/wanderVel/.test(generatorSource) &&
+  /s\.runLeft/.test(generatorSource));
+check('every IC shape is tuned for it (run, turn, pull)',
+  (generatorSource.match(/(?:spiderStyle|branchStyle|webStyle) = \{ run : [\d\.]+, turn : [\d\.]+, pull : [\d\.]+/g) || []).length >= 3 &&
+  (generatorSource.match(/run : \d+, turn : [\d\.]+, pull : [\d\.]+/g) || []).length >= 6);
+
+{
+  // The heading model is pure maths, so drive it here instead of trusting the
+  // source: extract stepHeading() and makeRng() from the generator and run a
+  // long channel through them.
+  const fnSrc = (re) => (generatorSource.match(re) || [''])[0];
+  const rngSrc = fnSrc(/function makeRng\(seed\) \{[\s\S]*?\n\}/);
+  const headingSrc = fnSrc(/function stepHeading\(s, st, y, bandLo, bandHi, rand\) \{[\s\S]*?\n\}/);
+  check('the IC heading model can be tested without a canvas', rngSrc.length > 0 && headingSrc.length > 0);
+
+  const stepHeading = new Function(rngSrc + '\n' + headingSrc + '\nreturn stepHeading;')();
+  const makeRng = new Function(rngSrc + '\nreturn makeRng;')();
+  const rand = makeRng(20261124);
+
+  const style = generatorSource.match(/const spiderStyle = \{ run : ([\d\.]+), turn : ([\d\.]+), pull : ([\d\.]+)/);
+  check('the spider style is readable', !!style);
+  const st = { run : Number(style[1]), turn : Number(style[2]), pull : Number(style[3]), vertical : false };
+
+  // 4000 steps down the middle of the band, so the band reflection never fires:
+  // this measures the shape of a channel, nothing else.
+  const s = { axis : 0, runLeft : 1 };
+  const turns = [];
+  let previous = null;
+  for (let i = 0; i < 4000; i++) {
+    const a = stepHeading(s, st, 0, -1000, 1000, rand);
+    if (previous !== null) turns.push(Math.abs(a - previous));
+    previous = a;
+  }
+  const straight = turns.filter(t => t <= 0.12).length / turns.length;
+  const kinks = turns.filter(t => t >= 0.20).length / turns.length;
+  const meanRunPx = 1.6 / Math.max(kinks, 1e-9); // stepLen in artwork pixels
+
+  check('an IC channel runs straight between kinks, it does not wave',
+    straight >= 0.70,
+    'only ' + (straight * 100).toFixed(0) + '% of steps hold their heading');
+  check('and it kinks sharply, like a CG stroke',
+    kinks >= 0.03 && kinks <= 0.30,
+    (kinks * 100).toFixed(0) + '% of steps turn by 11 degrees or more');
+  check('the straight runs are long enough to read as straight on screen',
+    meanRunPx >= 8,
+    'a run is ' + meanRunPx.toFixed(0) + ' artwork pixels');
+}
+
 check('the artwork is generated once per tile from a fixed, versioned seed',
   /seed : 1013 \+ tileIndex \* 7919/.test(appSource) &&
   /new Worker\('\.\/lightningGenerator\.js\?v=/.test(appSource));
@@ -124,10 +169,20 @@ check('a slot always draws the same flash (no per-strike mirror or stretch)',
 // inside a cloud does not have to get through that cloud, and the cloud is the
 // medium that scatters it towards the viewer.
 const icLightFn = (displayShader.match(/vec3 computeICLight\(\)[\s\S]*?\n\}/) || [''])[0];
+// Light born inside a cloud is not dimmed by that cloud (it is the medium that
+// scatters it towards the viewer), and what *does* depend on the cloud is a
+// gain, so a flash inside one is seen through it.
 check('IC light is not dimmed by the cloud it is in',
   icLightFn.length > 0 &&
-  !/cloudDensity/.test(icLightFn) &&
-  !/lightningICLight \//.test(displayShader));
+  !/lightningICLight \//.test(displayShader) &&
+  !/icLight \/ \(1\. \+ cloud/.test(icLightFn) &&
+  /1\.0 \+ icCloudScatter \* cloudOpacity/.test(icLightFn));
+{
+  const gain = Number((displayShader.match(/const float icCloudScatter = ([\d\.]+)/) || [])[1]);
+  check('an IC flash inside a cloud is seen through it',
+    gain > 0 && gain <= 8,
+    'icCloudScatter = ' + gain);
+}
 // The strike curve peaks around 20 for a couple of iterations; driving the
 // artwork straight from it clipped the whole flash to a white slab.
 check('the IC flash brightness is compressed so it cannot clip to a slab',
@@ -197,6 +252,25 @@ check('the display model is the tonemap postProcessingShader.frag applies',
   }
   check('an IC channel is visible inside a sunlit cloud', worst >= 12,
     'weakest channel is only ' + worst.toFixed(1) + '/255 above the backdrop (' + worstWhere + ')');
+
+  // Seen through the cloud: inside one, the light is scaled by the cloud it is
+  // scattered in, which is what keeps a channel readable against a sunlit cloud.
+  {
+    const scatter = Number((displayShader.match(/const float icCloudScatter = ([\d\.]+)/) || [])[1]);
+    const density = Number((displayShader.match(/float cloudDensity = cloudWater \* ([\d\.]+)/) || [])[1]) || 13.6;
+    const opacityOf = (water) => 1 - 1 / (1 + water * density);
+    let worstInCloud = Infinity, where = '';
+    for (const water of [0.005, 0.02, 0.05, 0.1, 0.2, 0.5]) {
+      const gain = 1 + scatter * opacityOf(water);
+      for (const art of [0.04, 0.08, 0.2, 0.5, 1.0]) {
+        const contrast = toneMap(1.0 + channelLight(art) * gain) - toneMap(1.0);
+        if (contrast < worstInCloud) { worstInCloud = contrast; where = 'cloud water ' + water + ', artwork ' + art; }
+      }
+    }
+    check('a channel stays readable through a cloud (not just on its edge)',
+      worstInCloud >= 20,
+      'weakest is ' + worstInCloud.toFixed(1) + '/255 (' + where + ')');
+  }
 
   // The square that used to be applied to the artwork (it suppressed the halo)
   // is what made this impossible: it left a hairline channel with a fraction of
