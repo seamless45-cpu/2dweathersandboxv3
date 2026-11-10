@@ -87,9 +87,19 @@ check('IC artwork is sampled zoomed-in so its curves reach the screen',
   parseFloat((appSource.match(/const icArtZoom = (0\.\d+)/) || [])[1]) < 1.0);
 check('IC strokes are thin enough to read as channels, not slabs',
   /const STROKE_SCALE = [\d\.]+/.test(generatorSource) &&
-  parseFloat(generatorSource.match(/const STROKE_SCALE = ([\d\.]+)/)[1]) <= 2.0);
+  parseFloat(generatorSource.match(/const STROKE_SCALE = ([\d\.]+)/)[1]) <= 2.5);
 check('IC channels meander instead of running straight',
   /wanderVel/.test(generatorSource) && /maxCurve/.test(generatorSource) && /kinkChance/.test(generatorSource));
+// The curl is a sine wave along the channel (meanderAmp / meanderWave), not a
+// stronger random walk: a random walk on the heading coils into a knot instead
+// of making the channel wavier, which is what made the flash a white smudge.
+check('the curl is a bounded wave along the channel, not a heading random walk',
+  /meanderAmp \* meanderK/.test(generatorSource) &&
+  /Math\.cos\(meanderPhase\)/.test(generatorSource) &&
+  /meanderSign/.test(generatorSource) &&
+  !/a \+= wanderVel \+ Math\.sin\(meanderPhase\)/.test(generatorSource));
+check('every IC shape carries the meander',
+  (generatorSource.match(/meanderAmp : \d+, meanderWave : \d+/g) || []).length >= 6);
 check('the artwork is generated once per tile from a fixed, versioned seed',
   /seed : 1013 \+ tileIndex \* 7919/.test(appSource) &&
   /new Worker\('\.\/lightningGenerator\.js\?v=/.test(appSource));

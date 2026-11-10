@@ -6615,8 +6615,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-19.1'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-19.1')
+    loadSourceFile('shaders/common.glsl?v=2026-11-21.1'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-21.1')
   ]);
 
   const [
@@ -7417,7 +7417,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     const tileIndex = nextICLightningTextureIndex++;
-    const icLightningWorker = new Worker('./lightningGenerator.js?v=2026-11-19.1');
+    const icLightningWorker = new Worker('./lightningGenerator.js?v=2026-11-21.1');
     icLightningWorker.onmessage = event => {
       generateICLightningTexture(tileIndex, event.data);
       icLightningWorker.terminate();
@@ -7430,9 +7430,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     };
     // A fixed seed per tile keeps the four flashes reproducible between runs,
     // and the variant makes each tile a different shape ('spider', 'crawler',
-    // 'canopy', 'web' - see IC_VARIANTS in lightningGenerator.js). The display
-    // shader also mirrors and stretches each flash, so no two strikes look the
-    // same.
+    // 'lattice', 'web' - see IC_VARIANTS in lightningGenerator.js). The tile is
+    // only chosen by the lightning slot, so a flash never changes shape while
+    // it is on screen and never differs between runs.
     icLightningWorker.postMessage({
       width : icLightningTileWidth,
       height : icLightningTileHeight,
@@ -7450,7 +7450,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     const textureIndex = nextLightningTextureIndex++;
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-19.1');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-21.1');
     lightningGeneratorWorker.onmessage = event => {
       generateLightningTexture(textureIndex, event.data);
       lightningGeneratorWorker.terminate();
@@ -7696,11 +7696,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // Intra-cloud flashes: the generator artwork is 2:1. The sprite sets the
   // physical size of a flash - the same at any resolution, and scaled with the
-  // camera like everything else. It is masked by the cloud in
-  // realisticDisplayShader.frag, so anything that reaches past the cloud is
-  // simply not drawn.
-  const icFlashWidthMeters = 4200.0;
-  const icFlashHeightMeters = 2100.0;
+  // camera like everything else. There is no cloud mask in the shader: the
+  // flash may light up clear air if it reaches that far, and its small size is
+  // what keeps it reading as a flash inside the cloud rather than a sheet of
+  // light across the sky.
+  const icFlashWidthMeters = 2400.0;
+  const icFlashHeightMeters = 1200.0;
 
   // How much of each atlas tile is sampled: 1.0 shows the whole artwork, 0.45
   // shows its middle at 2.2x. A flash covers only ~120 pixels on screen, so the
@@ -9315,7 +9316,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-19.1');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-21.1');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
