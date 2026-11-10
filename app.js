@@ -6615,8 +6615,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-27.2'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-27.2')
+    loadSourceFile('shaders/common.glsl?v=2026-11-28.1'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-28.1')
   ]);
 
   const [
@@ -7143,18 +7143,22 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const lightningTextures = [];
   const numLightningTextures = 10;
 
-  // Intra-cloud artwork. lightningGenerator.js draws one IC flash per 1024x512
-  // tile and eight of them are packed into a 4x2 atlas. A strike picks a tile
-  // from its own start iteration and position (see displayICLightning in
-  // realisticDisplayShader.frag), so consecutive flashes show different
-  // patterns instead of four pictures taking turns. Keep these in step with
-  // icAtlasTiles and icTileWidthPx in the shader.
-  const icLightningTileWidth = 1024;
-  const icLightningTileHeight = 512;
-  const icLightningAtlasColumns = 4;
-  const icLightningAtlasRows = 2;
-  const numICLightningTiles = icLightningAtlasColumns * icLightningAtlasRows;
-  const icLightningAtlas = gl.createTexture();
+  // Intra-cloud artwork. lightningGenerator.js draws one IC flash per tile, and
+  // the tiles live in a 2D array texture - one layer per pattern - so every
+  // pattern carries its own mip chain. That is what makes the artwork filter
+  // correctly at every camera zoom: a flash of 2400 m is only about a hundred
+  // pixels across at the default camera and about a thousand when zoomed in, and
+  // a single-resolution texture could only be right at one of those. One tile is
+  // the whole flash.
+  //
+  // A strike picks a layer and a mirroring from its own start iteration and
+  // position (see displayICLightning in realisticDisplayShader.frag), so
+  // consecutive flashes show different networks instead of a few pictures taking
+  // turns. Keep these in step with icTileCount and icTileWidthPx in the shader.
+  const icLightningTileWidth = 256;
+  const icLightningTileHeight = 128;
+  const numICLightningTiles = 8;
+  const icLightningTextures = gl.createTexture();
 
 
   frameBuff_0 = gl.createFramebuffer(); // global for weather stations
@@ -7402,16 +7406,19 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   }
 
 
-  // Upload one generated IC flash into its tile of the atlas.
-  function generateICLightningTexture(tile, bitmap)
+  // Upload one generated IC flash into its own layer of the array texture, then
+  // rebuild the mip chain: the flash is minified when zoomed out, and without
+  // mips a hair-thin channel samples between pixels and the flash breaks up into
+  // a sprinkle of hot dots instead of a glowing network.
+  function generateICLightningTexture(layer, bitmap)
   {
-    const column = tile % icLightningAtlasColumns;
-    const row = Math.floor(tile / icLightningAtlasColumns);
-    gl.bindTexture(gl.TEXTURE_2D, icLightningAtlas);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, icLightningTextures);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, column * icLightningTileWidth, row * icLightningTileHeight,
+    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, layer,
+                     icLightningTileWidth, icLightningTileHeight, 1,
                      gl.RED, gl.UNSIGNED_BYTE, bitmap);
     bitmap.close();
+    gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
   }
 
 
@@ -7422,7 +7429,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     const tileIndex = nextICLightningTextureIndex++;
-    const icLightningWorker = new Worker('./lightningGenerator.js?v=2026-11-27.2');
+    const icLightningWorker = new Worker('./lightningGenerator.js?v=2026-11-28.1');
     icLightningWorker.onmessage = event => {
       generateICLightningTexture(tileIndex, event.data);
       icLightningWorker.terminate();
@@ -7433,12 +7440,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       icLightningWorker.terminate();
       startICLightningTextureWorker();
     };
-    // A fixed seed per tile keeps the eight flashes reproducible between runs,
-    // and the variant makes each tile a different shape ('spider', 'crawler',
-    // 'lattice', 'web', 'veil', 'braid', 'crown', 'fork' - see IC_VARIANTS in
-    // lightningGenerator.js). Which tile a strike uses is decided in the shader
-    // from the strike itself, so a flash never changes shape while it is on
-    // screen and still differs from the last one.
+    // A fixed seed per tile keeps the eight networks reproducible between runs.
+    // The variant picks the layout family ('burst', 'crawler', 'multi', 'fan' -
+    // see IC_VARIANTS in lightningGenerator.js) and the seed draws every other
+    // number in the drawing, so the eight tiles are eight different networks
+    // rather than eight pictures. Which tile a strike uses - and which way round
+    // it is mirrored - is decided in the shader from the strike itself, so a
+    // flash never changes shape while it is on screen and still differs from the
+    // last one.
     icLightningWorker.postMessage({
       width : icLightningTileWidth,
       height : icLightningTileHeight,
@@ -7456,7 +7465,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     const textureIndex = nextLightningTextureIndex++;
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-27.2');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-28.1');
     lightningGeneratorWorker.onmessage = event => {
       generateLightningTexture(textureIndex, event.data);
       lightningGeneratorWorker.terminate();
@@ -7483,17 +7492,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   for (let i = 0; i < Math.min(2, numLightningTextures); i++)
     startLightningTextureWorker();
 
-  // IC atlas: empty (black) until the workers have filled the tiles, so a flash
-  // that happens very early simply does not draw artwork yet.
-  gl.bindTexture(gl.TEXTURE_2D, icLightningAtlas);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8,
-                icLightningTileWidth * icLightningAtlasColumns,
-                icLightningTileHeight * icLightningAtlasRows, 0,
+  // IC artwork: black until the workers have filled the layers, so a flash that
+  // happens very early simply does not draw artwork yet.
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, icLightningTextures);
+  gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.R8,
+                icLightningTileWidth, icLightningTileHeight, numICLightningTiles, 0,
                 gl.RED, gl.UNSIGNED_BYTE, null);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
   startICLightningTextureWorker();
 
   await loadingBar.set(78, 'Preparing render buffers');
@@ -7711,19 +7720,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const icFlashWidthMeters = 2400.0;
   const icFlashHeightMeters = 1200.0;
 
-  // How much of each atlas tile is sampled: 1.0 shows the whole artwork, 0.45
-  // shows its middle at 2.2x. A flash covers only ~120 pixels on screen, so the
-  // whole tile squeezes every bend of a channel into a pixel or two and the
-  // channels read as straight lines; zooming in keeps them visibly curved, and
-  // because it shows the middle of the tile it also keeps the flash tight
-  // around the strike instead of spreading it across the sky.
-  // See displayICLightning in realisticDisplayShader.frag.
-  const icArtZoom = 0.50;
+  // The whole tile is the flash; there is no zoom factor to keep in step with
+  // the artwork any more (see displayICLightning in realisticDisplayShader.frag).
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'icLightningTex'), 10);
   gl.uniform2f(gl.getUniformLocation(realisticDisplayProgram, 'icSpriteSize'),
                icFlashWidthMeters / (cellHeight * sim_res_x),
                icFlashHeightMeters / (cellHeight * sim_res_y));
-  gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'icArtZoom'), icArtZoom);
 
   gl.useProgram(precipitationProgram);
   gl.uniform1i(gl.getUniformLocation(precipitationProgram, 'baseTex'), 0);
@@ -8503,7 +8505,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.bindTexture(gl.TEXTURE_2D, ambientLightFBOs[0].texture);
 
       gl.activeTexture(gl.TEXTURE10);
-      gl.bindTexture(gl.TEXTURE_2D, icLightningAtlas);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, icLightningTextures);
 
       uploadLightningRodUniforms(realisticDisplayProgram);
 
@@ -9336,7 +9338,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-27.2');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-28.1');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

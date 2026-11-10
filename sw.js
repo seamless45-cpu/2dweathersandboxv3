@@ -23,7 +23,7 @@
 
 'use strict';
 
-const VERSION = '2026-11-27.2';
+const VERSION = '2026-11-28.1';
 
 const APP_CACHE_PREFIX = 'weather-sandbox-';
 const SHELL_CACHE_PREFIX = APP_CACHE_PREFIX + 'shell-';
@@ -128,7 +128,7 @@ const SHELL_PATHS = new Set(
 );
 
 /**
- * Cache keys are query-stripped: the page requests `app.js?v=2026-11-27.2`
+ * Cache keys are query-stripped: the page requests `app.js?v=2026-11-28.1`
  * while the cache holds the plain `app.js` URL. The ?v= buster therefore only
  * affects the HTTP cache; freshness here comes from VERSION alone.
  */

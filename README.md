@@ -277,7 +277,16 @@ node tests/check-pwa.js        # manifest, icons, tags, precache completeness + 
 node tests/check-sw-offline.js # runs sw.js against a fake cache and network
 node tests/check-shaders.js    # glslangValidator on every shader
 node tests/check-lightning-rods.js
+node tests/check-ic-lightning.js # the intra-cloud artwork, rendered and measured
 ```
+
+`tests/check-ic-lightning.js` is the one that does not just read source: it loads
+`lightningGenerator.js` with a stubbed 2D canvas (`tests/ic-canvas-stub.js`),
+draws the eight intra-cloud tiles, and checks them as pictures - stroke width,
+brightness hierarchy, connectivity, and that no two tiles are the same flash. It
+then ports the intra-cloud maths out of `realisticDisplayShader.frag` so the
+artwork can be judged at the size and the zoom a player sees it at, in cloud and
+in clear air. If you touch the IC artwork, that is the suite to run.
 
 `tests/check-sw-offline.js` executes the real worker in a scripted environment: it must precache every shell file, purge the previous version's cache, warm the large art, answer navigations and versioned asset requests from cache with the network switched off, and leave cross-origin, non-GET, range and `.zip` requests untouched.
 
