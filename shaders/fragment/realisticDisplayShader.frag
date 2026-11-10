@@ -870,12 +870,28 @@ void main()
 
   finalLight += vec3(shadowLight) + onLight;
 
-  opacity += length(emittedLight);
+  /*
+   * The light and the alpha both have to stay inside what the buffer can hold.
+   *
+   * The scene is rendered into an RGBA16F framebuffer, whose largest finite
+   * value is 65504, and it is alpha blended. A CG return stroke is 100000 by
+   * design (see displayLightning), so on its own it overflows the buffer to
+   * infinity, and the alpha below - length(emittedLight), also ~100000 - makes
+   * the blend multiply the destination by (1 - alpha), i.e. by a large negative
+   * number. Both come back out of the tonemap divided by itself: NaN, which the
+   * bloom, FXAA and temporal AA passes then smear over the frame as dead pixels.
+   *
+   * So the light is capped just below the limit and the alpha at 1 (nothing is
+   * more than fully opaque). Everything past ~10 is white on screen already, so
+   * the cap is invisible; it only stops the buffer from overflowing.
+   */
+  const float hdrCeiling = 30000.0;
+  opacity = clamp(opacity + length(emittedLight), 0.0, 1.0);
 
   // The intra-cloud flash is not in this fragment: it is added afterwards, by
   // the additive light pass (see computeICLight), so it can never trade a cloud
   // for itself or dim what it is drawn over.
-  fragmentColor = vec4(max(color * finalLight, 0.) + emittedLight, opacity);
+  fragmentColor = vec4(min(max(color * finalLight, 0.) + emittedLight, vec3(hdrCeiling)), opacity);
 
   drawCursor(cursor, view); // over everything else
 }

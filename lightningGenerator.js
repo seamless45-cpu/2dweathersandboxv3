@@ -71,7 +71,7 @@ function makeRng(seed) {
 function stepHeading(s, st, y, bandLo, bandHi, rand) {
   if (--s.runLeft <= 0) {
     s.axis += (rand() < 0.5 ? -1 : 1) * st.turn * (0.45 + rand() * 0.85);
-    s.runLeft = Math.max(2, Math.round(st.run * (0.6 + rand() * 0.9)));
+    s.runLeft = Math.max(2, Math.round(st.run * (0.35 + rand() * 1.45)));
   }
 
   // Pull back toward the direction this channel belongs to - horizontal for a
@@ -94,7 +94,7 @@ function stepHeading(s, st, y, bandLo, bandHi, rand) {
     s.runLeft = 0;
   }
 
-  return s.axis + (rand() - 0.5) * 0.08; // roughness, not a wave
+  return s.axis + (rand() - 0.5) * 0.12; // roughness, not a wave
 }
 
 
@@ -396,9 +396,9 @@ function generateIntraCloudBolt(width, height, seed, variant)
     // (see stepHeading). It is given a fixed horizontal target, so the pull only
     // ever brings a run back toward the direction the trunk is travelling.
     const trunk = {
-      run : opts.run === undefined ? 16 : opts.run,
-      turn : opts.turn === undefined ? 0.34 : opts.turn,
-      pull : opts.pull === undefined ? 0.06 : opts.pull,
+      run : opts.run === undefined ? 13 : opts.run,
+      turn : opts.turn === undefined ? 0.62 : opts.turn,
+      pull : opts.pull === undefined ? 0.035 : opts.pull,
       axisTarget : 0,
       vertical : false
     };
@@ -444,13 +444,20 @@ function generateIntraCloudBolt(width, height, seed, variant)
    * Per-shape channel behaviour, in steps of stepLen (~1.6 artwork pixels):
    * `run` is how many steps a straight run holds before it kinks, `turn` is the
    * size of that kink in radians, `pull` how strongly a run is bent back toward
-   * the layer it belongs to. A run of 10-16 steps is 16-26 artwork pixels, i.e.
-   * a couple of pixels on screen - long enough to read as a straight length of
-   * channel, short enough that the flash still zigzags the way lightning does.
+   * the layer it belongs to.
+   *
+   * `pull` is the number that decides whether a flash reads as lightning or as
+   * a straight line: it bends the heading back toward horizontal a little every
+   * step, so a pull of 0.055 (what this used to be) ate a 0.5 rad kink within
+   * one run and left nothing on screen but a horizontal line with a wobble on
+   * it. At 0.035 a kink survives to the next one and the channel zigzags. Runs
+   * are 9-13 steps, i.e. 15-21 artwork pixels or about two pixels on screen,
+   * and their length is randomised (0.35-1.8x) so a flash is not one pattern
+   * repeated.
    */
-  const spiderStyle = { run : 11, turn : 0.50, pull : 0.055, fork0 : 0.016, forkN : 0.028, spread : 0.50, vertical : false };
-  const branchStyle = { run : 8, turn : 0.46, pull : 0.055, fork0 : 0.018, forkN : 0.026, spread : 0.60, vertical : true };
-  const webStyle = { run : 10, turn : 0.52, pull : 0.055, fork0 : 0.024, forkN : 0.032, spread : 0.55, vertical : false };
+  const spiderStyle = { run : 12, turn : 0.68, pull : 0.035, fork0 : 0.016, forkN : 0.028, spread : 0.50, vertical : false };
+  const branchStyle = { run : 9, turn : 0.70, pull : 0.035, fork0 : 0.018, forkN : 0.026, spread : 0.60, vertical : true };
+  const webStyle = { run : 11, turn : 0.72, pull : 0.035, fork0 : 0.024, forkN : 0.032, spread : 0.55, vertical : false };
 
   if (style === 'spider') {
     /* --- primary filaments: several layered spiders around the origin --- */
@@ -491,12 +498,12 @@ function generateIntraCloudBolt(width, height, seed, variant)
     /* one long channel sweeps the whole layer, dropping a comb of short, steep
        branches as it goes: the "crawler" look */
     horizontalTrunk(cy + (rand() - 0.5) * band * 0.20, 3.6 + rand() * 0.8, 1.0,
-                    { fromFrac : 0.22, toFrac : 0.78, run : 12, turn : 0.42, pull : 0.06,
+                    { fromFrac : 0.22, toFrac : 0.78, run : 13, turn : 0.62, pull : 0.035,
                       branchEvery : 11 + Math.floor(rand() * 6),
                       branchLen : (band * 0.34) / stepLen, branchUp : 0 });
     if (rand() < 0.5)
       horizontalTrunk(cy + (rand() - 0.5) * band * 0.75, 2.0 + rand() * 0.6, 0.75,
-                      { fromFrac : 0.26, toFrac : 0.74, run : 11, turn : 0.38, pull : 0.06,
+                      { fromFrac : 0.26, toFrac : 0.74, run : 13, turn : 0.62, pull : 0.035,
                         branchEvery : 18 + Math.floor(rand() * 8),
                         branchLen : (band * 0.24) / stepLen, branchUp : 0 });
   } else if (style === 'lattice') {
@@ -508,7 +515,7 @@ function generateIntraCloudBolt(width, height, seed, variant)
      */
     const upperY = cy - band * (0.18 + rand() * 0.14);
     const lowerY = cy + band * (0.18 + rand() * 0.14);
-    const trunkOpts = { fromFrac : 0.20, toFrac : 0.80, run : 12, turn : 0.42, pull : 0.06 };
+    const trunkOpts = { fromFrac : 0.20, toFrac : 0.80, run : 13, turn : 0.62, pull : 0.035 };
     horizontalTrunk(upperY, 2.8 + rand() * 0.7, 1.0, trunkOpts);
     horizontalTrunk(lowerY, 2.6 + rand() * 0.7, 0.95, trunkOpts);
 
