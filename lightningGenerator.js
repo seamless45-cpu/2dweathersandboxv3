@@ -11,9 +11,12 @@
  *   mode: 'IC'  Intra-cloud flash. Real IC lightning never reaches the ground,
  *               has dimmer/softer channels than a CG return stroke and comes in
  *               several shapes, so the generator draws one of four: 'spider',
- *               'crawler', 'canopy' and 'web' (see generateIntraCloudBolt).
- *               Every shape is confined to a horizontal band of the image, on
- *               top of a soft elliptical halo.
+ *               'crawler', 'lattice' and 'web' (see generateIntraCloudBolt).
+ *               Every shape is confined to a horizontal band of the image and
+ *               consists of channels only - straight runs joined by sharp
+ *               kinks, the same character as the CG bolt, with no halo around
+ *               them (a CG stroke has none either; its glow comes from the
+ *               post-processing bloom).
  *
  *               app.js renders all four into a 2x2 atlas (one tile per
  *               lightning slot) and realisticDisplayShader.frag draws them for
@@ -46,6 +49,52 @@ function makeRng(seed) {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+
+/*
+ * Heading of one step of a channel.
+ *
+ * A lightning channel is a series of straight runs joined by sharp kinks; it is
+ * not a curve. The CG bolt has always looked like that, while the IC artwork
+ * superimposed a sine wave on a smoothed heading - a channel that visibly
+ * undulated, which is exactly what made an IC channel look wavy and wobbly next
+ * to a CG stroke. So there is no wave and no heading momentum here: a run holds
+ * its heading for `st.run` steps with a hair of noise, then turns by up to
+ * `st.turn` radians, and the pull toward the layer bends the channel at those
+ * kinks instead of rounding it off.
+ *
+ * `s` is the per-filament state ({axis, runLeft}), so a run survives across
+ * steps. `rand` is passed in rather than closed over so a test can drive the
+ * heading deterministically.
+ */
+function stepHeading(s, st, y, bandLo, bandHi, rand) {
+  if (--s.runLeft <= 0) {
+    s.axis += (rand() < 0.5 ? -1 : 1) * st.turn * (0.45 + rand() * 0.85);
+    s.runLeft = Math.max(2, Math.round(st.run * (0.6 + rand() * 0.9)));
+  }
+
+  // Pull back toward the direction this channel belongs to - horizontal for a
+  // spread through the charge layer, vertical for a cross-channel. It acts on
+  // the run heading, so the channel bends at a kink and never along a run.
+  const target = st.axisTarget !== undefined ? st.axisTarget
+    : (st.vertical
+      ? (Math.sin(s.axis) >= 0 ? Math.PI * 0.5 : -Math.PI * 0.5)
+      : (Math.cos(s.axis) >= 0 ? 0 : Math.PI));
+  let da = target - s.axis;
+  while (da > Math.PI) da -= Math.PI * 2;
+  while (da < -Math.PI) da += Math.PI * 2;
+  s.axis += da * st.pull;
+
+  // Stay inside the charge layer by reflecting the run heading (and kinking on
+  // the next step) instead of nudging it: a nudge lets a channel run flat along
+  // the edge of the layer, and a flat run reads as a stretched wire.
+  if ((y <= bandLo && Math.sin(s.axis) < 0) || (y >= bandHi && Math.sin(s.axis) > 0)) {
+    s.axis = -s.axis;
+    s.runLeft = 0;
+  }
+
+  return s.axis + (rand() - 0.5) * 0.08; // roughness, not a wave
 }
 
 
@@ -272,9 +321,9 @@ function generateIntraCloudBolt(width, height, seed, variant)
   /*
    * Grow one filament. Fork targets are queued (never recursed) so a very
    * branchy flash cannot blow the stack inside a worker. `st` carries the
-   * per-shape behaviour: how much the channel wanders, how strongly it is
-   * pulled back along its own axis (horizontal, or vertical for 'canopy') and
-   * how eagerly it forks.
+   * per-shape behaviour: how long a straight run lasts, how sharply it kinks
+   * (see stepHeading), how strongly it is pulled back along its own axis
+   * (horizontal, or vertical for a cross-channel) and how eagerly it forks.
    */
   function growFilament(x0, y0, ang, len, w0, gain, depth, queue, st) {
     let x = x0, y = y0, a = ang, w = w0;
@@ -284,87 +333,17 @@ function generateIntraCloudBolt(width, height, seed, variant)
     const forkChance = depth === 0 ? st.fork0 : st.forkN;
 
     /*
-     * Real IC channels are tortuous: they bend smoothly over tens of pixels and
-     * then kink. Per-step white noise cannot do that (it produces a straight
-     * line with fuzz on it), so the heading carries a velocity that is damped
-     * every step: the channel draws a long, smooth meander, and an occasional
-     * geniculate kink adds the sharp corner that lightning actually has.
-     *
-     * All of it comes from the seeded PRNG, so the curve is baked into the
-     * artwork: it is identical every time this tile is used and can never
-     * change while a flash is on screen.
+     * The heading is a straight run with a hair of noise, joined to the next run
+     * by a sharp kink (see stepHeading above). That is the character a CG bolt
+     * has, and it is the reason an IC channel no longer reads as a wobbling
+     * sine wave. Everything comes from the seeded PRNG, so the shape is baked
+     * into the artwork: identical every time this tile is used, and it can
+     * never change while a flash is on screen.
      */
-    const kinkChance = st.kink === undefined ? 0.012 : st.kink;
-    let wanderVel = (rand() - 0.5) * (st.maxCurve === undefined ? 0.09 : st.maxCurve) * 1.5;
-
-    // The heading is a damped random walk, clamped so it can bend the channel
-    // but never let it coil up on itself: a few gentle S-bends per channel, the
-    // way a real IC channel runs, with the kinks below for the sharp corners.
-    const maxCurve = st.maxCurve === undefined ? 0.09 : st.maxCurve;
-    const damping = st.damping === undefined ? 0.90 : st.damping;
-
-    /*
-     * The visible curl is a bounded meander, not the random walk above.
-     *
-     * A random walk on the heading has no memory of where it came from, so
-     * turning it up does not produce a wavier channel - it produces a channel
-     * that doubles back on itself and coils into a knot a few pixels wide,
-     * which on screen is a bright smudge instead of a curved filament. The
-     * curl therefore comes from a heading term that oscillates along the path,
-     * `axis + meanderAmp * k * cos(phase)` with the phase advancing at a fixed
-     * rate: the channel snakes sideways with a lateral amplitude of meanderAmp
-     * pixels and a wavelength of meanderWave pixels, forever, and the random
-     * walk only adds a little irregularity on top of it.
-     *
-     * Both numbers are in artwork pixels, which is the scale the shape has to
-     * be judged at: the flash is roughly a hundred pixels wide on screen, so
-     * the wavelength has to be a good fraction of that in artwork pixels to
-     * read as a curve once the tile is shrunk down.
-     */
-    const meanderAmp = st.meanderAmp === undefined ? 0 : st.meanderAmp;
-    const meanderWave = st.meanderWave === undefined ? 0 : st.meanderWave;
-    const meanderK = meanderWave > 0 ? (Math.PI * 2) / meanderWave : 0;  // rad per pixel
-    const meanderStep = meanderK * stepLen;                              // rad per step
-    const meanderAngle = meanderAmp * meanderK;                          // heading swing, rad
-    let meanderPhase = rand() * Math.PI * 2;
-    let meanderSign = 1;
-
-    // The heading the channel would follow without the curl (and the one the
-    // random walk and the pull act on), plus the curl around it. `a += ...`
-    // would integrate the wave into a full rotation - a channel that coils
-    // into a knot - so the wave is an offset from `axis`, not a step in `a`.
-    let axis = a;
+    const s = { axis : a, runLeft : 1 + Math.floor(rand() * Math.max(1, st.run)) };
 
     for (let i = 0; i < len; i++) {
-      wanderVel += (rand() - 0.5) * st.wander * 0.30;
-      wanderVel *= damping;
-      wanderVel = clamp(wanderVel, -maxCurve, maxCurve);
-      meanderPhase += meanderStep;
-      axis += wanderVel;
-      if (rand() < kinkChance)
-        axis += (rand() < 0.5 ? -1 : 1) * (0.30 + rand() * 0.55);
-      // Pull back toward the axis this filament is already travelling along
-      // (NOT toward 0, which used to turn every left-going branch around and
-      // pile the whole flash onto one side of the image).
-      const target = st.vertical
-        ? (Math.sin(axis) >= 0 ? Math.PI * 0.5 : -Math.PI * 0.5)
-        : (Math.cos(axis) >= 0 ? 0 : Math.PI);
-      let da = target - axis;
-      while (da > Math.PI) da -= Math.PI * 2;
-      while (da < -Math.PI) da += Math.PI * 2;
-      axis += da * st.pull;
-      // the curl: a sine wave that runs along the channel, in and out of the
-      // direction the channel is heading
-      a = axis + meanderSign * meanderAngle * Math.cos(meanderPhase);
-      // Stay inside the charge layer by reflecting the heading instead of
-      // nudging it: a nudge lets a channel run flat along the boundary, and a
-      // flat run is exactly the "straight line" that looks wrong.
-      if ((y <= bandLo && Math.sin(a) < 0) || (y >= bandHi && Math.sin(a) > 0)) {
-        axis = -axis;
-        meanderSign = -meanderSign;
-        a = axis + meanderSign * meanderAngle * Math.cos(meanderPhase);
-        y = clamp(y, bandLo + stepLen, bandHi - stepLen);
-      }
+      a = stepHeading(s, st, y, bandLo, bandHi, rand);
 
       const nx = x + Math.cos(a) * stepLen;
       const ny = y + Math.sin(a) * stepLen;
@@ -413,44 +392,22 @@ function generateIntraCloudBolt(width, height, seed, variant)
     const pts = [x, y];
     const steps = Math.ceil((spanEnd - spanStart) / stepLen);
 
-    // same heading-momentum meander as growFilament: a trunk is a curve too
-    const trunkKink = opts.kink === undefined ? 0.010 : opts.kink;
-    let wanderVel = (rand() - 0.5) * (opts.maxCurve === undefined ? 0.075 : opts.maxCurve) * 1.5;
-
-    const maxCurve = opts.maxCurve === undefined ? 0.075 : opts.maxCurve;
-
-    // same bounded meander as growFilament (see the comment there): the trunk
-    // snakes along with meanderWave pixels between bends instead of coiling.
-    const meanderAmp = opts.meanderAmp === undefined ? 0 : opts.meanderAmp;
-    const meanderWave = opts.meanderWave === undefined ? 0 : opts.meanderWave;
-    const meanderK = meanderWave > 0 ? (Math.PI * 2) / meanderWave : 0;
-    const meanderStep = meanderK * stepLen;
-    const meanderAngle = meanderAmp * meanderK;
-    let meanderPhase = rand() * Math.PI * 2;
-    let meanderSign = 1;
-    let axis = a;
+    // A trunk is a channel like any other: straight runs joined by sharp kinks
+    // (see stepHeading). It is given a fixed horizontal target, so the pull only
+    // ever brings a run back toward the direction the trunk is travelling.
+    const trunk = {
+      run : opts.run === undefined ? 16 : opts.run,
+      turn : opts.turn === undefined ? 0.34 : opts.turn,
+      pull : opts.pull === undefined ? 0.06 : opts.pull,
+      axisTarget : 0,
+      vertical : false
+    };
+    const s = { axis : a, runLeft : 1 + Math.floor(rand() * trunk.run) };
 
     for (let i = 0; i < steps; i++) {
-      wanderVel += (rand() - 0.5) * (opts.wander || 0.60) * 0.30;
-      wanderVel *= opts.damping === undefined ? 0.90 : opts.damping;
-      wanderVel = clamp(wanderVel, -maxCurve, maxCurve);
-      meanderPhase += meanderStep;
-      axis += wanderVel;
-      if (rand() < trunkKink)
-        axis += (rand() < 0.5 ? -1 : 1) * (0.25 + rand() * 0.40);
-      let da = -axis;                              // pull back to horizontal
-      while (da > Math.PI) da -= Math.PI * 2;
-      while (da < -Math.PI) da += Math.PI * 2;
-      axis += da * (opts.pull || 0.10);
-      a = axis + meanderSign * meanderAngle * Math.cos(meanderPhase);
+      a = stepHeading(s, trunk, y, bandLo, bandHi, rand);
 
       let ny = y + Math.sin(a) * stepLen;
-      if ((ny <= bandLo && Math.sin(a) < 0) || (ny >= bandHi && Math.sin(a) > 0)) {
-        axis = -axis;                            // bounce, do not run flat
-        meanderSign = -meanderSign;
-        a = axis + meanderSign * meanderAngle * Math.cos(meanderPhase);
-        ny = y + Math.sin(a) * stepLen;
-      }
       // Always move forward: a trunk that is momentarily pointing at the band
       // edge would otherwise churn in place and pile up as a blob at the start.
       x = Math.min(x + Math.max(Math.cos(a), 0.35) * stepLen, spanEnd);
@@ -483,9 +440,17 @@ function generateIntraCloudBolt(width, height, seed, variant)
    * channels only, like a cloud-to-ground bolt.
    */
 
-  const spiderStyle = { wander : 1.00, pull : 0.022, maxCurve : 0.140, damping : 0.950, fork0 : 0.016, forkN : 0.028, spread : 0.50, kink : 0.014, meanderAmp : 12, meanderWave : 165, vertical : false };
-  const branchStyle = { wander : 1.10, pull : 0.022, maxCurve : 0.160, damping : 0.950, fork0 : 0.018, forkN : 0.026, spread : 0.60, kink : 0.018, meanderAmp : 9, meanderWave : 95, vertical : true };
-  const webStyle = { wander : 1.10, pull : 0.022, maxCurve : 0.160, damping : 0.950, fork0 : 0.024, forkN : 0.032, spread : 0.55, kink : 0.020, meanderAmp : 10, meanderWave : 130, vertical : false };
+  /*
+   * Per-shape channel behaviour, in steps of stepLen (~1.6 artwork pixels):
+   * `run` is how many steps a straight run holds before it kinks, `turn` is the
+   * size of that kink in radians, `pull` how strongly a run is bent back toward
+   * the layer it belongs to. A run of 10-16 steps is 16-26 artwork pixels, i.e.
+   * a couple of pixels on screen - long enough to read as a straight length of
+   * channel, short enough that the flash still zigzags the way lightning does.
+   */
+  const spiderStyle = { run : 11, turn : 0.50, pull : 0.055, fork0 : 0.016, forkN : 0.028, spread : 0.50, vertical : false };
+  const branchStyle = { run : 8, turn : 0.46, pull : 0.055, fork0 : 0.018, forkN : 0.026, spread : 0.60, vertical : true };
+  const webStyle = { run : 10, turn : 0.52, pull : 0.055, fork0 : 0.024, forkN : 0.032, spread : 0.55, vertical : false };
 
   if (style === 'spider') {
     /* --- primary filaments: several layered spiders around the origin --- */
@@ -526,12 +491,12 @@ function generateIntraCloudBolt(width, height, seed, variant)
     /* one long channel sweeps the whole layer, dropping a comb of short, steep
        branches as it goes: the "crawler" look */
     horizontalTrunk(cy + (rand() - 0.5) * band * 0.20, 3.6 + rand() * 0.8, 1.0,
-                    { fromFrac : 0.22, toFrac : 0.78, wander : 1.00, pull : 0.024, maxCurve : 0.140, damping : 0.950, kink : 0.012, meanderAmp : 11, meanderWave : 170,
+                    { fromFrac : 0.22, toFrac : 0.78, run : 12, turn : 0.42, pull : 0.06,
                       branchEvery : 11 + Math.floor(rand() * 6),
                       branchLen : (band * 0.34) / stepLen, branchUp : 0 });
     if (rand() < 0.5)
       horizontalTrunk(cy + (rand() - 0.5) * band * 0.75, 2.0 + rand() * 0.6, 0.75,
-                      { fromFrac : 0.26, toFrac : 0.74, wander : 1.00, pull : 0.024, maxCurve : 0.140, damping : 0.950, kink : 0.012, meanderAmp : 10, meanderWave : 130,
+                      { fromFrac : 0.26, toFrac : 0.74, run : 11, turn : 0.38, pull : 0.06,
                         branchEvery : 18 + Math.floor(rand() * 8),
                         branchLen : (band * 0.24) / stepLen, branchUp : 0 });
   } else if (style === 'lattice') {
@@ -543,7 +508,7 @@ function generateIntraCloudBolt(width, height, seed, variant)
      */
     const upperY = cy - band * (0.18 + rand() * 0.14);
     const lowerY = cy + band * (0.18 + rand() * 0.14);
-    const trunkOpts = { fromFrac : 0.20, toFrac : 0.80, wander : 1.00, pull : 0.024, maxCurve : 0.140, damping : 0.950, kink : 0.012, meanderAmp : 11, meanderWave : 170 }; // undulating, not a ruler
+    const trunkOpts = { fromFrac : 0.20, toFrac : 0.80, run : 12, turn : 0.42, pull : 0.06 };
     horizontalTrunk(upperY, 2.8 + rand() * 0.7, 1.0, trunkOpts);
     horizontalTrunk(lowerY, 2.6 + rand() * 0.7, 0.95, trunkOpts);
 
