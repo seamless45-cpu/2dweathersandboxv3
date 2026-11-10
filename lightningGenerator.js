@@ -221,7 +221,7 @@ function generateIntraCloudBolt(width, height, seed, variant)
    * STROKE_SCALE times thicker; tone() still works from the unscaled width, so
    * the brightness of every channel is unchanged.
    */
-  const STROKE_SCALE = 3.0;
+  const STROKE_SCALE = 1.5;
 
   /* wide faint glow pass + narrow bright core pass */
   function strokePath(pts, w, gain) {
@@ -427,7 +427,7 @@ function generateIntraCloudBolt(width, height, seed, variant)
   const webStyle = { wander : 2.50, pull : 0.028, maxCurve : 0.240, damping : 0.955, fork0 : 0.024, forkN : 0.032, spread : 0.55, kink : 0.022, vertical : false };
 
   if (style === 'spider') {
-    drawHalo(0.05, 0.07);
+    drawHalo(0.012, 0.020);
 
     /* --- primary filaments: several layered spiders around the origin --- */
     const nPrimary = 8 + Math.floor(rand() * 3);          // 8..10
@@ -464,7 +464,7 @@ function generateIntraCloudBolt(width, height, seed, variant)
                    len, 0.9 + rand() * 0.6, 0.70, 1, queue, spiderStyle);
     }
   } else if (style === 'crawler') {
-    drawHalo(0.04, 0.06);
+    drawHalo(0.010, 0.015);
 
     /* one long channel sweeps the whole layer, dropping a comb of short, steep
        branches as it goes: the "crawler" look */
@@ -478,7 +478,7 @@ function generateIntraCloudBolt(width, height, seed, variant)
                         branchEvery : 18 + Math.floor(rand() * 8),
                         branchLen : (band * 0.24) / stepLen, branchUp : 0 });
   } else if (style === 'lattice') {
-    drawHalo(0.045, 0.07);
+    drawHalo(0.012, 0.018);
 
     /*
      * Two trunks running through the layer at different heights, tied together
@@ -511,7 +511,7 @@ function generateIntraCloudBolt(width, height, seed, variant)
                    1.0 + rand() * 0.6, 0.75, 1, queue, webStyle);
     }
   } else { // 'web'
-    drawHalo(0.035, 0.04);
+    drawHalo(0.008, 0.012);
 
     /*
      * Several small centres, each throwing out short rays: the mesh of a dense

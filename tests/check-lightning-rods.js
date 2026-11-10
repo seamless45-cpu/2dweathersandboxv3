@@ -85,9 +85,9 @@ check('IC artwork is sampled zoomed-in so its curves reach the screen',
   /uniform float icArtZoom/.test(displayShader) && /local \* icArtZoom/.test(displayShader) &&
   /const icArtZoom = 0\.\d+/.test(appSource) &&
   parseFloat((appSource.match(/const icArtZoom = (0\.\d+)/) || [])[1]) < 1.0);
-check('IC strokes are drawn heavier than a hairline',
+check('IC strokes are thin enough to read as channels, not slabs',
   /const STROKE_SCALE = [\d\.]+/.test(generatorSource) &&
-  parseFloat(generatorSource.match(/const STROKE_SCALE = ([\d\.]+)/)[1]) >= 2.0);
+  parseFloat(generatorSource.match(/const STROKE_SCALE = ([\d\.]+)/)[1]) <= 2.0);
 check('IC channels meander instead of running straight',
   /wanderVel/.test(generatorSource) && /maxCurve/.test(generatorSource) && /kinkChance/.test(generatorSource));
 check('the artwork is generated once per tile from a fixed, versioned seed',
@@ -98,9 +98,11 @@ check('a slot always draws the same flash (no per-strike mirror or stretch)',
   !/vec2 mirrored/.test(displayShader) && !/stretch\.x/.test(displayShader) &&
   !/seedA/.test(displayShader) &&
   /const float revealSpeed = 2\.4;/.test(displayShader));
-check('IC light is masked to where the cloud is',
-  /emittedLight \+= lightningICLight \* icCloudMask/.test(displayShader) &&
-  /float icCloudMask = smoothstep\([^)]*cloudOpacity\)/.test(displayShader));
+// the flash is no longer masked by cloud density: staying inside the cloud is
+// the artwork's job (small sprite + tight meander), not a shader mask
+check('IC light is not masked by the cloud',
+  !/icCloudMask/.test(displayShader) &&
+  /emittedLight \+= lightningICLight \//.test(displayShader));
 check('IC flashes stay cloud-scale, not storm-scale',
   /const icFlashWidthMeters = (\d+)/.test(appSource) &&
   Number(appSource.match(/const icFlashWidthMeters = (\d+)/)[1]) <= 8000 &&
