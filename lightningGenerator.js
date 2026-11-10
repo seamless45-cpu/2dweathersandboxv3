@@ -246,8 +246,33 @@ function generateIntraCloudBolt(width, height, seed, variant)
     const minW = Math.max(0.22, w0 * 0.12);
     const forkChance = depth === 0 ? st.fork0 : st.forkN;
 
+    /*
+     * Real IC channels are tortuous: they bend smoothly over tens of pixels and
+     * then kink. Per-step white noise cannot do that (it produces a straight
+     * line with fuzz on it), so the heading carries a velocity that is damped
+     * every step: the channel draws a long, smooth meander, and an occasional
+     * geniculate kink adds the sharp corner that lightning actually has.
+     *
+     * All of it comes from the seeded PRNG, so the curve is baked into the
+     * artwork: it is identical every time this tile is used and can never
+     * change while a flash is on screen.
+     */
+    let wanderVel = (rand() - 0.5) * st.wander;
+    const kinkChance = st.kink === undefined ? 0.012 : st.kink;
+
+    // The heading is a damped random walk, clamped so it can bend the channel
+    // but never let it coil up on itself: a few gentle S-bends per channel, the
+    // way a real IC channel runs, with the kinks below for the sharp corners.
+    const maxCurve = st.maxCurve === undefined ? 0.09 : st.maxCurve;
+    const damping = st.damping === undefined ? 0.90 : st.damping;
+
     for (let i = 0; i < len; i++) {
-      a += (rand() - 0.5) * st.wander;
+      wanderVel += (rand() - 0.5) * st.wander * 0.30;
+      wanderVel *= damping;
+      wanderVel = clamp(wanderVel, -maxCurve, maxCurve);
+      a += wanderVel;
+      if (rand() < kinkChance)
+        a += (rand() < 0.5 ? -1 : 1) * (0.30 + rand() * 0.55);
       // Pull back toward the axis this filament is already travelling along
       // (NOT toward 0, which used to turn every left-going branch around and
       // pile the whole flash onto one side of the image).
@@ -309,12 +334,23 @@ function generateIntraCloudBolt(width, height, seed, variant)
     const pts = [x, y];
     const steps = Math.ceil((spanEnd - spanStart) / stepLen);
 
+    // same heading-momentum meander as growFilament: a trunk is a curve too
+    let wanderVel = (rand() - 0.5) * (opts.wander || 0.60);
+    const trunkKink = opts.kink === undefined ? 0.010 : opts.kink;
+
+    const maxCurve = opts.maxCurve === undefined ? 0.075 : opts.maxCurve;
+
     for (let i = 0; i < steps; i++) {
-      a += (rand() - 0.5) * (opts.wander || 0.30);
+      wanderVel += (rand() - 0.5) * (opts.wander || 0.60) * 0.30;
+      wanderVel *= 0.90;
+      wanderVel = clamp(wanderVel, -maxCurve, maxCurve);
+      a += wanderVel;
+      if (rand() < trunkKink)
+        a += (rand() < 0.5 ? -1 : 1) * (0.25 + rand() * 0.40);
       let da = -a;                                 // pull back to horizontal
       while (da > Math.PI) da -= Math.PI * 2;
       while (da < -Math.PI) da += Math.PI * 2;
-      a += da * (opts.pull || 0.22);
+      a += da * (opts.pull || 0.10);
 
       x = Math.min(x + Math.cos(a) * stepLen, spanEnd);
       y = clamp(y + Math.sin(a) * stepLen, bandLo, bandHi);
@@ -368,9 +404,9 @@ function generateIntraCloudBolt(width, height, seed, variant)
     }
   }
 
-  const spiderStyle = { wander : 0.40, pull : 0.08, fork0 : 0.016, forkN : 0.028, spread : 0.50, vertical : false };
-  const branchStyle = { wander : 0.42, pull : 0.06, fork0 : 0.018, forkN : 0.026, spread : 0.60, vertical : true };
-  const webStyle = { wander : 0.45, pull : 0.08, fork0 : 0.024, forkN : 0.032, spread : 0.55, vertical : false };
+  const spiderStyle = { wander : 0.90, pull : 0.050, maxCurve : 0.085, fork0 : 0.016, forkN : 0.028, spread : 0.50, kink : 0.014, vertical : false };
+  const branchStyle = { wander : 1.00, pull : 0.045, maxCurve : 0.095, fork0 : 0.018, forkN : 0.026, spread : 0.60, kink : 0.020, vertical : true };
+  const webStyle = { wander : 1.00, pull : 0.050, maxCurve : 0.095, fork0 : 0.024, forkN : 0.032, spread : 0.55, kink : 0.022, vertical : false };
 
   if (style === 'spider') {
     drawHalo(0.05, 0.07);
@@ -415,12 +451,12 @@ function generateIntraCloudBolt(width, height, seed, variant)
     /* one long channel sweeps the whole layer, dropping a comb of short, steep
        branches as it goes: the "crawler" look */
     horizontalTrunk(cy + (rand() - 0.5) * band * 0.20, 3.6 + rand() * 0.8, 1.0,
-                    { fromFrac : 0.10, toFrac : 0.90, wander : 0.45, pull : 0.06,
+                    { fromFrac : 0.10, toFrac : 0.90, wander : 0.80, pull : 0.060, maxCurve : 0.070, kink : 0.012,
                       branchEvery : 11 + Math.floor(rand() * 6),
                       branchLen : (band * 0.34) / stepLen, branchUp : 0 });
     if (rand() < 0.5)
       horizontalTrunk(cy + (rand() - 0.5) * band * 0.75, 2.0 + rand() * 0.6, 0.75,
-                      { fromFrac : 0.18, toFrac : 0.82, wander : 0.45, pull : 0.06,
+                      { fromFrac : 0.18, toFrac : 0.82, wander : 0.80, pull : 0.060, maxCurve : 0.070, kink : 0.012,
                         branchEvery : 18 + Math.floor(rand() * 8),
                         branchLen : (band * 0.24) / stepLen, branchUp : 0 });
   } else if (style === 'lattice') {
@@ -434,7 +470,7 @@ function generateIntraCloudBolt(width, height, seed, variant)
      */
     const upperY = cy - band * (0.18 + rand() * 0.14);
     const lowerY = cy + band * (0.18 + rand() * 0.14);
-    const trunkOpts = { fromFrac : 0.10, toFrac : 0.90, wander : 0.45, pull : 0.07 }; // undulating, not a ruler
+    const trunkOpts = { fromFrac : 0.10, toFrac : 0.90, wander : 0.85, pull : 0.055, maxCurve : 0.072, kink : 0.012 }; // undulating, not a ruler
     horizontalTrunk(upperY, 2.8 + rand() * 0.7, 1.0, trunkOpts);
     horizontalTrunk(lowerY, 2.6 + rand() * 0.7, 0.95, trunkOpts);
 
