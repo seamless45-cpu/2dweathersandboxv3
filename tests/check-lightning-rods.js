@@ -79,6 +79,11 @@ check('the IC generator offers four different patterns',
   'IC_VARIANTS = ' + icVariants);
 check('each atlas tile asks for its own pattern',
   /variant : tileIndex/.test(appSource) && /msg\.variant/.test(generatorSource));
+check('IC channels meander instead of running straight',
+  /wanderVel/.test(generatorSource) && /maxCurve/.test(generatorSource) && /kinkChance/.test(generatorSource));
+check('the artwork is generated once per tile from a fixed, versioned seed',
+  /seed : 1013 \+ tileIndex \* 7919/.test(appSource) &&
+  /new Worker\('\.\/lightningGenerator\.js\?v=/.test(appSource));
 check('a slot always draws the same flash (no per-strike mirror or stretch)',
   // the shader must not derive any per-strike variation from the strike time
   !/vec2 mirrored/.test(displayShader) && !/stretch\.x/.test(displayShader) &&
