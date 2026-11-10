@@ -79,15 +79,18 @@ check('the IC generator offers four different patterns',
   'IC_VARIANTS = ' + icVariants);
 check('each atlas tile asks for its own pattern',
   /variant : tileIndex/.test(appSource) && /msg\.variant/.test(generatorSource));
-check('every flash mirrors and stretches its artwork',
-  /mirror/i.test(displayShader) && /icSpriteSize\.x \* stretch\.x/.test(displayShader));
+check('a slot always draws the same flash (no per-strike mirror or stretch)',
+  // the shader must not derive any per-strike variation from the strike time
+  !/vec2 mirrored/.test(displayShader) && !/stretch\.x/.test(displayShader) &&
+  !/seedA/.test(displayShader) &&
+  /const float revealSpeed = 2\.4;/.test(displayShader));
 check('IC light is masked to where the cloud is',
   /emittedLight \+= lightningICLight \* icCloudMask/.test(displayShader) &&
   /float icCloudMask = smoothstep\([^)]*cloudOpacity\)/.test(displayShader));
-check('IC flashes are cloud-scale, not storm-scale',
+check('IC flashes stay cloud-scale, not storm-scale',
   /const icFlashWidthMeters = (\d+)/.test(appSource) &&
-  Number(appSource.match(/const icFlashWidthMeters = (\d+)/)[1]) <= 6000 &&
-  Number(appSource.match(/const icFlashHeightMeters = (\d+)/)[1]) <= 3000,
+  Number(appSource.match(/const icFlashWidthMeters = (\d+)/)[1]) <= 4000 &&
+  Number(appSource.match(/const icFlashHeightMeters = (\d+)/)[1]) <= 2000,
   'width ' + (appSource.match(/const icFlashWidthMeters = (\d+)/) || [])[1] +
   ', height ' + (appSource.match(/const icFlashHeightMeters = (\d+)/) || [])[1]);
 check('rod snaps are gated to cloud-to-ground strikes',
