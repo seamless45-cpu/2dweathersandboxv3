@@ -55,6 +55,11 @@ uniform float displayVectorField;
 uniform float iterNum;
 uniform bool volumetricCloudLighting;
 
+// Set to 1.0 for the second, additive draw of this same program: that draw
+// returns nothing but the intra-cloud light (see computeICLight and the draw in
+// app.js) and leaves the scene alone.
+uniform float icLightPass;
+
 out vec4 fragmentColor;
 
 #include "common.glsl"
@@ -77,11 +82,14 @@ float opacity = 1.0;
 
 vec3 emittedLight = vec3(0.); // pure light, like lightning
 
-// Intra-cloud light is kept apart from emittedLight so it can be blended with
-// its own alpha. It is the only emission that is *not* overwhelmingly brighter
-// than the sky, so it is the only one where a dim value can darken what it is
-// drawn over (see the composite at the end of main).
-vec3 icEmission = vec3(0.);
+// Intra-cloud light is not part of this pass at all: it is drawn afterwards, on
+// top of the finished scene, by a second additive draw of this program (see
+// computeICLight and the draw in app.js). Alpha blending can only *trade* a
+// backdrop for a source, so a channel drawn in an alpha-blended fragment has to
+// give up as much cloud as it is opaque - and a sunlit cloud is brighter than
+// the light of a channel, so the channel lost that trade and disappeared inside
+// it. An addition cannot lose: the cloud stays exactly as it is and the channel
+// sits on top of it.
 
 float shadowLight;
 
@@ -261,12 +269,14 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   vec2 edge = abs(local) * 2.0; // 0 at the centre, 1 at the sprite border
   float window = (1.0 - smoothstep(0.45, 0.9, edge.x)) * (1.0 - smoothstep(0.45, 0.9, edge.y));
 
-  // The artwork is mostly soft halo with thin bright channels; the power curve
-  // keeps the channels while stopping the halo from blowing out the scene. The
-  // brightness is deliberately modest: an IC flash is several times dimmer than
-  // a CG return stroke (which peaks at 100000), and pushing it higher makes the
-  // dense middle of the artwork clip to a white blob instead of reading as
-  // channels.
+  // The artwork is the light itself: a channel's luminance is how much light it
+  // emits, and the brightness below only sets what one full tile is worth. There
+  // used to be a square here, from when every channel sat on a soft halo that
+  // had to be kept from blowing out the scene. With the halo gone the square
+  // only crushed the channels: at the ~60 pixels a flash covers, the tile is
+  // minified about 8:1, so a hairline channel samples to a tenth of its artwork
+  // value, and squaring that left a channel with well under one unit of light -
+  // plain on a dark sky, invisible against a sunlit cloud (which is ~1).
   const float icBrightness = 60.0;
 
   // The strike intensity curve peaks around 20 for a couple of iterations.
@@ -276,11 +286,48 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   // the flash in the range a thin channel can carry.
   float icPower = currentLightningIntensity / (1.0 + currentLightningIntensity * 0.85);
 
-  pixVal = pow(max(pixVal, 0.0), 2.0) * reveal * window * icPower * icBrightness;
+  pixVal = max(pixVal, 0.0) * reveal * window * icPower * icBrightness;
 
   const vec3 icCol = vec3(0.58, 0.66, 1.0); // cooler than the CG stroke
 
   return max(pixVal * icCol, vec3(0.0));
+}
+
+
+// Light of every running intra-cloud flash, and nothing else.
+//
+// This is drawn as a second, additive pass over the finished scene (see the draw
+// in app.js), so it is added to whatever a pixel already shows and can neither
+// replace a cloud nor darken anything. No cloud mask and no depth attenuation:
+// an intra-cloud flash is *inside* the cloud, so the cloud it was born in is not
+// something the light has to get through - it is the medium that scatters it
+// towards the viewer.
+//
+// Between the flashes the pass returns zero and the additive draw is a no-op,
+// which is why it can safely run every frame.
+vec3 computeICLight()
+{
+  vec3 icLight = vec3(0.0);
+  for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
+    vec4 lightningData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
+    float lightningStartIterNum = lightningData[START_ITERNUM];
+    if (lightningStartIterNum <= 0.0)
+      continue; // never used / released
+    float lightningAge = iterNum - lightningStartIterNum;
+    if (lightningAge < 0.0 || lightningAge > LIGHTNING_ANIM_ITERS)
+      continue; // animation already finished
+    if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY)
+      continue; // cloud-to-ground stroke, drawn by the scene pass
+
+    vec2 lightningPos = lightningData.xy;
+    float lightningTime = calcLightningTime(lightningStartIterNum);
+    float currentLightningIntensity = lightningIntensityOverTime(lightningTime, lightningPos, lightningData[INTENSITY]);
+    if (currentLightningIntensity <= 0.0)
+      continue;
+
+    icLight += displayICLightning(lightningPos, lightningTime, currentLightningIntensity, slot);
+  }
+  return max(icLight, vec3(0.0));
 }
 
 
@@ -391,7 +438,6 @@ vec4 getAirColor(vec2 fragCoordIn)
   // Every strike in the slot array is drawn until its own animation is over.
   // Slots are independent, so a new strike never truncates a running one.
   vec3 lightningBoltLight = vec3(0.0); // cloud-to-ground strokes
-  vec3 lightningICLight = vec3(0.0);   // intra-cloud flashes
   for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
     vec4 lightningData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
     float lightningStartIterNum = lightningData[START_ITERNUM];
@@ -407,10 +453,10 @@ vec4 getAirColor(vec2 fragCoordIn)
     if (currentLightningIntensity <= 0.0)
       continue;
 
-    if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY) // cloud-to-ground return stroke
+    // Cloud-to-ground strokes light the scene here; intra-cloud flashes are the
+    // additive pass, so they only contribute their light-on-objects term below.
+    if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY)
       lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight(lightningPos));
-    else                                                       // intra-cloud flash
-      lightningICLight += displayICLightning(lightningPos, lightningTime, currentLightningIntensity, slot);
 
     vec2 dist = vec2(lightningPos.x - texCoord.x, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1), 0.));
     dist.x *= aspectRatios[0];
@@ -420,14 +466,6 @@ vec4 getAirColor(vec2 fragCoordIn)
   }
 
   emittedLight += lightningBoltLight / (1. + cloudDensity * 100.0);
-  // No cloud mask: the flash is drawn wherever it is, the way a CG stroke is.
-  // Keeping it inside the cloud is the artwork's job instead - the flash is
-  // small and its channels curl tightly around the strike (see the sprite size
-  // in app.js and the meander in lightningGenerator.js), so a flash never
-  // reaches far enough to stick out of the cloud it formed in. The mild
-  // attenuation with cloud density is depth, not a mask: a flash is seen
-  // through the medium around it.
-  icEmission += lightningICLight / (1. + cloudDensity * 2.5);
 
   return vec4(color, opacity);
 }
@@ -436,6 +474,14 @@ float rand(float n) { return fract(sin(n) * 43758.5453123); }
 
 void main()
 {
+  // Intra-cloud light pass: nothing but the flash light, added on top of the
+  // finished scene by an additive draw (gl.blendFunc(gl.ONE, gl.ONE) in app.js).
+  // Everything the scene pass does - lighting, clouds, terrain - is skipped.
+  if (icLightPass > 0.5) {
+    fragmentColor = vec4(computeICLight(), 0.0);
+    return;
+  }
+
   color = vec3(0.0);
   opacity = 1.0;
   emittedLight = vec3(0.0);
@@ -807,23 +853,10 @@ void main()
 
   opacity += length(emittedLight);
 
-  // The intra-cloud flash is the one emission that is not many times brighter
-  // than what it is drawn over, and alpha blending with a source darker than the
-  // background darkens it. A thin channel is bright (tens of units here), but
-  // while a flash fades the same channel spends a while at a fraction of a unit,
-  // and blending that over the sky is what drew the dark silhouette along the
-  // segments. So the IC light only gets alpha once it is bright enough to be
-  // brighter than any background it can land on; below that it contributes
-  // nothing at all, and a flash fades out instead of turning into a shadow.
-  float icLuma = length(icEmission);
-  float icAlpha = clamp((icLuma - 1.0) * 0.5, 0.0, 1.0);
-  // Divide the light by the alpha it is blended with, so the blend *adds* it
-  // instead of diluting it: out = dst + light - alpha * (dst - base). With the
-  // alpha above, that is never below dst for any backdrop up to ~3 (a sunlit
-  // cloud), which is what makes the fade a fade and not a shadow.
-  vec3 icLight = icAlpha > 0.0 ? icEmission / icAlpha : vec3(0.0);
-  opacity = clamp(opacity + icAlpha, 0.0, 1.0);
-  fragmentColor = vec4(max(color * finalLight, 0.) + emittedLight + icLight, opacity);
+  // The intra-cloud flash is not in this fragment: it is added afterwards, by
+  // the additive light pass (see computeICLight), so it can never trade a cloud
+  // for itself or dim what it is drawn over.
+  fragmentColor = vec4(max(color * finalLight, 0.) + emittedLight, opacity);
 
   drawCursor(cursor, view); // over everything else
 }

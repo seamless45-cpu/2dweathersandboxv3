@@ -120,51 +120,109 @@ check('a slot always draws the same flash (no per-strike mirror or stretch)',
   !/vec2 mirrored/.test(displayShader) && !/stretch\.x/.test(displayShader) &&
   !/seedA/.test(displayShader) &&
   /const float revealSpeed = 2\.4;/.test(displayShader));
-// the flash is no longer masked by cloud density: staying inside the cloud is
-// the artwork's job (small sprite + tight meander), not a shader mask
-check('IC light is not masked by the cloud',
-  !/icCloudMask/.test(displayShader) &&
-  /icEmission \+= lightningICLight \//.test(displayShader));
+// The flash is no longer masked or dimmed by the cloud it is in: light born
+// inside a cloud does not have to get through that cloud, and the cloud is the
+// medium that scatters it towards the viewer.
+const icLightFn = (displayShader.match(/vec3 computeICLight\(\)[\s\S]*?\n\}/) || [''])[0];
+check('IC light is not dimmed by the cloud it is in',
+  icLightFn.length > 0 &&
+  !/cloudDensity/.test(icLightFn) &&
+  !/lightningICLight \//.test(displayShader));
 // The strike curve peaks around 20 for a couple of iterations; driving the
 // artwork straight from it clipped the whole flash to a white slab.
 check('the IC flash brightness is compressed so it cannot clip to a slab',
   /float icPower = currentLightningIntensity \//.test(displayShader) &&
   /\* reveal \* window \* icPower \* icBrightness/.test(displayShader));
 
-// A dim emission blended over the sky darkens it (alpha blending with a source
-// darker than the backdrop), which is what drew a dark silhouette along the
-// channels while a flash faded. The IC light is therefore kept out of the
-// generic emission alpha and given an alpha that only starts once the light is
-// bright enough to be brighter than any backdrop: 0 below 1.0, 1.0 at 3.0.
-check('IC light has its own alpha, gated on being brighter than the backdrop',
-  /vec3 icEmission = vec3\(0\.\)/.test(displayShader) &&
-  /float icLuma = length\(icEmission\)/.test(displayShader) &&
-  /float icAlpha = clamp\(\(icLuma - ([\d\.]+)\) \* ([\d\.]+), 0\.0, 1\.0\)/
-    .test(displayShader) &&
-  /vec3 icLight = icAlpha > 0\.0 \? icEmission \/ icAlpha/
-    .test(displayShader) &&
-  /fragmentColor = vec4\(max\(color \* finalLight, 0\.\) \+ emittedLight \+ icLight, opacity\)/
-    .test(displayShader));
+// A sunlit cloud is brighter than the light of a channel, and alpha blending can
+// only trade a backdrop for a source: a channel had to give up as much cloud as
+// it was opaque and could not pay for it, which is why a flash that was plain
+// against a dark sky was invisible inside a cloud. The light is therefore drawn
+// by its own additive pass on top of the finished scene - addition cannot lose
+// that trade.
+check('the light pass returns only the flash light',
+  /uniform float icLightPass/.test(displayShader) &&
+  /if \(icLightPass > 0\.5\) \{\s*\n\s*fragmentColor = vec4\(computeICLight\(\), 0\.0\);\s*\n\s*return;\s*\n\s*\}/.test(displayShader) &&
+  /vec3 computeICLight\(\)/.test(displayShader) &&
+  /icLight \+= displayICLightning\(/.test(displayShader));
+check('the scene pass carries no IC light any more',
+  /fragmentColor = vec4\(max\(color \* finalLight, 0\.\) \+ emittedLight, opacity\)/.test(displayShader) &&
+  !/icAlpha/.test(displayShader) &&
+  !/icEmission/.test(displayShader));
 {
-  const m = displayShader.match(/float icAlpha = clamp\(\(icLuma - ([\d\.]+)\) \* ([\d\.]+)/);
-  const knee = parseFloat(m[1]), slope = parseFloat(m[2]);
-  // The IC light is blended as: out = dst + L - a * (dst - base), with the light
-  // pre-divided by its alpha. Check that this is never darker than the backdrop,
-  // over the whole plausible range: a flash fading from nothing to full
-  // brightness, over backgrounds from a dark night sky to a sunlit cloud.
-  let worst = Infinity, where = '';
-  for (let dst = 0.02; dst <= 3.0; dst += 0.02) {
-    for (let base = 0; base <= 0.25; base += 0.05) {
-      for (let L = 0; L <= 80; L += 0.05) {
-        const a = Math.min(1, Math.max(0, (L - knee) * slope));
-        const light = a > 0 ? L / a : 0;
-        const out = dst * (1 - a) + (base + light) * a;
-        if (out - dst < worst) { worst = out - dst; where = 'dst ' + dst.toFixed(2) + ', L ' + L.toFixed(2); }
-      }
+  // draw order: set the pass flag, switch to ONE/ONE, draw, reset, restore
+  const passIdx = appSource.indexOf("'icLightPass'), 1.0");
+  const addBlendIdx = appSource.indexOf('gl.blendFunc(gl.ONE, gl.ONE);', passIdx);
+  const passDrawIdx = appSource.indexOf('gl.drawArrays', passIdx);
+  const resetIdx = appSource.indexOf("'icLightPass'), 0.0", passIdx);
+  const restoreIdx = appSource.indexOf('gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);', passIdx);
+  check('the IC light pass is drawn additively and then switched back off',
+    passIdx > 0 && addBlendIdx > passIdx && passDrawIdx > addBlendIdx &&
+    resetIdx > passDrawIdx && restoreIdx > resetIdx,
+    'pass ' + passIdx + ', additive ' + addBlendIdx + ', draw ' + passDrawIdx +
+    ', reset ' + resetIdx + ', restore ' + restoreIdx);
+}
+
+// "Visible inside a cloud" as a number instead of an opinion. Everything below
+// works in HDR units up to the tonemap in postProcessingShader.frag (ACES curve,
+// then a gamma of 2.0 - see shaders/commonDisplay.glsl).
+const toneMap = (c) => {
+  c = Math.max(c, 0);
+  const aces = Math.min(1, Math.max(0, (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14)));
+  return 255 * Math.sqrt(aces);
+};
+check('the display model is the tonemap postProcessingShader.frag applies',
+  /\(color \* \(2\.51 \* color \+ 0\.03\)\) \/ \(color \* \(2\.43 \* color \+ 0\.59\) \+ 0\.14\)/.test(
+    fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'postProcessingShader.frag'), 'utf8')) &&
+  /const float GAMMA = 2\.0;/.test(
+    fs.readFileSync(path.join(ROOT, 'shaders', 'commonDisplay.glsl'), 'utf8')));
+
+{
+  const icBrightness = parseFloat((displayShader.match(/const float icBrightness = ([\d\.]+)/) || [])[1]);
+  const icPowerPeak = 20 / (1 + 20 * 0.85); // the strike curve peaks around 20
+  // luminance of a channel, as the shader computes it (reveal and window are 1
+  // at the core of a flash at full brightness)
+  const channelLight = (artwork) => artwork * icPowerPeak * icBrightness;
+  // a hairline channel in the generated tiles is minified about 8:1 onto the
+  // ~60 pixels a flash covers, so even the brightest strokes sample to roughly
+  // this after filtering
+  const artworkValues = [0.02, 0.04, 0.08, 0.2, 0.5, 1.0];
+  const backdrops = { 'night sky': 0.02, 'day sky': 0.35, 'shaded cloud': 0.55, 'sunlit cloud': 1.0 };
+  let worst = Infinity, worstWhere = '';
+  for (const [name, backdrop] of Object.entries(backdrops)) {
+    for (const art of artworkValues) {
+      const contrast = toneMap(backdrop + channelLight(art)) - toneMap(backdrop);
+      if (contrast < worst) { worst = contrast; worstWhere = name + ' at artwork ' + art; }
     }
   }
-  check('an IC flash can never darken what it is drawn over', worst >= -1e-9,
-    'darkened by ' + worst.toFixed(4) + ' at ' + where);
+  check('an IC channel is visible inside a sunlit cloud', worst >= 12,
+    'weakest channel is only ' + worst.toFixed(1) + '/255 above the backdrop (' + worstWhere + ')');
+
+  // The square that used to be applied to the artwork (it suppressed the halo)
+  // is what made this impossible: it left a hairline channel with a fraction of
+  // a unit of light.
+  const squared = (artwork) => toneMap(1.0 + artwork * artwork * icPowerPeak * icBrightness) - toneMap(1.0);
+  check('the artwork is not squared any more (that crushed thin channels)',
+    !/pow\(max\(pixVal, 0\.0\), 2\.0\)/.test(displayShader) &&
+    squared(0.08) < 12,
+    'squared curve would give ' + squared(0.08).toFixed(1) + '/255');
+
+  // Additive light can only add: over the whole plausible range - a flash
+  // fading from nothing to full brightness, over backdrops from a night sky to
+  // a sunlit cloud - the picture is never darker, and always brighter as the
+  // light grows.
+  let darkening = 0, inversion = 0;
+  for (let backdrop = 0.02; backdrop <= 3.0; backdrop += 0.02) {
+    let previous = toneMap(backdrop);
+    for (let L = 0; L <= 80; L += 0.05) {
+      const lit = toneMap(backdrop + L);
+      if (lit < toneMap(backdrop)) darkening++;
+      if (lit < previous - 1e-9) inversion++;
+      previous = lit;
+    }
+  }
+  check('an IC flash can never darken what it is drawn over', darkening === 0);
+  check('a fading IC flash faintly brightens instead of flickering darker', inversion === 0);
 }
 
 // Glow layers are what a fading flash leaves behind as a dark rim, so an IC
