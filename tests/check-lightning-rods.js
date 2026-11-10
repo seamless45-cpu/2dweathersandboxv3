@@ -60,9 +60,20 @@ check('app.js MAX_LIGHTNING_RODS matches common.glsl',
 check('app.js numLightningSlots matches LIGHTNING_SLOTS',
   appNumSlots === LIGHTNING_SLOTS,
   'app.js ' + appNumSlots + ' vs common.glsl ' + LIGHTNING_SLOTS);
-check('IC atlas has one tile per lightning slot',
-  String(appICtiles).trim() === 'numLightningSlots',
+check('the IC atlas holds eight patterns in a 4x2 grid',
+  String(appICtiles).trim() === 'icLightningAtlasColumns * icLightningAtlasRows' &&
+  /const icLightningAtlasColumns = 4;/.test(appSource) &&
+  /const icLightningAtlasRows = 2;/.test(appSource),
   'got ' + appICtiles);
+check('the shader atlas grid matches app.js',
+  /const vec2 icAtlasTiles = vec2\(4\.0, 2\.0\);/.test(displayShader) &&
+  /const float icTileCount = 8\.0;/.test(displayShader) &&
+  /const float icTileWidthPx = 1024\.0;/.test(displayShader) &&
+  /const icLightningTileWidth = 1024;/.test(appSource));
+check('the atlas texture is sized from those constants',
+  /icLightningTileWidth \* icLightningAtlasColumns/.test(appSource) &&
+  /icLightningTileHeight \* icLightningAtlasRows/.test(appSource) &&
+  /tile % icLightningAtlasColumns/.test(appSource));
 check('both lightning programs declare the rod uniforms',
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(locationShader) &&
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(displayShader));
@@ -70,24 +81,60 @@ check('strike dispatch uses LIGHTNING_IC_MAX_INTENSITY',
   displayShader.includes('lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY'));
 check('IC flashes are drawn with the generator artwork',
   displayShader.includes('displayICLightning') && appSource.includes("mode : 'IC'"));
-// the four atlas tiles are four different IC shapes, and every flash adds its
-// own stretch/mirroring on top of that
+
 const generatorSource = fs.readFileSync(path.join(ROOT, 'lightningGenerator.js'), 'utf8');
+
+// Eight genuinely different shapes, and every one of them is reachable: a name
+// in IC_VARIANTS that no branch draws would be a pattern that never appears.
 const icVariants = (generatorSource.match(/const IC_VARIANTS = \[([^\]]*)\]/) || [])[1];
-check('the IC generator offers four different patterns',
-  icVariants && icVariants.split(',').length === 4,
+const variantNames = icVariants
+  ? icVariants.split(',').map((name) => name.trim().replace(/^'|'$/g, '')).filter(Boolean)
+  : [];
+check('the IC generator offers eight different patterns',
+  variantNames.length === 8,
   'IC_VARIANTS = ' + icVariants);
+check('every IC pattern has its own drawing branch',
+  variantNames.length > 0 && variantNames.every((name) =>
+    new RegExp("style === '" + name + "'").test(generatorSource)),
+  variantNames.filter((name) => !new RegExp("style === '" + name + "'").test(generatorSource)).join(','));
 check('each atlas tile asks for its own pattern',
-  /variant : tileIndex/.test(appSource) && /msg\.variant/.test(generatorSource));
+  /variant : tileIndex % 8/.test(appSource) && /msg\.variant/.test(generatorSource));
+
+// A strike no longer shows the tile belonging to its slot: it picks one of the
+// eight from its own start iteration and position, so consecutive flashes
+// differ. That hash is the whole reason "the same patterns every time" is gone.
+check('every strike picks its own tile instead of inheriting its slot\'s',
+  /float tileHash = fract\(sin\(tileSeed/.test(displayShader) &&
+  /float tileIndex = floor\(tileHash \* icTileCount\);/.test(displayShader) &&
+  /vec2 tile = vec2\(mod\(tileIndex, icAtlasTiles\.x\), floor\(tileIndex \/ icAtlasTiles\.x\)\);/.test(displayShader) &&
+  /lightningStartIterNum \* 0\.6180339 \+ float\(slot\) \* 11\.7/.test(displayShader));
+
 // curvature has to survive the trip to the screen: the artwork is sampled
-// zoomed-in (icArtZoom < 1) and its strokes are drawn heavier than a hairline
+// zoomed-in (icArtZoom < 1) inside the same window the generator draws into
 check('IC artwork is sampled zoomed-in so its curves reach the screen',
   /uniform float icArtZoom/.test(displayShader) && /local \* icArtZoom/.test(displayShader) &&
   /const icArtZoom = 0\.\d+/.test(appSource) &&
   parseFloat((appSource.match(/const icArtZoom = (0\.\d+)/) || [])[1]) < 1.0);
-check('IC strokes are thin enough to read as channels, not slabs',
-  /const STROKE_SCALE = [\d\.]+/.test(generatorSource) &&
-  parseFloat(generatorSource.match(/const STROKE_SCALE = ([\d\.]+)/)[1]) <= 1.5);
+check('the generator draws only inside the window the shader samples',
+  /const IC_STAGE_FRACTION = 0\.\d+/.test(generatorSource) &&
+  Number(generatorSource.match(/const IC_STAGE_FRACTION = (0\.\d+)/)[1]) ===
+    parseFloat(appSource.match(/const icArtZoom = (0\.\d+)/)[1]));
+
+// Hair, not ribbon: the stroke widths are the point of this round.
+const widthConst = (name) => {
+  const match = generatorSource.match(new RegExp('const ' + name + ' = ([\\d.]+);'));
+  return match ? Number(match[1]) : NaN;
+};
+check('IC strands are drawn hair-thin, not as ribbons',
+  !/STROKE_SCALE = [\d.]+ \*/.test(generatorSource) &&
+  widthConst('HAIR_W') > 0 && widthConst('HAIR_W') <= 0.6 &&
+  widthConst('ARM_W') <= 1.6 && widthConst('TRUNK_W') <= 2.0,
+  'HAIR_W=' + widthConst('HAIR_W') + ' ARM_W=' + widthConst('ARM_W') + ' TRUNK_W=' + widthConst('TRUNK_W'));
+check('nothing widens a stroke after it is measured for tone',
+  /ctx\.lineWidth = Math\.max\(0\.35, w\);/.test(generatorSource));
+check('the strands taper, as a filament does',
+  /const taper = st\.taper === undefined/.test(generatorSource) && /w = Math\.max\(minW, w \* taper\)/.test(generatorSource));
+
 // The shader shows the tile as light, so a stroke that is nearly black is a
 // channel that emits nothing: it reads as a dark silhouette instead of a
 // channel. Every stroke has to stay above a floor.
@@ -100,25 +147,28 @@ check('no IC stroke is painted as a black silhouette',
 check('IC strokes only ever brighten the artwork',
   /globalCompositeOperation = 'lighten'/.test(generatorSource) &&
   !/globalCompositeOperation = 'lighter'/.test(generatorSource));
-// A lightning channel is straight runs joined by sharp kinks, not a curve. The
-// IC artwork used to superimpose a sine wave on a smoothed heading, which made
-// it look wavy and wobbly next to a CG stroke; the heading model is now the same
-// kind of thing the CG bolt uses (a heading that holds, then turns).
-check('IC channels are built from runs and kinks, like a CG bolt',
+
+// The heading model is the round-7 change: noise-driven curvature instead of a
+// heading that holds and kinks, which is what collapsed every IC channel into a
+// horizontal noodle.
+check('IC channels are grown from a drifting curvature (curls, not kinks)',
   /function stepHeading\(/.test(generatorSource) &&
-  !/meanderAmp/.test(generatorSource) &&
-  !/meanderWave/.test(generatorSource) &&
-  !/meanderPhase/.test(generatorSource) &&
-  !/wanderVel/.test(generatorSource) &&
-  /s\.runLeft/.test(generatorSource));
-check('every IC shape is tuned for it (run, turn, pull)',
-  (generatorSource.match(/(?:spiderStyle|branchStyle|webStyle) = \{ run : [\d\.]+, turn : [\d\.]+, pull : [\d\.]+/g) || []).length >= 3 &&
-  (generatorSource.match(/run : \d+, turn : [\d\.]+, pull : [\d\.]+/g) || []).length >= 6);
+  /s\.curvTarget \+= \(rand\(\) - 0\.5\) \* st\.curlDrift;/.test(generatorSource) &&
+  /s\.curv \+= \(s\.curvTarget - s\.curv\) \* st\.curlResponse;/.test(generatorSource) &&
+  /s\.axis \+= s\.curv;/.test(generatorSource));
+check('no sine wave, no meander, no heading momentum',
+  !/meanderAmp|meanderWave|meanderPhase/.test(generatorSource) &&
+  !/wanderVel|maxCurve/.test(generatorSource) &&
+  !/s\.runLeft/.test(generatorSource) &&
+  !/Math\.sin\(s\.axis/.test(generatorSource) &&
+  !/Math\.sin\(/.test((generatorSource.match(/function stepHeading[\s\S]*?\n\}/) || [''])[0]));
+check('every IC channel class is tuned for curling (drift, response, maxCurv)',
+  (generatorSource.match(/curlDrift : [\d.]+, curlResponse : [\d.]+, maxCurv : [\d.]+/g) || []).length >= 5);
 
 {
   // The heading model is pure maths, so drive it here instead of trusting the
-  // source: extract stepHeading() and makeRng() from the generator and run a
-  // long channel through them.
+  // source: extract stepHeading() and makeRng() and run a long channel through
+  // them, well inside the layer so the edge steering never fires.
   const fnSrc = (re) => (generatorSource.match(re) || [''])[0];
   const rngSrc = fnSrc(/function makeRng\(seed\) \{[\s\S]*?\n\}/);
   const headingSrc = fnSrc(/function stepHeading\(s, st, y, bandLo, bandHi, rand\) \{[\s\S]*?\n\}/);
@@ -128,70 +178,84 @@ check('every IC shape is tuned for it (run, turn, pull)',
   const makeRng = new Function(rngSrc + '\nreturn makeRng;')();
   const rand = makeRng(20261124);
 
-  const style = generatorSource.match(/const spiderStyle = \{ run : ([\d\.]+), turn : ([\d\.]+), pull : ([\d\.]+)/);
-  check('the spider style is readable', !!style);
-  const st = { run : Number(style[1]), turn : Number(style[2]), pull : Number(style[3]), vertical : false };
+  const styleSrc = (generatorSource.match(/const armStyle = \{[\s\S]*?\};/) || [''])[0];
+  const num = (name) => Number((styleSrc.match(new RegExp(name + ' : ([\\d.]+)')) || [])[1]);
+  const st = {
+    curlDrift : num('curlDrift'), curlResponse : num('curlResponse'), maxCurv : num('maxCurv'),
+    kink : num('kink'), kinkChance : num('kinkChance'), bend : num('bend')
+  };
+  check('the arm style is readable', st.curlDrift > 0 && st.maxCurv > 0 && st.curlResponse > 0);
 
-  // 4000 steps down the middle of the band, so the band reflection never fires:
-  // this measures the shape of a channel, nothing else.
-  const s = { axis : 0, runLeft : 1 };
-  const turns = [], headings = [], runLengths = [];
-  let previous = null, runSoFar = 0;
-  for (let i = 0; i < 4000; i++) {
-    const a = stepHeading(s, st, 0, -1000, 1000, rand);
-    headings.push(a);
-    if (previous !== null) {
-      const turn = Math.abs(a - previous);
-      turns.push(turn);
-      if (turn >= 0.20) { runLengths.push(runSoFar); runSoFar = 0; }
-    }
-    runSoFar++;
-    previous = a;
+  const STEP_LEN_PX = 1024 / 900; // stepLen, in artwork pixels
+  const N = 4000;
+  const s = { axis : 0, curv : 0, curvTarget : 0 };
+  const headings = new Float64Array(N);
+  for (let i = 0; i < N; i++) headings[i] = stepHeading(s, st, 0, -1000, 1000, rand);
+
+  const curv = [];
+  for (let i = 1; i < N; i++) {
+    let d = headings[i] - headings[i - 1];
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    curv.push(d);
   }
-  const straight = turns.filter(t => t <= 0.12).length / turns.length;
-  const kinks = turns.filter(t => t >= 0.20).length / turns.length;
-  const meanRunPx = 1.6 / Math.max(kinks, 1e-9); // stepLen in artwork pixels
-  const sorted = [...turns].sort((a, b) => a - b);
-  const p95Turn = sorted[Math.floor(0.95 * (sorted.length - 1))];
-  // How much of the channel runs at a real angle instead of hugging horizontal:
-  // a ruler-straight channel has almost none, a zigzag has plenty.
-  const steep = headings.filter(a => Math.abs(Math.sin(a)) >= 0.25).length / headings.length;
-  const runs = runLengths.length > 1 ? runLengths : [1];
-  const runMean = runs.reduce((a, b) => a + b, 0) / runs.length;
-  const runStd = Math.sqrt(runs.reduce((a, b) => a + (b - runMean) ** 2, 0) / runs.length);
-  const runVariety = runStd / Math.max(runMean, 1e-9);
+  const absSorted = curv.map(Math.abs).sort((a, b) => a - b);
+  const q = (p) => absSorted[Math.min(absSorted.length - 1, Math.floor(p * absSorted.length))];
+  const radius = (c) => STEP_LEN_PX / Math.max(c, 1e-9);
+  const medianRadius = radius(q(0.5));
+  const tightRadius = radius(q(0.95));
+  const totalTurn = curv.reduce((a, b) => a + Math.abs(b), 0);
 
-  check('an IC channel runs straight between kinks, it does not wave',
-    straight >= 0.70,
-    'only ' + (straight * 100).toFixed(0) + '% of steps hold their heading');
-  check('and it kinks sharply, like a CG stroke',
-    kinks >= 0.03 && kinks <= 0.30,
-    (kinks * 100).toFixed(0) + '% of steps turn by 11 degrees or more');
-  check('the straight runs are long enough to read as straight on screen',
-    meanRunPx >= 8,
-    'a run is ' + meanRunPx.toFixed(0) + ' artwork pixels');
-  // "Straight line patterns" was the next complaint, so the shape has to be
-  // checked for it: the pull that keeps a channel in its charge layer used to
-  // undo every kink before the next one, which left nothing but a horizontal
-  // line with a wobble on it.
+  // How much of the channel runs at a real angle instead of hugging horizontal.
+  const steep = Array.from(headings).filter((a) => Math.abs(Math.sin(a)) >= 0.25).length / N;
+  // Direction reversals: a curler doubles back, a straight line never does.
+  let reversals = 0;
+  for (let i = 1; i < N; i++) {
+    if (Math.cos(headings[i]) * Math.cos(headings[i - 1]) < 0) reversals++;
+  }
+
+  // Curl varies along a strand: window the curvature and see how much the local
+  // amount of bending changes.
+  const windows = [];
+  for (let w = 0; w + 200 <= curv.length; w += 200) {
+    let sum = 0;
+    for (let i = w; i < w + 200; i++) sum += Math.abs(curv[i]);
+    windows.push(sum / 200);
+  }
+  const windowMean = windows.reduce((a, b) => a + b, 0) / windows.length;
+  const windowSpread = Math.sqrt(windows.reduce((a, b) => a + (b - windowMean) ** 2, 0) / windows.length)
+    / Math.max(windowMean, 1e-9);
+
+  check('an IC channel curls, it does not run straight',
+    totalTurn >= Math.PI * 2,
+    'the channel turns through ' + (totalTurn / Math.PI).toFixed(1) + ' pi over the run');
+  check('the curl is hair-sized, not a coil',
+    medianRadius >= 12 && medianRadius <= 120,
+    'median arc radius ' + medianRadius.toFixed(0) + ' artwork px');
+  check('and it tightens into real curls at times',
+    tightRadius <= 30,
+    'the tightest 5% of steps curl on a radius of ' + tightRadius.toFixed(0) + ' artwork px');
+  check('an IC channel doubles back on itself like a hair',
+    reversals >= N / 400,
+    reversals + ' direction reversals in ' + N + ' steps');
   check('an IC channel is not a straight line hugging the horizontal',
-    steep >= 0.65,
-    'only ' + (steep * 100).toFixed(0) + '% of the channel runs at 14 degrees or '
-    + 'more off horizontal (a straight line has almost none)');
-  check('the kinks are big enough to survive the pull',
-    p95Turn >= 0.40,
-    'the biggest 5% of steps turn ' + p95Turn.toFixed(2) + ' rad ('
-    + (p95Turn * 180 / Math.PI).toFixed(0) + ' degrees)');
-  check('runs vary in length, so a flash is not one repeated pattern',
-    runVariety >= 0.30,
-    'run length spread is ' + (runVariety * 100).toFixed(0) + '% of the mean');
+    steep >= 0.45,
+    'only ' + (steep * 100).toFixed(0) + '% of the channel runs at 14 degrees or more off horizontal');
+
+  check('the curl keeps changing along a strand',
+    windowSpread >= 0.25,
+    'bending varies by ' + (windowSpread * 100).toFixed(0) + '% between stretches');
+  check('the curl never exceeds the tightest radius the style allows',
+    absSorted[absSorted.length - 1] <= st.maxCurv + st.kink + 1e-9,
+    'largest step turn ' + absSorted[absSorted.length - 1].toFixed(3) + ' rad, limit '
+    + (st.maxCurv + st.kink).toFixed(3));
 }
 
 check('the artwork is generated once per tile from a fixed, versioned seed',
   /seed : 1013 \+ tileIndex \* 7919/.test(appSource) &&
   /new Worker\('\.\/lightningGenerator\.js\?v=/.test(appSource));
-check('a slot always draws the same flash (no per-strike mirror or stretch)',
-  // the shader must not derive any per-strike variation from the strike time
+check('a flash keeps its pattern for its whole life (no per-frame mirror or stretch)',
+  // the shader must not derive any per-frame variation from the flash's age
   !/vec2 mirrored/.test(displayShader) && !/stretch\.x/.test(displayShader) &&
   !/seedA/.test(displayShader) &&
   /const float revealSpeed = 2\.4;/.test(displayShader));
@@ -265,13 +329,20 @@ check('the display model is the tonemap postProcessingShader.frag applies',
 {
   const icBrightness = parseFloat((displayShader.match(/const float icBrightness = ([\d\.]+)/) || [])[1]);
   const icPowerPeak = 20 / (1 + 20 * 0.85); // the strike curve peaks around 20
+  // The shader also multiplies by the minification of the sprite (artPerPixel,
+  // clamped to 1..8): a hair-thin channel loses that much of itself to
+  // filtering, and getting it back is what keeps a hair bright enough to see
+  // without making every stroke a white slab. 4.3 is a flash covering 120 px.
+  const energyClamp = displayShader.match(/clamp\(artPerPixel, 1\.0, ([\d\.]+)\)/);
+  const icEnergyMax = energyClamp ? Number(energyClamp[1]) : 1;
+  const icEnergy = Math.min(icEnergyMax, 4.3);
   // luminance of a channel, as the shader computes it (reveal and window are 1
   // at the core of a flash at full brightness)
-  const channelLight = (artwork) => artwork * icPowerPeak * icBrightness;
-  // a hairline channel in the generated tiles is minified about 8:1 onto the
-  // ~60 pixels a flash covers, so even the brightest strokes sample to roughly
-  // this after filtering
-  const artworkValues = [0.02, 0.04, 0.08, 0.2, 0.5, 1.0];
+  const channelLight = (artwork) => artwork * icPowerPeak * icBrightness * icEnergy;
+  // What a channel samples to after the tile is minified into a flash of ~120
+  // px: measured from the generated tiles (tools-level raster of the eight
+  // patterns), the faintest hairs land near 0.03 and a bright trunk near 0.5.
+  const artworkValues = [0.03, 0.06, 0.12, 0.3, 0.6, 1.0];
   const backdrops = { 'night sky': 0.02, 'day sky': 0.35, 'shaded cloud': 0.55, 'sunlit cloud': 1.0 };
   let worst = Infinity, worstWhere = '';
   for (const [name, backdrop] of Object.entries(backdrops)) {
@@ -292,7 +363,7 @@ check('the display model is the tonemap postProcessingShader.frag applies',
     let worstInCloud = Infinity, where = '';
     for (const water of [0.005, 0.02, 0.05, 0.1, 0.2, 0.5]) {
       const gain = 1 + scatter * opacityOf(water);
-      for (const art of [0.04, 0.08, 0.2, 0.5, 1.0]) {
+      for (const art of [0.06, 0.12, 0.3, 0.6, 1.0]) {
         const contrast = toneMap(1.0 + channelLight(art) * gain) - toneMap(1.0);
         if (contrast < worstInCloud) { worstInCloud = contrast; where = 'cloud water ' + water + ', artwork ' + art; }
       }
