@@ -6615,8 +6615,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-17.1'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-17.1')
+    loadSourceFile('shaders/common.glsl?v=2026-11-18.1'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-18.1')
   ]);
 
   const [
@@ -7417,7 +7417,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     const tileIndex = nextICLightningTextureIndex++;
-    const icLightningWorker = new Worker('./lightningGenerator.js?v=2026-11-17.1');
+    const icLightningWorker = new Worker('./lightningGenerator.js?v=2026-11-18.1');
     icLightningWorker.onmessage = event => {
       generateICLightningTexture(tileIndex, event.data);
       icLightningWorker.terminate();
@@ -7450,7 +7450,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     const textureIndex = nextLightningTextureIndex++;
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-17.1');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-18.1');
     lightningGeneratorWorker.onmessage = event => {
       generateLightningTexture(textureIndex, event.data);
       lightningGeneratorWorker.terminate();
@@ -7694,18 +7694,25 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'dryLapse'), dryLapse);
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'cellHeight'), cellHeight);
 
-  // Intra-cloud flashes: the generator artwork is 2:1. A flash is a compact
-  // cluster inside the charge layer, not a banner across the sky, so the sprite
-  // is kept small - roughly the thickness of a cloud layer - and sets the same
-  // physical size at any resolution. It is masked by the cloud in
-  // realisticDisplayShader.frag, so anything that does reach past the cloud is
+  // Intra-cloud flashes: the generator artwork is 2:1. The sprite sets the
+  // physical size of a flash - the same at any resolution, and scaled with the
+  // camera like everything else. It is masked by the cloud in
+  // realisticDisplayShader.frag, so anything that reaches past the cloud is
   // simply not drawn.
-  const icFlashWidthMeters = 3600.0;
-  const icFlashHeightMeters = 1800.0;
+  const icFlashWidthMeters = 7000.0;
+  const icFlashHeightMeters = 3500.0;
+
+  // How much of each atlas tile is sampled: 1.0 shows the whole artwork, 0.60
+  // shows its middle at 1.7x. A flash covers only ~150 pixels on screen, so the
+  // whole tile squeezes every bend of a channel into a pixel or two and the
+  // channels read as straight lines; zooming in keeps them visibly curved at
+  // that size. See displayICLightning in realisticDisplayShader.frag.
+  const icArtZoom = 0.60;
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'icLightningTex'), 10);
   gl.uniform2f(gl.getUniformLocation(realisticDisplayProgram, 'icSpriteSize'),
                icFlashWidthMeters / (cellHeight * sim_res_x),
                icFlashHeightMeters / (cellHeight * sim_res_y));
+  gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'icArtZoom'), icArtZoom);
 
   gl.useProgram(precipitationProgram);
   gl.uniform1i(gl.getUniformLocation(precipitationProgram, 'baseTex'), 0);
@@ -9306,7 +9313,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-17.1');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-18.1');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

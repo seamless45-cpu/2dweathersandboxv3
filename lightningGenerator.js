@@ -214,6 +214,15 @@ function generateIntraCloudBolt(width, height, seed, variant)
     return 'rgb(' + c + ',' + c + ',' + c + ')';
   }
 
+  /*
+   * A flash covers roughly 150 pixels on screen while the artwork is 1024
+   * pixels wide, so a channel that is 2 pixels wide here lands on a fraction of
+   * a screen pixel and reads as a stray hairline. Strokes are therefore drawn
+   * STROKE_SCALE times thicker; tone() still works from the unscaled width, so
+   * the brightness of every channel is unchanged.
+   */
+  const STROKE_SCALE = 3.0;
+
   /* wide faint glow pass + narrow bright core pass */
   function strokePath(pts, w, gain) {
     if (pts.length < 4) return;
@@ -222,12 +231,12 @@ function generateIntraCloudBolt(width, height, seed, variant)
     for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
 
     ctx.globalAlpha = 0.30;
-    ctx.lineWidth = Math.max(0.9, w * 2.4);
+    ctx.lineWidth = Math.max(0.9, w * 2.4) * STROKE_SCALE;
     ctx.strokeStyle = tone(w, gain * 0.5);
     ctx.stroke();
 
     ctx.globalAlpha = 0.95;
-    ctx.lineWidth = Math.max(0.4, w);
+    ctx.lineWidth = Math.max(0.4, w) * STROKE_SCALE;
     ctx.strokeStyle = tone(w, gain);
     ctx.stroke();
   }

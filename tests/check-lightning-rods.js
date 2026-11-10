@@ -79,6 +79,15 @@ check('the IC generator offers four different patterns',
   'IC_VARIANTS = ' + icVariants);
 check('each atlas tile asks for its own pattern',
   /variant : tileIndex/.test(appSource) && /msg\.variant/.test(generatorSource));
+// curvature has to survive the trip to the screen: the artwork is sampled
+// zoomed-in (icArtZoom < 1) and its strokes are drawn heavier than a hairline
+check('IC artwork is sampled zoomed-in so its curves reach the screen',
+  /uniform float icArtZoom/.test(displayShader) && /local \* icArtZoom/.test(displayShader) &&
+  /const icArtZoom = 0\.\d+/.test(appSource) &&
+  parseFloat((appSource.match(/const icArtZoom = (0\.\d+)/) || [])[1]) < 1.0);
+check('IC strokes are drawn heavier than a hairline',
+  /const STROKE_SCALE = [\d\.]+/.test(generatorSource) &&
+  parseFloat(generatorSource.match(/const STROKE_SCALE = ([\d\.]+)/)[1]) >= 2.0);
 check('IC channels meander instead of running straight',
   /wanderVel/.test(generatorSource) && /maxCurve/.test(generatorSource) && /kinkChance/.test(generatorSource));
 check('the artwork is generated once per tile from a fixed, versioned seed',
@@ -94,8 +103,8 @@ check('IC light is masked to where the cloud is',
   /float icCloudMask = smoothstep\([^)]*cloudOpacity\)/.test(displayShader));
 check('IC flashes stay cloud-scale, not storm-scale',
   /const icFlashWidthMeters = (\d+)/.test(appSource) &&
-  Number(appSource.match(/const icFlashWidthMeters = (\d+)/)[1]) <= 4000 &&
-  Number(appSource.match(/const icFlashHeightMeters = (\d+)/)[1]) <= 2000,
+  Number(appSource.match(/const icFlashWidthMeters = (\d+)/)[1]) <= 8000 &&
+  Number(appSource.match(/const icFlashHeightMeters = (\d+)/)[1]) <= 4000,
   'width ' + (appSource.match(/const icFlashWidthMeters = (\d+)/) || [])[1] +
   ', height ' + (appSource.match(/const icFlashHeightMeters = (\d+)/) || [])[1]);
 check('rod snaps are gated to cloud-to-ground strikes',

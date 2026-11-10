@@ -24,6 +24,7 @@ uniform sampler2D lightningTex;
 uniform sampler2D lightningDataTex;
 uniform sampler2D icLightningTex; // 2x2 atlas of intra-cloud artwork, one tile per slot
 uniform vec2 icSpriteSize;        // size of one intra-cloud flash, in normalized sim coords
+uniform float icArtZoom;          // fraction of each tile that is sampled (1.0 = whole tile)
 
 uniform sampler2D ambientLightTex;
 
@@ -227,10 +228,18 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   if (abs(local.x) > 0.5 || abs(local.y) > 0.5)
     return vec3(0.0);
 
+  // Only the middle of each tile is sampled (icArtZoom < 1). A flash is roughly
+  // a hundred pixels wide on screen while the artwork is 1024 pixels wide, so
+  // showing the whole tile squeezes every bend of a channel into one or two
+  // pixels and the channels read as straight lines no matter how curved the
+  // artwork is. Sampling a fraction of the tile makes each channel several
+  // times bigger on screen, which is where the curve becomes visible.
+  vec2 artLocal = local * icArtZoom;
+
   // slot -> tile of the atlas (slot % 2, slot / 2)
   vec2 tile = vec2(float(slot - (slot / 2) * 2), float(slot / 2));
   const float inset = 0.005; // keep linear filtering away from the tile seam
-  vec2 uv = tile + vec2(inset) + vec2(local.x + 0.5, 0.5 - local.y) * (1.0 - 2.0 * inset);
+  vec2 uv = tile + vec2(inset) + vec2(artLocal.x + 0.5, 0.5 - artLocal.y) * (1.0 - 2.0 * inset);
   float pixVal = texture(icLightningTex, uv / icAtlasTiles).r;
 
   // The flash spreads outwards from the origin: channels appear at the centre
@@ -244,7 +253,7 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   // Fade the outer part of the sprite out, so a branch never ends in a hard
   // cut where the artwork stops, nor where the cloud mask below clips it.
   vec2 edge = abs(local) * 2.0; // 0 at the centre, 1 at the sprite border
-  float window = (1.0 - smoothstep(0.55, 0.95, edge.x)) * (1.0 - smoothstep(0.55, 0.95, edge.y));
+  float window = (1.0 - smoothstep(0.45, 0.9, edge.x)) * (1.0 - smoothstep(0.45, 0.9, edge.y));
 
   // The artwork is mostly soft halo with thin bright channels; the power curve
   // keeps the channels while stopping the halo from blowing out the scene. The
@@ -252,7 +261,7 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   // a CG return stroke (which peaks at 100000), and pushing it higher makes the
   // dense middle of the artwork clip to a white blob instead of reading as
   // channels.
-  const float icBrightness = 45.0;
+  const float icBrightness = 60.0;
   pixVal = pow(max(pixVal, 0.0), 2.0) * reveal * window * currentLightningIntensity * icBrightness;
 
   const vec3 icCol = vec3(0.58, 0.66, 1.0); // cooler than the CG stroke
