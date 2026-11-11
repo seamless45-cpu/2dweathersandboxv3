@@ -261,7 +261,7 @@ const float icTileWidthPx = 256.0;
 // constant has to be well below one for the tiers to land apart instead of all
 // arriving as the same pure white: at 0.5 a trunk reaches 0.95 of the knee, an
 // arm 0.75 and a hair 0.5, which is a hierarchy the eye can see.
-const float icBrightness = 0.5;
+const float icBrightness = 0.58;
 
 // ---------------------------------------------------------------- the halo ---
 //
@@ -294,7 +294,7 @@ const float icBrightness = 0.5;
 const float icGlowTightBias = 1.5; // extra LOD on top of the sampling LOD
 const float icGlowMidLod = 4.0;
 const float icGlowWideLod = 6.5;
-const float icGlowTight = 0.25;
+const float icGlowTight = 0.32;
 const float icGlowMid = 0.25;
 const float icGlowWide = 0.30;
 // Scattered light is colder than the channel it came from - the cloud absorbs and
@@ -589,7 +589,8 @@ vec4 getAirColor(vec2 fragCoordIn)
   vec3 color = (smokeOrFireCol * smokeOpacity / opacity) + (cloudCol * cloudOpacity * (1. - smokeOpacity) / opacity); // color blending
 
 
-#define lightningOnLightBrightness 0.004 // 0.002
+#define lightningOnLightBrightness 0.004  // 0.002
+#define lightningSkyLightBrightness 0.0011 // the wide lobe of the same flash
 
   // Every strike in the slot array is drawn until its own animation is over.
   // Slots are independent, so a new strike never truncates a running one.
@@ -615,9 +616,18 @@ vec4 getAirColor(vec2 fragCoordIn)
     if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY)
       lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight(lightningPos));
 
+    // The light a strike throws on the clouds around it: one tight lobe that
+    // blows out the cloud right next to the channel, and one wide lobe that lifts
+    // the whole sky it is in. The wide lobe is what makes a return stroke read as
+    // brighter than white rather than as a bright line: the surplus has to go
+    // somewhere the eye can see it, and a cloud is the surface it lands on. Both
+    // lobes scale with the strike's own intensity, so a weak flash only lights its
+    // own neighbourhood.
     vec2 dist = vec2(lightningPos.x - texCoord.x, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1), 0.));
     dist.x *= aspectRatios[0];
-    float lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03);
+    float distanceSquared = pow(length(dist), 2.);
+    float lightningOnLight = lightningOnLightBrightness / (distanceSquared + 0.03);
+    lightningOnLight += lightningSkyLightBrightness / (distanceSquared + 0.45);
     lightningOnLight *= currentLightningIntensity;
     onLight += vec3(lightningOnLight);
   }
@@ -635,7 +645,10 @@ void main()
   // finished scene by an additive draw (gl.blendFunc(gl.ONE, gl.ONE) in app.js).
   // Everything the scene pass does - lighting, clouds, terrain - is skipped.
   if (icLightPass > 0.5) {
-    fragmentColor = vec4(computeICLight(), 0.0);
+    // Clamped through the same ceiling as the scene: an intra-cloud flash lives
+    // far below it, so nothing about its look changes, but no sample it writes
+    // can be infinite either.
+    fragmentColor = vec4(softHdrClamp(computeICLight()), 0.0);
     return;
   }
 
@@ -1011,24 +1024,29 @@ void main()
    * The light and the alpha both have to stay inside what the buffer can hold.
    *
    * The scene is rendered into an RGBA16F framebuffer, whose largest finite
-   * value is 65504, and it is alpha blended. A CG return stroke is 100000 by
-   * design (see displayLightning), so on its own it overflows the buffer to
-   * infinity, and the alpha below - length(emittedLight), also ~100000 - makes
-   * the blend multiply the destination by (1 - alpha), i.e. by a large negative
-   * number. Both come back out of the tonemap divided by itself: NaN, which the
-   * bloom, FXAA and temporal AA passes then smear over the frame as dead pixels.
+   * value is 65504, and it is alpha blended. A CG return stroke is written at a
+   * hundred thousand HDR units and more (see displayLightning), so on its own it
+   * overflows the buffer to infinity, and the alpha below - length(emittedLight),
+   * also in the hundred thousands - makes the blend multiply the destination by
+   * (1 - alpha), i.e. by a large negative number. Both come back out of the
+   * tonemap divided by itself: NaN, which the bloom, FXAA and temporal AA passes
+   * then smear over the frame as dead pixels.
    *
-   * So the light is capped just below the limit and the alpha at 1 (nothing is
-   * more than fully opaque). Everything past ~10 is white on screen already, so
-   * the cap is invisible; it only stops the buffer from overflowing.
+   * softHdrClamp() (common.glsl) is the answer, and it is not a clamp: it
+   * compresses the top of the range instead of cutting it off, so a stroke can
+   * still be written far past white and arrive in the bloom pass brighter than
+   * one that only just overflowed. That extra light is the whole of "brighter
+   * than white" - the tonemap flattens everything over ~3 to white, so the only
+   * place a bolt's surplus energy can show is the halo it scatters, and the halo
+   * is made from this buffer. The alpha is still cut at 1: nothing is more than
+   * fully opaque.
    */
-  const float hdrCeiling = 30000.0;
   opacity = clamp(opacity + length(emittedLight), 0.0, 1.0);
 
   // The intra-cloud flash is not in this fragment: it is added afterwards, by
   // the additive light pass (see computeICLight), so it can never trade a cloud
   // for itself or dim what it is drawn over.
-  fragmentColor = vec4(min(max(color * finalLight, 0.) + emittedLight, vec3(hdrCeiling)), opacity);
+  fragmentColor = vec4(softHdrClamp(max(color * finalLight, 0.) + emittedLight), opacity);
 
   drawCursor(cursor, view); // over everything else
 }

@@ -46,17 +46,24 @@ class StubContext {
     this.globalAlpha = 1;
     this.globalCompositeOperation = 'source-over';
     this._path = [];
+    this._arcs = [];
     this.strokeCount = 0;
     this.segmentCount = 0;
+    this.fillCount = 0;
     this.lineWidths = [];
   }
 
   clearRect() { this.buffer.fill(0); }
 
-  beginPath() { this._path = []; }
+  beginPath() { this._path = []; this._arcs = []; }
   moveTo(x, y) { this._path.push([x, y]); }
   lineTo(x, y) { this._path.push([x, y]); }
   closePath() { /* not used by the generator */ }
+
+  /* A full circle, which is all the generator asks for (a junction spark). A
+   * browser's arc() adds an arc of a circle to the current path and fill()
+   * rasterises it; here the same thing happens, one disc at a time. */
+  arc(x, y, radius) { this._arcs.push([x, y, Math.max(0, radius)]); }
 
   _tone() {
     const style = String(this.strokeStyle).trim();
@@ -85,6 +92,40 @@ class StubContext {
                     this.lineWidth, tone, alpha, mode);
     }
     this._path = [];
+  }
+
+  fill() {
+    if (!this._arcs.length) return;
+    const style = String(this.fillStyle).trim();
+    const saved = this.strokeStyle;
+    this.strokeStyle = style;
+    const tone = this._tone();
+    this.strokeStyle = saved;
+    const alpha = clamp(this.globalAlpha, 0, 1);
+    const mode = this.globalCompositeOperation;
+    this.fillCount++;
+    for (const [cx, cy, radius] of this._arcs) {
+      const reach = radius + 0.75;
+      const minX = Math.max(0, Math.floor(cx - reach));
+      const maxX = Math.min(this.width - 1, Math.ceil(cx + reach));
+      const minY = Math.max(0, Math.floor(cy - reach));
+      const maxY = Math.min(this.height - 1, Math.ceil(cy + reach));
+      for (let y = minY; y <= maxY; y++) {
+        for (let x = minX; x <= maxX; x++) {
+          const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+          const coverage = clamp(radius + 0.5 - d, 0, 1) * alpha;
+          if (coverage <= 0) continue;
+          const index = y * this.width + x;
+          const source = tone * coverage;
+          if (mode === 'lighten')
+            this.buffer[index] = Math.max(this.buffer[index], source);
+          else
+            this.buffer[index] = source + this.buffer[index] * (1 - coverage);
+        }
+      }
+    }
+    this._path = [];
+    this._arcs = [];
   }
 
   _segment(x0, y0, x1, y1, width, tone, alpha, mode) {
@@ -127,7 +168,7 @@ class StubCanvas {
 
   /* What the worker posts back: an 8-bit, single channel picture. */
   transferToImageBitmap() {
-    const { buffer, width, height, strokeCount, segmentCount } = this._context;
+    const { buffer, width, height, strokeCount, segmentCount, fillCount } = this._context;
     const data = new Uint8Array(width * height);
     for (let i = 0; i < data.length; i++)
       data[i] = Math.round(clamp(buffer[i], 0, 1) * 255);
@@ -137,6 +178,7 @@ class StubCanvas {
       data : data,
       strokeCount : strokeCount,
       segmentCount : segmentCount,
+      fillCount : fillCount,
       close() {}
     };
   }

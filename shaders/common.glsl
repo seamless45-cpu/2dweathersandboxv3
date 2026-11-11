@@ -136,6 +136,36 @@ float finiteClamp(float value, float fallback, float minValue, float maxValue)
   return (isnan(value) || isinf(value)) ? fallback : clamp(value, minValue, maxValue);
 }
 
+// The ceiling of the HDR scene, and the one function that may write to it.
+//
+// The scene is rendered into an RGBA16F framebuffer, whose largest finite value
+// is 65504. A cloud-to-ground return stroke is written at a hundred thousand HDR
+// units and up, so a plain clamp turns every bolt into exactly the same value -
+// the ceiling - and there is no headroom left to tell a strong stroke from a weak
+// one. softHdrClamp() compresses the top of the range instead: it is the identity
+// below a few hundred HDR units (where clouds, the sky and an intra-cloud flash
+// live), it is monotonic, and it approaches HDR_CEILING asymptotically, so light
+// above the ceiling still arrives - a stronger bolt feeds a brighter, wider halo
+// through the bloom pass, which is what "brighter than white" looks like on
+// screen.
+//
+// It is also the guard. An infinity maps to the ceiling and a NaN to zero, so a
+// single bad sample can never reach the buffers that the bloom, FXAA and temporal
+// AA passes then smear across the whole frame.
+#define HDR_CEILING 60000.0
+
+float softHdrClamp(float value)
+{
+  if (isnan(value))
+    return 0.0;
+  return HDR_CEILING * (1.0 - exp(-max(value, 0.0) / HDR_CEILING));
+}
+
+vec3 softHdrClamp(vec3 value)
+{
+  return vec3(softHdrClamp(value.r), softHdrClamp(value.g), softHdrClamp(value.b));
+}
+
 void stabilizeBaseState(inout vec4 state)
 {
   state[VX] = finiteClamp(state[VX], 0.0, -4.0, 4.0);
