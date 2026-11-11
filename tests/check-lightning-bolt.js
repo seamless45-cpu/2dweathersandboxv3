@@ -341,6 +341,89 @@ check('the flash network carries light too',
   networkArtwork.data.some((value) => value >= 245),
   'the network is drawn at a 0.15 threshold, but a tile with no bright texel is not a channel');
 
+/* ---------------------------------------- the network curves, it does not rake
+ *
+ * A flash is channels curling through a charge layer, not a rake of straight lines
+ * lying on their side. What makes the difference is the *course*: the heading each
+ * strand is pulled toward used to be one fixed number, so `straighten` returned the
+ * heading to the same direction forever and every leader ran in a straight line with
+ * noise on it. Now the course itself swings, at `waveAmp` either side of the heading
+ * the strand opened on, one full S every `waveLength` pixels - so a channel sweeps up
+ * through the layer, bends back, and sweeps down again.
+ *
+ * These run the real `makeIcStrand`/`icHeadingStep` out of the generator, over the
+ * real tile, and measure two things per strand: how far the path bows away from the
+ * straight line between its ends, and how much of its length it keeps (arcs that run
+ * out of the tile are not curves, they are half a channel).
+ */
+function traceNetwork(rand) {
+  const S = gen.IC_SHAPE;
+  let bow = 0, ratio = 0, reach = 0, n = 0;
+  for (let r = 0; r < 200; r++) {
+    const strand = gen.makeIcStrand(0, 0, rand);
+    let x = 2, y = 128; // the left edge of the tile, mid height: where a leader starts
+    const pts = [[x, y]];
+    for (let i = 0; i < 500; i++) {
+      const angle = gen.icHeadingStep(strand, rand, y / 256);
+      const nextX = x + Math.cos(angle) * S.stepLength;
+      const nextY = y + Math.sin(angle) * S.stepLength;
+      if (nextX < 1 || nextX > 1023 || nextY < 1 || nextY > 255) break;
+      x = nextX; y = nextY; pts.push([x, y]);
+    }
+    if (pts.length < 80) continue;
+    const length = Math.hypot(x - 2, y - 128) || 1;
+    const ux = (x - 2) / length, uy = (y - 128) / length;
+    let deviation = 0;
+    for (const [px, py] of pts)
+      deviation = Math.max(deviation, Math.abs((px - 2) * uy - (py - 128) * ux));
+    bow += deviation; ratio += deviation / length; reach += length; n++;
+  }
+  return {bow : bow / n, ratio : ratio / n, reach : reach / n, strands : n};
+}
+
+const seeded = (seed) => () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+const curvedNetwork = traceNetwork(seeded(4242));
+
+// The same walk with the course nailed down - what this was before: one heading per
+// strand, forever.
+const savedAmplitude = gen.IC_SHAPE.waveAmp;
+const savedSpread = gen.IC_SHAPE.waveAmpSpread;
+gen.IC_SHAPE.waveAmp = 0;
+gen.IC_SHAPE.waveAmpSpread = 0;
+const rakedNetwork = traceNetwork(seeded(4242));
+gen.IC_SHAPE.waveAmp = savedAmplitude;
+gen.IC_SHAPE.waveAmpSpread = savedSpread;
+
+check('a channel sweeps through the layer instead of running in a straight line',
+  curvedNetwork.ratio > 0.095,
+  'the paths bow ' + (curvedNetwork.ratio * 100).toFixed(1) + '% of their own chord; ' +
+  'under about a tenth they read as straight lines with noise on them');
+
+check('that bow is the course swinging, not the buzz',
+  curvedNetwork.bow > rakedNetwork.bow * 1.35,
+  'curved ' + curvedNetwork.bow.toFixed(0) + 'px against ' + rakedNetwork.bow.toFixed(0) +
+  'px with the course nailed down: the arc has to be bigger than the noise or it is not an arc');
+
+check('the arcs stay inside the tile, so a channel keeps its length',
+  curvedNetwork.reach > 500,
+  'mean chord ' + curvedNetwork.reach.toFixed(0) + 'px of a 700px strand: strands that leave the ' +
+  'tile early make the network thinner, not curvier');
+
+const curvedCoverage = [];
+for (let i = 0; i < 8; i++) {
+  const artwork = gen.generateLightningNetwork(1024, 256);
+  let lit = 0;
+  for (const value of artwork.data)
+    if (value > 38) lit++;
+  curvedCoverage.push(lit / artwork.data.length * 100);
+}
+const coverageMin = Math.min(...curvedCoverage);
+const coverageMax = Math.max(...curvedCoverage);
+check('the curved network is still a network: visible, and not a solid web',
+  coverageMin > 6 && coverageMax < 18,
+  'coverage above the display threshold is ' + coverageMin.toFixed(1) + '-'
+  + coverageMax.toFixed(1) + '% of the tile');
+
 restoreCanvas();
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

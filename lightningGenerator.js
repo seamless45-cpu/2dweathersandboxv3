@@ -86,28 +86,6 @@ function makeRng(seed) {
 }
 
 
-/*
- * One step of a channel's heading.
- *
- * The heading is turned by a *curvature*, and the curvature drifts slowly
- * toward a target that itself wanders. Two levels of noise, not one, is what
- * makes a strand look like a hair instead of either a straight line or a
- * spring: over the length of a strand the target gives it a handful of arcs of
- * different radius, while the fast response keeps the path smooth between them.
- * A single random walk of the curvature - the obvious first attempt - has the
- * heading wander so far over a long strand that every channel coils into a
- * loop and the flash turns into a ball of wool.
- *
- * Every now and then a real kink is applied straight to the heading, which is
- * the one thing a channel of ionised air does that a hair does not.
- *
- * A strand that leaves its charge layer is turned back by bending its target
- * curvature (never by snapping its heading), so the fine curl survives the turn
- * instead of being flattened into a run along the edge.
- *
- * `s` is the per-filament state ({axis, curv, curvTarget}); `rand` is passed in
- * rather than closed over so a test can drive the heading deterministically.
- */
 /* ===================== cloud-to-ground bolt ============================== */
 
 /*
@@ -276,6 +254,15 @@ function generateLightningBolt(width, height)
  * drawn with the same antialiased strokes and the same square-of-width radiance as
  * the bolt so the two read as the same phenomenon.
  *
+ * And each leader *curves*. A leader that keeps one heading is a straight line
+ * whatever noise is laid on it, and a flash made of straight lines is a rake lying
+ * on its side - which is what this was. The heading a strand is pulled toward swings
+ * smoothly either side of the direction it opened on (see `waveAmp`/`waveLength` in
+ * IC_SHAPE), so a channel sweeps up through the charge layer, bends back and sweeps
+ * down again, while the buzz rides on top of the sweep. The curves are what make it
+ * read as channels curling inside a cloud rather than as a bundle of filaments shot
+ * out of one point.
+ *
  * The tile is wide and short (2048 x 512, four to one) because the volume a flash
  * occupies is wide and short: the display maps it onto 0.45 of the simulation's
  * width and 0.225 of its height, which is about ten kilometres by three, and at
@@ -298,10 +285,89 @@ const IC_SHAPE = {
   straighten   : 0.05,   // pull back toward the strand's own heading
   forkChance   : 0.0045, // per step, per strand - a fork, not a thicket
   maxLevel     : 2,      // trunk, fork, and one round of sub-forks
-  fanSpread    : 0.22    // rad - how far the leaders leave the horizontal
+  fanSpread    : 0.22,   // rad - how far the leaders leave the horizontal
+
+  // The course a strand follows, not just the buzz around it.
+  //
+  // A leader is not on rails: it propagates through a charge layer that is itself
+  // lumpy, so its heading turns steadily for tens of pixels, bends back when it
+  // reaches the edge of the layer, and turns again. Without that, the strand was a
+  // straight line with noise on it - `straighten` pulled the heading back toward one
+  // fixed target forever - which is what made every flash read as a rake of straight
+  // lines lying on their side instead of a network curling inside the cloud.
+  //
+  // So the target the heading is pulled toward now drifts at `turn` radians a step,
+  // reverses when it has wandered `turnRange` away from where the strand started,
+  // and reverses at random now and then (`turnFlip`) so the arcs are not all the
+  // same length. The buzz (`jitter`) rides on top of it, unchanged: the channel
+  // still crackles, it just no longer runs in a straight line while it does.
+  waveAmp      : 0.50,   // rad - how far the course swings either side of the heading
+                         // the strand opened on. This is the curve: a leader that
+                         // keeps one heading is a straight line, whatever the buzz on
+                         // it, and a flash made of straight lines is a rake.
+  waveAmpSpread : 0.24,  // per strand, +/-: some channels arc wider than others
+  waveLength   : 320.,   // artwork pixels per full S - one bend up and one back down
+  waveLengthSpread : 140.,// per strand, +/- so the bends do not line up across the tile
+  waveKink     : 0.0016, // per step - the chance the course is knocked, so the S's are
+                         // not a clean sinusoid
+  layerEdge    : 0.30    // of the tile's height either side of the middle: the layer
+                         // the charge lives in, beyond which a channel is turned back
+                         // into it rather than out of the tile
 };
 
 const IC_LEVELS = [1.0, 0.70, 0.46]; // channel radiance by fork depth, 0..1
+
+
+/*
+ * The heading of one strand of the network, as a thing that can be watched.
+ *
+ * `makeIcStrand` opens a leader on a heading and a course; `icHeadingStep` advances
+ * one artwork step and returns the heading to draw with. They are separate from
+ * drawing so `tests/check-lightning-bolt.js` can run the real arithmetic and measure
+ * how far a channel turns and how far it bows away from the straight line between its
+ * ends - the two numbers that say "curving" rather than "straight with noise".
+ *
+ * `rand` is passed in rather than closed over, so a test can drive it.
+ */
+function makeIcStrand(heading, target, rand)
+{
+  return {
+    angle : heading,
+    target : target,
+    opening : target,                                            // the heading it opened on
+    phase : rand() * Math.PI * 2.,                               // where in its S it starts
+    amplitude : (IC_SHAPE.waveAmp + (rand() - 0.5) * IC_SHAPE.waveAmpSpread) *
+                (rand() < 0.5 ? -1. : 1.),
+    wavelength : Math.max(120., IC_SHAPE.waveLength + (rand() - 0.5) * IC_SHAPE.waveLengthSpread)
+  };
+}
+
+function icHeadingStep(strand, rand, heightFraction)
+{
+  strand.phase += (Math.PI * 2.) / strand.wavelength;   // one full S every `wavelength` pixels
+  strand.target = strand.opening + Math.sin(strand.phase) * strand.amplitude;
+
+  if (rand() < IC_SHAPE.waveKink)
+    strand.phase += (rand() - 0.5) * 1.4;               // the course is knocked: not a sine
+
+  // The charge sits in the middle of the slab, not on its lid: a channel that has
+  // climbed into the top fifth of the tile is turned back down into it, and one that
+  // has sunk into the bottom fifth back up. Without this the arcs simply run out of
+  // tile, and a network of half-length strands is thinner than a straight one.
+  if (heightFraction !== undefined) {
+    const fromCentre = heightFraction - 0.5;
+    if (Math.abs(fromCentre) > IC_SHAPE.layerEdge) {
+      const inward = fromCentre > 0 ? -1. : 1.;
+      if (strand.target * inward < 0.)
+        strand.target = inward * Math.abs(strand.target);
+    }
+  }
+
+  strand.angle += (rand() - 0.5) * IC_SHAPE.jitter;
+  strand.angle -= (strand.angle - strand.target) * IC_SHAPE.straighten;
+
+  return strand.angle;
+}
 
 
 function generateLightningNetwork(width, height)
@@ -332,7 +398,8 @@ function generateLightningNetwork(width, height)
    */
   function drawStrand(startX, startY, heading, target, steps, lineWidth, level)
   {
-    let x = startX, y = startY, angle = heading;
+    let x = startX, y = startY;
+    const strand = makeIcStrand(heading, target, Math.random);
 
     ctx.beginPath();
     ctx.moveTo(x, y);
@@ -340,8 +407,7 @@ function generateLightningNetwork(width, height)
     ctx.lineWidth = lineWidth;
 
     for (let i = 0; i < steps; i++) {
-      angle += (Math.random() - 0.5) * IC_SHAPE.jitter;
-      angle -= (angle - target) * IC_SHAPE.straighten;
+      const angle = icHeadingStep(strand, Math.random, y / height);
 
       const nextX = x + Math.cos(angle) * IC_SHAPE.stepLength;
       const nextY = y + Math.sin(angle) * IC_SHAPE.stepLength;
@@ -401,6 +467,8 @@ if (typeof module !== 'undefined' && module.exports) {
     makeRng : makeRng,
     generateLightningBolt : generateLightningBolt,
     generateLightningNetwork : generateLightningNetwork,
+    makeIcStrand : makeIcStrand,
+    icHeadingStep : icHeadingStep,
     CG_SHAPE : CG_SHAPE,
     IC_SHAPE : IC_SHAPE,
     ARTWORK_SIZE : ARTWORK_SIZE,
