@@ -9,6 +9,19 @@ details. You should have received a copy of the GNU General Public License along
 with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 
+/*
+ * Which build is running, in the console, once. The cache-buster on this script's own
+ * URL is the answer, and it is worth printing: a service worker serving yesterday's
+ * shell looks exactly like a bug that was already fixed.
+ */
+(function logBuild()
+{
+  const script = document.currentScript;
+  const build = script && script.src ? (script.src.match(/[?&]v=([^&]+)/) || [])[1] : null;
+  if (build)
+    console.info('2D Weather Sandbox - build ' + build);
+})();
+
 function updateSetupSliders()
 {
   let simResX = parseInt(simResSelX.value);
@@ -6724,8 +6737,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.16'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.16')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.17'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.17')
   ]);
 
   const [
@@ -7647,7 +7660,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.16');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.17');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -7727,6 +7740,20 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     if (!document.hidden)
       startLightningTextureWorker();
   });
+
+  // One line in the console, twelve seconds in, saying which pieces of the lightning
+  // pipeline are alive. Two rounds went into "no lightning" with nothing to go on but
+  // a blank sky: this says whether the artwork arrived and whether the worker failed,
+  // which is the difference between a broken upload and a broken strike.
+  setTimeout(() => {
+    if (graphicsContextLost)
+      return;
+    console.info(`Lightning: ${lightningTexturesReady} bolt tile(s), network ` +
+                 `${lightningNetworkReady ? 'ready' : 'missing'}` +
+                 (lightningTextureFailures ? `, ${lightningTextureFailures} worker failure(s)` : ''));
+    if (lightningTexturesReady === 0)
+      console.warn('Lightning: no artwork after twelve seconds, so no channel can be drawn.');
+  }, 12000);
 
   await loadingBar.set(78, 'Preparing render buffers');
 
@@ -9556,7 +9583,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.16');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.17');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

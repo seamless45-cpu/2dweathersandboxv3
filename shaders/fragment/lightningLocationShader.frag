@@ -97,13 +97,22 @@ void main()
   // number becomes k * iterNum: recover k and average the contributions into a
   // single strike instead of throwing the whole iteration away (a dense storm
   // easily produces more than one strike per iteration).
+  //
+  // The count must not be capped. This used to be
+  // `clamp(round(raw / iterNum), 1., 64.)`, and past 64 contributions the texel
+  // then divided to k/64 * iterNum - a start iteration *ahead* of the current one -
+  // which failed the "is this strike from now?" test below. Every strike in a dense
+  // storm was dropped, silently, for the whole session: no channel, no glow, no
+  // thunder, both kinds of lightning, no matter what the artwork did. The start
+  // iteration is therefore not recovered from the sum at all - the texel is cleared
+  // every iteration, so anything in it was formed this iteration - and the count is
+  // only used to average the position and the intensity.
   vec4 incomingRaw = texelFetch(precipFeedbackTex, ivec2(1, 0), 0);
-  float strikeCount = clamp(round(incomingRaw[START_ITERNUM] / max(iterNum, 1.0)), 1.0, 64.0);
+  float strikeCount = max(round(incomingRaw[START_ITERNUM] / max(iterNum, 1.0)), 1.0);
   vec4 incoming = vec4(incomingRaw.xy / strikeCount,
-                       incomingRaw[START_ITERNUM] / strikeCount,
+                       iterNum,
                        incomingRaw[INTENSITY] / strikeCount);
-  bool hasNewStrike = incoming[START_ITERNUM] >= max(iterNum - 1.0, 1.0) &&
-                      incoming[START_ITERNUM] <= iterNum;
+  bool hasNewStrike = incomingRaw[START_ITERNUM] > 0.;
 
   bool duplicate = false;
   int freeSlot = -1;
