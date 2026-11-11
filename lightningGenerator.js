@@ -4,8 +4,8 @@
  *
  * There is one kind of artwork: a cloud-to-ground bolt. One dominant channel
  * grows downward with the classic dendritic forks, drawn the way the original app
- * drew it - one heading, step, kick, pull back toward vertical, and a 4.5 pixel
- * channel (see CG_SHAPE).
+ * drew it - one heading, step, kick, pull back toward vertical, and a 9 pixel
+ * channel on a 2500 x 5000 tile (see CG_SHAPE and ARTWORK_SIZE).
  *
  * Every strike uses it. Intra-cloud flashes used to be a separate network of
  * hair-thin filaments, drawn from eight artwork tiles through their own additive
@@ -18,8 +18,8 @@
  */
 onmessage = (event) => {
   const msg = event.data || {};
-  const width = Math.max(32, Math.round(msg.width || 1250));
-  const height = Math.max(32, Math.round(msg.height || 2500));
+  const width = Math.max(32, Math.round(msg.width || ARTWORK_SIZE.width));
+  const height = Math.max(32, Math.round(msg.height || ARTWORK_SIZE.height));
   const bitmap = generateLightningBolt(width, height);
   postMessage(bitmap, [bitmap]);
 };
@@ -73,18 +73,29 @@ function makeRng(seed) {
  * This is the artwork the app shipped with, and it is where it stays: the shapes
  * and widths tried on top of it (a two-scale heading, a hair-thin channel) were
  * taken back out when the look was restored. The numbers are the original ones -
- * 4.5 artwork pixels for the trunk, half of that at most for a fork - and they
- * are named here only so tests/check-lightning-bolt.js can hold them.
+ * 9 artwork pixels for the trunk, half of that at most for a fork, and a fork that
+ * sheds a fifth of a pixel every time it narrows - and they are named here only so
+ * tests/check-lightning-bolt.js can hold them.
+ *
+ * The tile is the original one too: 2500 by 5000. This repo's fork of the app had
+ * halved both the tile and the channel (1250 x 2500, 4.5 pixels) and doubled the
+ * brightness gain to compensate, which keeps the relative width but throws away
+ * half the texels - the channel is softer and breaks up sooner when the camera
+ * pulls back. The radiance is unchanged by the rescale: pow(lineWidth, 2) is 81
+ * for the trunk either way.
  *
  * Numbers are in artwork pixels per step; a step is one pixel.
  */
+const ARTWORK_SIZE = { width : 2500, height : 5000 }; // the original tile, in pixels
+
 const CG_SHAPE = {
   startAngle : Math.PI / 6., // the channel leaves the cloud leaning
   jitter : 1.4,              // the kick it takes every step, rad
   straighten : 0.08,         // ... and the pull back toward straight down
   branchJitter : 0.7,        // the same, for a fork
-  lineWidth : 4.5,           // artwork pixels - the original trunk width
-  branchWidthRatio : 0.5     // the original fork width: up to half the trunk
+  lineWidth : 9.0,           // artwork pixels - the original trunk width
+  branchWidthRatio : 0.5,    // the original fork width: up to half the trunk
+  taper : 0.2                // artwork pixels a fork sheds each time it narrows
 };
 
 function generateLightningBolt(width, height)
@@ -100,7 +111,7 @@ function generateLightningBolt(width, height)
     const colR = 12;
     const colG = 12;
     const colB = 12;
-    const brightness = Math.pow(lineWidth * 2.0, 2.0);
+    const brightness = Math.pow(lineWidth, 2.0);
     return `rgb(${colR * brightness}, ${colG * brightness}, ${colB * brightness})`;
   }
 
@@ -173,7 +184,7 @@ function generateLightningBolt(width, height)
 
         ctx.strokeStyle = genLightningColor(line_width);
         ctx.stroke();
-        line_width -= 0.1;
+        line_width -= CG_SHAPE.taper;
 
         if (line_width < 0.1)
           return;
@@ -198,6 +209,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     makeRng : makeRng,
     generateLightningBolt : generateLightningBolt,
-    CG_SHAPE : CG_SHAPE
+    CG_SHAPE : CG_SHAPE,
+    ARTWORK_SIZE : ARTWORK_SIZE
   };
 }

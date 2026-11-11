@@ -117,7 +117,7 @@ vec3 getWallColor(float depth)
   return color;
 }
 
-const vec2 lightningTexRes = vec2(1250.0, 2500.0);
+const vec2 lightningTexRes = vec2(2500.0, 5000.0); // the original tile: 9 px channel on a 2500 x 5000 sprite
 const float lightningTexAspect = lightningTexRes.x / lightningTexRes.y;
 
 float calcLightningTime(float startIterNum)
