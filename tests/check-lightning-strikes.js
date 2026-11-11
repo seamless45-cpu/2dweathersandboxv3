@@ -474,6 +474,97 @@ check('a flash re-fires two to four times and a stroke keeps the shipped formula
   /if \(strike\[INTENSITY\] <= LIGHTNING_IC_MAX_INTENSITY\)\s*\n\s*return floor\(map_range\(r, 0\., 1\., 2\.0, 5\.0\)\);/.test(common) &&
   /return floor\(map_range\(r, 0\., 1\., 1\.0, max\(strike\[INTENSITY\] - 0\.5, 0\.\) \* 2\.0\)\);/.test(common),
   'real intra-cloud lightning re-fires over the same network; the shipped formula gave it the fewest strokes of anything');
+/* --------------------------------------- strikes that reach a slot at all */
+
+/*
+ * Two numbers in the spawn path decide whether a lightning channel is ever drawn,
+ * and both of them were wrong in a way nothing else could detect.
+ *
+ * 1. `lightningChanceMultiplier` is a *probability*, so it has to stay below one.
+ *    It was 2.72, which makes the test `random2d(...) < lightningSpawnChance` true
+ *    for every freezing droplet in a dense cloud - hundreds of them in one
+ *    iteration, all adding their record into the same feedback texel.
+ *
+ * 2. The slot pass recovered the number of contributions from that summed texel and
+ *    capped it at 64. Past 64 the division left a start iteration *ahead* of the
+ *    current iteration, the "is this strike from now?" test failed, and the strike
+ *    was dropped. Every iteration. For the whole session. No channel, no glow, no
+ *    thunder, from either kind of lightning.
+ *
+ * So: the probability is a probability again, the count is not capped, and the
+ * cooldown below paces how often a strike may start.
+ */
+const precipitationNumber = (name) =>
+  Number((precipitationVert.match(new RegExp(name + ' = ([\\d.]+)')) || [])[1]);
+const chanceMultiplier = precipitationNumber('lightningChanceMultiplier');
+const densityThreshold = precipitationNumber('lightningCloudDensityThreshold');
+const strikeCooldown = precipitationNumber('minIterationsSinceLastLightningBolt');
+
+check('the chance a freezing droplet emits lightning is a probability, not a certainty',
+  Number.isFinite(chanceMultiplier) && chanceMultiplier > 0 && chanceMultiplier < 0.05,
+  'lightningChanceMultiplier is ' + chanceMultiplier +
+  '; anything near or above one means every droplet in a dense cloud fires, which the slot pass cannot take');
+
+check('a storm strong enough to freeze produces lightning, and the cooldown paces it',
+  (() => {
+    if (!Number.isFinite(strikeCooldown) || strikeCooldown <= 0) return 'no cooldown in the spawn path';
+    // A storm cell: half the iterations are dense enough to freeze and spawn.
+    let seed = 12345;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const starts = [];
+    for (let iterNum = 1; iterNum <= 6000; iterNum++) {
+      const density = iterNum % 2 === 0 ? 1.6 : 0.4;      // one active cell, one quiet sky
+      const chance = Math.max((density - densityThreshold) * chanceMultiplier, 0);
+      const spawns = 200;                                  // freezing droplets that spawned this iteration
+      const atLeastOne = 1 - Math.pow(1 - chance, spawns);
+      const lastStart = starts.length ? starts[starts.length - 1] : -Infinity;
+      if (iterNum - lastStart < strikeCooldown) continue;
+      if (rnd() < atLeastOne) starts.push(iterNum);
+    }
+    if (starts.length < 20) return 'only ' + starts.length + ' strikes in 6000 iterations: still no lightning';
+    const gaps = starts.slice(1).map((v, i) => v - starts[i]);
+    const fastest = Math.min(...gaps);
+    if (fastest < strikeCooldown) return 'a strike started ' + fastest + ' iterations after the last one';
+    return true;
+  })(),
+  'the whole pipeline ends here: no strike in a slot means nothing is ever drawn');
+
+check('the strike count recovered from the summed feedback texel is not capped',
+  !/clamp\(round\(incomingRaw\[START_ITERNUM\]/.test(locationShader) &&
+  !/64\.0\).*strikeCount/.test(locationShader) &&
+  /float strikeCount = max\(round\(incomingRaw\[START_ITERNUM\] \/ max\(iterNum, 1\.0\)\), 1\.0\);/.test(locationShader),
+  'a cap turns a dense storm into a storm with no lightning at all');
+
+check('a strike formed this iteration is recorded, however many droplets made it',
+  (() => {
+    // Ported from lightningLocationShader.frag: the texel holds the sum of k records,
+    // each of them (x, y, iterNum, intensity).
+    const record = (contributions, iterNum) => {
+      const raw = {x : 0, y : 0, start : 0, intensity : 0};
+      for (const [x, y, intensity] of contributions) {
+        raw.x += x; raw.y += y; raw.start += iterNum; raw.intensity += intensity;
+      }
+      const strikeCount = Math.max(Math.round(raw.start / Math.max(iterNum, 1)), 1);
+      return {
+        start : iterNum,
+        hasNewStrike : raw.start > 0,
+        x : raw.x / strikeCount,
+        intensity : raw.intensity / strikeCount
+      };
+    };
+    for (const k of [1, 2, 64, 65, 200, 1200, 5000]) {
+      const contributions = [];
+      for (let i = 0; i < k; i++) contributions.push([0.4, 0.6, 2.0]);
+      const strike = record(contributions, 4000);
+      if (!strike.hasNewStrike) return 'k=' + k + ': the strike was dropped';
+      if (strike.start !== 4000) return 'k=' + k + ': booked at iteration ' + strike.start;
+      if (Math.abs(strike.x - 0.4) > 1e-3) return 'k=' + k + ': the position came out as ' + strike.x;
+      if (Math.abs(strike.intensity - 2.0) > 1e-3) return 'k=' + k + ': the intensity came out as ' + strike.intensity;
+    }
+    return true;
+  })(),
+  'this is the step that was throwing every strike away');
+
 check('a strike is dropped only when every slot is busy',
   /if \(!lightningSlotFree\)/.test(precipitationVert) ||
   /lightningSlotFree &&/.test(precipitationVert),

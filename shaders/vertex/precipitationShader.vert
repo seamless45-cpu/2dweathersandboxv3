@@ -121,14 +121,27 @@ void main()
           newDensity = snowDensity;
 
           const float lightningCloudDensityThreshold = 0.72;         // 3.0 -> 2.5 -> 1.6 -> 0.72
-          const float lightningChanceMultiplier = 2.72;              // 0.0011 -> 0.0033 -> 0.0075 -> 2.72
+          // A *probability* per freezing droplet that spawns in a dense cloud, so it
+          // has to stay well under one. It was 2.72 here, which is not a chance at
+          // all: every spawning droplet in a dense cloud qualified, hundreds of them
+          // wrote into the same feedback texel in one iteration, and the slot pass
+          // threw the summed record away (see lightningLocationShader.frag). The
+          // density of the cloud is what decides, and the cooldown below is what
+          // paces it.
+          const float lightningChanceMultiplier = 0.0075;            // 0.0011 -> 0.0033 -> 0.0075
 
           float cloudPlusPrecipDensity = water[CLOUD] + water[PRECIPITATION];
 
           float lightningSpawnChance = max((cloudPlusPrecipDensity - lightningCloudDensityThreshold) * lightningChanceMultiplier, 0.);
           lightningSpawnChance *= legacyLightningGate; // 0 when legacy cloud-density lightning is disabled
 
-          const float minIterationsSinceLastLightningBolt = 0.; // 50.
+          // The gap between strikes, in iterations. The slot manager lets several
+          // strikes run at once, but it cannot pace how often one *starts*: with no
+          // cooldown a storm that is freezing hard starts one on every iteration it
+          // can, and the sky strobes. Thirty iterations is the original number - half
+          // a second at 60 iterations a second - and it is a floor, not a schedule:
+          // a storm that is not freezing simply produces nothing.
+          const float minIterationsSinceLastLightningBolt = 30.;
 
           // Lightning slots: every running strike owns one slot until its own
           // animation has finished (see lightningLocationShader.frag), so a new
