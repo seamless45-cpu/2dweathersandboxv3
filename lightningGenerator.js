@@ -13,8 +13,10 @@
  * artwork is gone with the pass that used it (see realisticDisplayShader.frag).
  *
  * Protocol:
- *   worker.postMessage({width, height})  -> bolt bitmap
- * The worker always posts back the ImageBitmap itself.
+ *   worker.postMessage({width, height})                  -> bolt artwork
+ *   worker.postMessage({kind: 'network', width, height})  -> intra-cloud network
+ * The worker posts back {width, height, data} with data a Uint8Array of one byte
+ * per texel, transferred - not an ImageBitmap. See readRedChannel below for why.
  */
 onmessage = (event) => {
   const msg = event.data || {};
@@ -22,9 +24,42 @@ onmessage = (event) => {
   const fallback = network ? IC_ARTWORK_SIZE : ARTWORK_SIZE;
   const width = Math.max(32, Math.round(msg.width || fallback.width));
   const height = Math.max(32, Math.round(msg.height || fallback.height));
-  const bitmap = network ? generateLightningNetwork(width, height) : generateLightningBolt(width, height);
-  postMessage(bitmap, [bitmap]);
+  const artwork = network ? generateLightningNetwork(width, height) : generateLightningBolt(width, height);
+  postMessage(artwork, [artwork.data.buffer]);
 };
+
+
+/*
+ * The artwork leaves as one byte per texel, not as an ImageBitmap.
+ *
+ * A canvas is RGBA whatever is drawn on it, so handing a bitmap to texImage2D asks
+ * the driver to take a 50 MB four-channel picture and make a 12.5 MB single-channel
+ * texture out of it. On a machine that is already short of graphics memory that
+ * temporary is the difference between a texture and a lost context. Reading the red
+ * channel out here costs one pass over the pixels, in the worker, and then exactly
+ * the 12.5 MB the texture needs crosses to the main thread. Every channel of the
+ * artwork holds the same value, so the red channel is the picture.
+ *
+ * The counters are the stub canvas's (see tests/ic-canvas-stub.js), which is how
+ * the harness counts segments; in a browser they are simply undefined.
+ */
+function readRedChannel(ctx, width, height)
+{
+  const rgba = ctx.getImageData(0, 0, width, height).data;
+  const data = new Uint8Array(width * height);
+  for (let i = 0, j = 0; i < data.length; i++, j += 4)
+    data[i] = rgba[j];
+
+  return {
+    width : width,
+    height : height,
+    data : data,
+    strokeCount : ctx.strokeCount,
+    segmentCount : ctx.segmentCount,
+    fillCount : ctx.fillCount,
+    close() {}
+  };
+}
 
 
 /* Deterministic little PRNG (mulberry32) so a seed gives a stable bolt. */
@@ -103,7 +138,11 @@ const CG_SHAPE = {
 function generateLightningBolt(width, height)
 {
   const lightningCanvas = new OffscreenCanvas(width, height);
-  const ctx = lightningCanvas.getContext('2d');
+  // willReadFrequently keeps the canvas in system memory instead of asking the GPU
+  // for a 2500 x 5000 RGBA backing store - fifty megabytes, for artwork that is
+  // drawn once and then handed over as an R8 texture. On a machine whose graphics
+  // memory is already tight, that allocation is as much of a problem as the texture.
+  const ctx = lightningCanvas.getContext('2d', {willReadFrequently : true});
 
   ctx.clearRect(0, 0, width, height);
 
@@ -157,7 +196,7 @@ function generateLightningBolt(width, height)
   ctx.stroke();
 
 
-  return lightningCanvas.transferToImageBitmap();
+  return readRedChannel(ctx, width, height);
 
 
   function drawBranch(startX, startY, targetAngle, line_width)
@@ -256,7 +295,7 @@ const IC_LEVELS = [1.0, 0.70, 0.46]; // channel radiance by fork depth, 0..1
 function generateLightningNetwork(width, height)
 {
   const lightningCanvas = new OffscreenCanvas(width, height);
-  const ctx = lightningCanvas.getContext('2d');
+  const ctx = lightningCanvas.getContext('2d', {willReadFrequently : true}); // see generateLightningBolt
 
   ctx.clearRect(0, 0, width, height);
   ctx.lineCap = 'round';
@@ -341,7 +380,7 @@ function generateLightningNetwork(width, height)
                IC_SHAPE.trunkWidth * IC_SHAPE.trunkRatio * (0.75 + Math.random() * 0.25), 1);
   }
 
-  return lightningCanvas.transferToImageBitmap();
+  return readRedChannel(ctx, width, height);
 }
 
 

@@ -55,6 +55,21 @@ class StubContext {
 
   clearRect() { this.buffer.fill(0); }
 
+  /* The read the generator does: the canvas as a browser hands it over, four
+   * channels of 8-bit, the same value in every one because the artwork is
+   * greyscale. */
+  getImageData(x0, y0, w, h) {
+    const data = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const v = Math.round(clamp(this.buffer[(y0 + y) * this.width + (x0 + x)], 0, 1) * 255);
+        const o = (y * w + x) * 4;
+        data[o] = v; data[o + 1] = v; data[o + 2] = v; data[o + 3] = 255;
+      }
+    }
+    return { width : w, height : h, data : data };
+  }
+
   beginPath() { this._path = []; this._arcs = []; }
   moveTo(x, y) { this._path.push([x, y]); }
   lineTo(x, y) { this._path.push([x, y]); }

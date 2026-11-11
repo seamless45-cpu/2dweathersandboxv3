@@ -4568,6 +4568,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     if (graphicsContextLost)
       return;
     graphicsContextLost = true;
+    // The budget was exceeded. Remember it, so the next load asks for one bolt
+    // tile instead of two (see numLightningTextures in app.js).
+    try {
+      localStorage.setItem('lightningTileBudget', '1');
+    } catch (error) { /* storage disabled: the default stands */ }
     const note = document.createElement('div');
     note.id = 'graphicsContextLost';
     note.style.cssText = 'position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;' +
@@ -6649,8 +6654,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.13'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.13')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.14'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.14')
   ]);
 
   const [
@@ -7175,12 +7180,32 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const colorScalesTexture = gl.createTexture();
 
   const lightningTextures = [];
-  // How many bolt artworks to keep resident. One tile is a whole bolt at
-  // 2500 x 5000 texels, which is 12.5 MB of texture memory; the original ten is
-  // 125 MB, and a GPU with a tight texture budget drops the context rather than
-  // refuse it. Four is 50 MB and still gives the storm four different shapes to
-  // cycle through.
-  const numLightningTextures = 4;
+  /*
+   * How many bolt artworks to keep resident, and how the app decides.
+   *
+   * One tile is a whole bolt at 2500 x 5000 R8: **12.5 MB of texture memory**. That
+   * is the single largest allocation in the app - the HDR target at 1080p is 16 MB
+   * and the entire bloom chain about the same, so two tiles are a quarter of the
+   * whole renderer's budget and four were half of it. The original ten were 125 MB,
+   * which is what made a modest GPU drop the context on load.
+   *
+   * Two is what this keeps: enough that a storm has two shapes to alternate through,
+   * small enough to leave room for everything else. And if a context is ever lost -
+   * the browser's way of saying the budget was exceeded - the next load starts with
+   * a single tile, because at that point the machine has told us what its budget is
+   * and 12.5 MB is as low as the artwork goes without changing it.
+   */
+  const lightningTileMemoryKey = 'lightningTileBudget';
+  function readLightningTileBudget()
+  {
+    try {
+      const stored = parseInt(localStorage.getItem(lightningTileMemoryKey), 10);
+      if (Number.isFinite(stored) && stored >= 1 && stored <= 2)
+        return stored;
+    } catch (error) { /* private mode, storage disabled: the default stands */ }
+    return 2;
+  }
+  const numLightningTextures = readLightningTileBudget();
 
 
 
@@ -7416,30 +7441,30 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); // vertical
 
 
-  function generateLightningTexture(i, bitmap)
+  function generateLightningTexture(i, artwork)
   {
+    // The artwork arrives as one byte per texel (see readRedChannel in
+    // lightningGenerator.js), so the driver is asked for exactly 12.5 MB of R8 and
+    // never sees the 50 MB RGBA picture the canvas had.
     gl.bindTexture(gl.TEXTURE_2D, lightningTextures[i]);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, gl.RED, gl.UNSIGNED_BYTE, bitmap);
-    bitmap.close();
-    // The bolt is a 9 pixel channel on a tile that is minified about ten texels per
-    // screen pixel at the default camera, so a single level-0 fetch lands on the
-    // channel or beside it from one screen row to the next. A stroke still takes
-    // that fetch (textureLod 0.0, see displayLightning); a flash, which is drawn
-    // inside a bright cloud where a miss is invisible, reads the mip chain instead
-    // and gets the channel's average. The chain costs a third on top of the tile.
-    gl.generateMipmap(gl.TEXTURE_2D);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, artwork.width, artwork.height, 0, gl.RED, gl.UNSIGNED_BYTE, artwork.data);
+    // No mip chain on the bolt tiles. A stroke reads level 0 explicitly
+    // (textureLod 0.0, see displayLightning) and always has, and an intra-cloud
+    // flash reads the network tile, not this one - so the chain was 33% of 12.5 MB
+    // per tile, plus a generateMipmap over four megatexels right after each upload,
+    // for nothing. The flash network, which *is* sampled mip-filtered, keeps its
+    // own chain (it costs a few hundred kilobytes).
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   }
 
 
-  function generateLightningNetworkTexture(bitmap)
+  function generateLightningNetworkTexture(artwork)
   {
     gl.bindTexture(gl.TEXTURE_2D, lightningNetworkTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, gl.RED, gl.UNSIGNED_BYTE, bitmap);
-    bitmap.close();
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, artwork.width, artwork.height, 0, gl.RED, gl.UNSIGNED_BYTE, artwork.data);
     // The network's channels are two to three artwork pixels wide on a tile that
     // lands about one texel per screen pixel, so it needs a mip chain for the same
     // reason the bolt does: at any zoom out, a level-0 fetch of a fine channel is a
@@ -7495,6 +7520,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   {
     if (lightningTextureWorkerBusy)
       return;
+    if (graphicsContextLost)          // nothing can be uploaded; do not allocate
+      return;
     if (lightningTextureFailures >= 4)  // the worker is not coming back; stop asking
       return;
     if (document.hidden)               // nothing to show, nothing to draw
@@ -7509,7 +7536,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.13');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.14');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9402,7 +9429,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.13');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.14');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
