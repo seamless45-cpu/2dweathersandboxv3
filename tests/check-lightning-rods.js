@@ -68,18 +68,18 @@ check('both lightning programs declare the rod uniforms',
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(locationShader) &&
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(displayShader));
 check('a stroke draws the bolt and a flash draws the network',
-  /vec3 strikeLight = isFlash \? displayFlash\(lightningPos, lightningTime, currentLightningIntensity\)\s*\n\s*: displayLightning\(lightningPos, lightningTime, currentLightningIntensity\);/
+  /lightningBoltLight \+= isFlash \? displayFlash\(lightningPos, lightningTime, currentLightningIntensity\)\s*\n\s*: displayLightning\(lightningPos, lightningTime, currentLightningIntensity\);/
     .test(displayShader) &&
   /bool isFlash = lightningData\[INTENSITY\] <= LIGHTNING_IC_MAX_INTENSITY;/.test(displayShader) &&
   !/lightningGroundHeight/.test(displayShader),
   'one channel down the picture for a stroke, one network across it for a flash');
-check('a flash channel stops at the cloud base and a stroke runs to the ground',
-  /if \(isFlash\)\s*\n\s*strikeLight \*= smoothstep\(0\.0, 3\.0, cloudDensity\);/.test(displayShader) &&
-  !/if \(!isFlash\)\s*\n\s*strikeLight/.test(displayShader),
-  'a network outside its cloud is a network in clear air');
+check('a flash is not masked to the cloud it was born in',
+  !/strikeLight \*= smoothstep\(0\.0, 3\.0, cloudDensity\);/.test(displayShader) &&
+  /emittedLight \+= lightningBoltLight \/ \(1\. \+ cloudDensity \* 100\.0\);/.test(displayShader),
+  'a channel that leaves one deck and crosses to the next is cloud-to-cloud lightning; the cloud filters the light, it does not cut the channel');
 check('a flash reads its own artwork, mip-filtered, over a slab of the sky',
   /float pixVal = texture\(lightningNetworkTex, flashCoord\)\.r;/.test(displayShader) &&
-  /const vec2 flashSpan = vec2\(0\.45, 0\.225\);/.test(displayShader) &&
+  /const vec2 flashSpan = vec2\(0\.25, 0\.125\);/.test(displayShader) &&
   /texCoord\.x - mod\(pos\.x, 1\.\)\) \/ flashSpan\.x/.test(displayShader) &&
   /0\.5 \+ flashFlip \* \(texCoord\.y - pos\.y\) \/ flashSpan\.y/.test(displayShader),
   'the network artwork is wide and short because the volume is');
@@ -112,12 +112,13 @@ check('the generator draws the two kinds of channel',
   !/mode === 'IC'/.test(generatorSource) && !/generateIntraCloudBolt/.test(generatorSource) &&
   /function generateLightningBolt\(/.test(generatorSource) &&
   /function generateLightningNetwork\(/.test(generatorSource) &&
-  /const IC_ARTWORK_SIZE = \{ width : 2048, height : 512 \};/.test(generatorSource),
+  /const IC_ARTWORK_SIZE = \{ width : 1024, height : 256 \};/.test(generatorSource),
   'the old filament mode stays gone; the network is the new one, on a wide short tile');
 check('the network forks, fans out from one strike point and never tapers to nothing',
-  /leaders /  .test(generatorSource) && /forkChance/.test(generatorSource) &&
-  /maxLevel/.test(generatorSource) && /IC_LEVELS = \[1\.0, 0\.76, 0\.56, 0\.42\]/.test(generatorSource),
-  'a ladder of brightness, not pow(width, 2), or the tendrils fall under the threshold');
+  /leaders      : 7,/.test(generatorSource) && /forkChance   : 0\.0045,/.test(generatorSource) &&
+  /maxLevel     : 2,/.test(generatorSource) &&
+  /IC_LEVELS = \[1\.0, 0\.70, 0\.46\]/.test(generatorSource),
+  'a ladder of brightness, not pow(width, 2), and a fork rather than a thicket');
 check('the display shader has no intra-cloud pass left',
   !/computeICLight/.test(displayShader) && !/displayICLightning/.test(displayShader) &&
   !/icLightPass/.test(displayShader) && !/icLightningTex/.test(displayShader),

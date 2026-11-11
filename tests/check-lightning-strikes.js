@@ -339,10 +339,10 @@ check('the slot count agrees between app.js, common.glsl and this test',
   // the wiring: the call site passes exactly what the shipped shader took, and the
   // gain is the curve, not an envelope built out of it
   check('the slot loop hands the channel its position, time and curve',
-    /vec3 strikeLight = isFlash \? displayFlash\(lightningPos, /.test(displayShader) &&
-    /lightningBoltLight \+= strikeLight;/.test(displayShader) &&
-    !/displayLightning\([^)]*mainBoltBrightness/.test(displayShader),
-    'the shipped arguments; the two after them only choose how the tile is sampled');
+    /lightningBoltLight \+= isFlash \? displayFlash\(lightningPos, /.test(displayShader) &&
+    !/displayLightning\([^)]*mainBoltBrightness/.test(displayShader) &&
+    !/strikeLight/.test(displayShader),
+    'the shipped arguments, and one expression: a flash is a second channel, not a filter over the stroke');
   check('the emission is written straight into the fragment, not premultiplied',
     /\+ emittedLight\), opacity\);/.test(displayShader) && !/emitted \/ max\(opacity/.test(displayShader),
     'the original fragment is the original fragment');

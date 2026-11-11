@@ -234,23 +234,23 @@ function generateLightningBolt(width, height)
  * 1.2 pixels under the display's 0.15 threshold and it would simply not be drawn,
  * and a flash whose tendrils are invisible is a bolt again.
  */
-const IC_ARTWORK_SIZE = { width : 2048, height : 512 };
+const IC_ARTWORK_SIZE = { width : 1024, height : 256 };
 
 const IC_SHAPE = {
-  leaders      : 10,     // strands fanning out from the strike point
-  trunkWidth   : 3.4,    // artwork pixels - the brightest channel
-  trunkRatio   : 0.94,   // every leader starts at this share of the trunk width
-  branchRatio  : 0.64,   // ... and a fork at this share of its parent's
+  leaders      : 7,      // strands fanning out from the strike point
+  trunkWidth   : 2.6,    // artwork pixels - the brightest channel
+  trunkRatio   : 0.92,   // every leader starts at this share of the trunk width
+  branchRatio  : 0.66,   // ... and a fork at this share of its parent's
   minWidth     : 1.0,
-  stepLength   : 1.6,    // artwork pixels per step
+  stepLength   : 1.4,    // artwork pixels per step
   jitter       : 0.5,    // heading noise per step, rad - the buzz of a channel
   straighten   : 0.05,   // pull back toward the strand's own heading
-  forkChance   : 0.009,  // per step, per strand
-  maxLevel     : 3,
-  fanSpread    : 0.26    // rad - how far the leaders leave the horizontal
+  forkChance   : 0.0045, // per step, per strand - a fork, not a thicket
+  maxLevel     : 2,      // trunk, fork, and one round of sub-forks
+  fanSpread    : 0.22    // rad - how far the leaders leave the horizontal
 };
 
-const IC_LEVELS = [1.0, 0.76, 0.56, 0.42]; // channel radiance by fork depth, 0..1
+const IC_LEVELS = [1.0, 0.70, 0.46]; // channel radiance by fork depth, 0..1
 
 
 function generateLightningNetwork(width, height)
