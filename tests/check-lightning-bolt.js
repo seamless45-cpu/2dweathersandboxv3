@@ -13,9 +13,9 @@
 //
 //   1. The model. One heading, the original two numbers, the same walk for the
 //      forks, and no leftover of the two-scale version.
-//   2. The channel's weight. A return stroke is a thick channel: measured on the
-//      artwork next to an intra-cloud hair (which is sub-pixel), and asserted on
-//      the constant so it cannot quietly become a hair too.
+//   2. The channel's weight. It is the original 4.5 pixel channel - wider than an
+//      intra-cloud hair (which is sub-pixel), and asserted on the constant so it
+//      cannot quietly become a hair or a slab.
 //   3. The buzz, measured. The real heading arithmetic is ported out of
 //      lightningGenerator.js and run for forty seeded bolts: the heading moves a
 //      third of a radian per pixel and reverses direction many times over the
@@ -70,14 +70,14 @@ check('the original step is what runs: next position, then the kick',
 
 /* ---------------------------------------------- 2. the channel's weight */
 
-check('a return stroke is drawn as a thick channel',
-  CG.lineWidth >= 6.0 && CG.lineWidth <= 9.0,
-  'lineWidth ' + CG.lineWidth + ' artwork px, up from 4.5');
-check('its forks are thinner than it is, but not hairlines',
-  CG.branchWidthRatio > 0.2 && CG.branchWidthRatio < 0.5,
+check('a return stroke is drawn at the original channel width',
+  CG.lineWidth === 4.5,
+  'lineWidth ' + CG.lineWidth + ' artwork px - the width the app shipped with');
+check('its forks leave at up to half the trunk, as they always did',
+  CG.branchWidthRatio === 0.5,
   'a fork leaves at up to ' + CG.branchWidthRatio + ' of the trunk');
-check('and the bolt is many times the width of an intra-cloud channel',
-  CG.lineWidth / gen.IC_WIDTH.trunk >= 4,
+check('and that is still wider than an intra-cloud channel',
+  CG.lineWidth / gen.IC_WIDTH.trunk >= 3,
   'trunk ' + CG.lineWidth + ' artwork px against an IC trunk of ' + gen.IC_WIDTH.trunk);
 
 /* ---------------------------------------------- 3. the buzz, measured */
@@ -152,7 +152,8 @@ check('and the trunk stays inside the sprite',
   Math.random = realRandom;
 
   let lit = 0, minY = TILE_H, maxY = 0, peak = 0;
-  let widestRow = 0, trunkRows = 0;
+  let trunkRows = 0;
+  const rowWidths = [];
   for (let y = 0; y < TILE_H; y++) {
     let run = 0, longest = 0;
     for (let x = 0; x < TILE_W; x++) {
@@ -168,9 +169,13 @@ check('and the trunk stays inside the sprite',
       if (y < minY) minY = y;
       if (y > maxY) maxY = y;
     }
-    if (longest > 0) trunkRows++;
-    if (longest > widestRow) widestRow = longest;
+    if (longest > 0) { trunkRows++; rowWidths.push(longest); }
   }
+  // The widest run in a row is the trunk where the channel is near vertical and a
+  // long smear where it kinks, so the median of that over the height of the tile
+  // is the width of the channel the player actually sees.
+  const sortedWidths = rowWidths.slice().sort((a, b) => a - b);
+  const medianRun = sortedWidths.length ? sortedWidths[Math.floor(sortedWidths.length / 2)] : 0;
 
   check('the bolt is drawn, and it is bright',
     lit > TILE_W * 2 && peak > 240,
@@ -178,14 +183,14 @@ check('and the trunk stays inside the sprite',
   check('the channel runs the whole height of the tile',
     minY <= 2 && maxY >= TILE_H - 3,
     'drawn from y ' + minY + ' to ' + maxY + ' of ' + TILE_H);
-  check('the drawn channel is thick on the artwork too',
-    widestRow >= CG.lineWidth - 1,
-    'widest run of lit pixels in a row ' + widestRow + ' px for a lineWidth of ' + CG.lineWidth);
+  check('the drawn channel is as wide on the artwork as its constant says',
+    medianRun >= CG.lineWidth - 1 && medianRun <= CG.lineWidth + 4,
+    'the median crossing is ' + medianRun + ' px for a lineWidth of ' + CG.lineWidth);
   check('it forks',
     bolt.segmentCount > 1000,
     bolt.segmentCount + ' segments in one bolt');
   check('it is not one straight line',
-    trunkRows > TILE_H * 0.9 && bolts[0].span > TILE_W * 0.05,
+    trunkRows > TILE_H * 0.9 && bolts[0].span > TILE_W * 0.04,
     trunkRows + ' rows carry the channel, and it wanders as it goes');
 }
 

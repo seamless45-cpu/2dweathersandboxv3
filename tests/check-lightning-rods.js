@@ -58,7 +58,7 @@ check('common.glsl declares MAX_LIGHTNING_RODS', Number.isInteger(MAX_LIGHTNING_
 // below the old line now reaches the ground, which is what makes CG lightning more
 // common in a storm without touching how the strikes themselves are drawn.
 check('common.glsl declares the intra-cloud / cloud-to-ground threshold',
-  LIGHTNING_IC_MAX_INTENSITY === 0.9, 'got ' + LIGHTNING_IC_MAX_INTENSITY);
+  LIGHTNING_IC_MAX_INTENSITY === 1.0, 'got ' + LIGHTNING_IC_MAX_INTENSITY);
 check('app.js MAX_LIGHTNING_RODS matches common.glsl',
   appMaxRods === MAX_LIGHTNING_RODS,
   'app.js ' + appMaxRods + ' vs common.glsl ' + MAX_LIGHTNING_RODS);
@@ -195,7 +195,7 @@ check('the halo is compressed by the same knee as the channels',
     'a boosted wide ring is the white slab this pass exists to avoid');
   check('the flash itself is still compressed under 1.0',
     /vec3 flashLight = vec3\(1\.0\) - exp\(-gained\);/.test(displayShader) &&
-    /return flashLight \+ glareLight \+ screenLight;/.test(displayShader));
+    /return flashLight \+ glareLight;/.test(displayShader));
 }
 
 // Strokes must not erase what is under them (source-over) nor pile up into a
@@ -216,7 +216,7 @@ check('the light pass returns only the flash light',
   /icLight \+= ic\.rgb;/.test(displayShader) &&
   /icGlare \+= ic\.a;/.test(displayShader));
 check('the scene pass carries no IC light any more',
-  /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emitted\), opacity\)/.test(displayShader) &&
+  /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emittedLight\), opacity\)/.test(displayShader) &&
   !/icAlpha/.test(displayShader) &&
   !/icEmission/.test(displayShader));
 {
@@ -304,18 +304,17 @@ const softHdrClamp = (value) => {
     boltBrightness > HDR_CEILING * 1.5,
     'stroke ' + boltBrightness + ', ceiling ' + HDR_CEILING);
   check('the scene fragment is written through that compression, not a clamp',
-    /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emitted\), opacity\);/
+    /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emittedLight\), opacity\);/
       .test(displayShader) && !/const float hdrCeiling/.test(displayShader));
 
-  // The emitted light - the bolt - used to be added to the fragment colour and
-  // then multiplied by the fragment's alpha by the blend. Over a cloud that cost
-  // nothing (alpha is 1 there); against the sky it dimmed the channel with its own
-  // fade, quadratically, and left a violet smear where the sky had been. It is
-  // written premultiplied now, against a floored divisor.
-  check('the emitted light is written premultiplied, so the alpha cannot eat a fade',
-    /vec3 emitted = emittedLight \/ max\(opacity, 1e-3\);/.test(displayShader) &&
-    /\+ emitted\), opacity\);/.test(displayShader),
-    'a light multiplied by the alpha it raises itself is a light squared');
+  // The emitted light - the bolt - was added to the fragment colour and then
+  // multiplied by the fragment's alpha by the blend, the way the original app
+  // wrote it. (Later rounds premultiplied it to stop a violet smear on the sky;
+  // the original look is back, and this is what the original looked like.)
+  check('the emitted light is written straight into the fragment',
+    /\+ emittedLight\), opacity\);/.test(displayShader) &&
+    !/emitted \/ max\(opacity/.test(displayShader),
+    'no premultiplication in the fragment the original wrote');
   check('the intra-cloud pass is written through it too',
     /fragmentColor = vec4\(softHdrClamp\(computeICLight\(\), 0\.0\);|fragmentColor = vec4\(softHdrClamp\(computeICLight\(\)\), 0\.0\);/
       .test(displayShader) || /softHdrClamp\(computeICLight\(\)\)/.test(displayShader));
@@ -349,48 +348,33 @@ const softHdrClamp = (value) => {
     'tonemapped to ' + toneMap(strong).toFixed(1) + '/255');
 }
 
-// The colour of the light, and the two ways a fade used to go wrong.
+// The colour of the light, the way the original app had it.
 //
-// A return stroke was drawn in vec3(0.70, 0.57, 1.0) - a saturated violet - which
-// is fine while the channel is clipped white and wrong the moment it dims: at low
-// brightness the eye reads a violet line as a fault on the screen, and behind
-// every fade it left a purple ghost of the channel. The channel is a cold white
-// now and warms as it cools, because a cooling channel radiates redder.
-//
-// The other half of the same complaint was the blend. The bolt's light was added
-// to the fragment colour and then multiplied by the fragment's alpha - and the
-// alpha is raised by that same light, so a fade went out as light-squared, twice
-// as fast as the curve, and against the sky what was left of it arrived as a
-// violet smear. The emission is written premultiplied now.
+// A cloud-to-ground channel is drawn in the violet-white it always was. Later
+// rounds whitened it, cooled it toward an ember as it faded, and lifted the flash
+// off the clouds in a paler blue; all of that went with the look that was asked
+// for back, and these checks hold the original constants so it cannot drift again.
 {
   const vec3Const = (name) => {
     const m = displayShader.match(new RegExp('const vec3 ' + name + ' = vec3\\(([^)]*)\\);'));
     return m ? m[1].split(',').map(Number) : null;
   };
-  const luminance = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
-
   const boltCol = vec3Const('lightningCol');
-  const coolingCol = vec3Const('lightningCoolingCol');
-  const liftCol = [ 0.70, 0.78, 1.0 ]; // pinned below against the shader line itself
 
-  check('the channel is a cold white at its peak, not a violet',
-    boltCol && Math.min(...boltCol) >= 0.85 && luminance(boltCol) >= 0.85,
-    'lightningCol ' + JSON.stringify(boltCol) + ', luminance ' +
-      (boltCol ? luminance(boltCol).toFixed(2) : 'n/a') + ' (was 0.70/0.57/1.00, 0.65)');
-  check('... which is a third more light for the same channel',
-    boltCol && luminance(boltCol) > 0.65 * 1.3,
-    'luminance ' + (boltCol ? luminance(boltCol).toFixed(2) : 'n/a') + ' against 0.65');
-  check('and it warms as it cools instead of going purple',
-    coolingCol && coolingCol[0] > coolingCol[2] && coolingCol[0] > coolingCol[1] &&
-    /mix\(lightningCoolingCol, lightningCol, smoothstep\(0\.0, 0\.30, curveShare\)\)/.test(displayShader),
-    'a cooling channel radiates redder: ' + JSON.stringify(coolingCol));
-  check('the light a stroke throws on its own clouds is pale, not violet',
-    /onLight \+= vec3\(0\.70, 0\.78, 1\.0\) \* \(screenFlash \* lightningScreenFlashBrightness\);/
-      .test(displayShader) && luminance(liftCol) > 0.72,
-    'luminance ' + luminance(liftCol).toFixed(2) + ' against 0.60 before');
-  check('the channel falloff cannot be asked for the power of zero',
-    /pow\(max\(curveShare, 1e-6\), cgChannelFalloff\)/.test(displayShader),
-    'pow(0, 1.6) is 0 on paper and has been NaN on real drivers');
+  check('the channel is the original violet-white',
+    boltCol && Math.abs(boltCol[0] - 0.70) < 1e-6 && Math.abs(boltCol[1] - 0.57) < 1e-6 &&
+    Math.abs(boltCol[2] - 1.0) < 1e-6,
+    'lightningCol ' + JSON.stringify(boltCol));
+  check('there is no cooling colour any more',
+    !/lightningCoolingCol/.test(displayShader),
+    'the fade to an ember went with the rest of the later look');
+  check('the emission is written straight, as the original wrote it',
+    /\+ emittedLight\), opacity\);/.test(displayShader) && !/emitted \/ max\(opacity/.test(displayShader),
+    'no premultiplication: the fragment is the fragment');
+  check('the channel brightness is the curve, with nothing reshaping it',
+    /pixVal \*= currentLightningIntensity;/.test(displayShader) &&
+    !/curveShare/.test(displayShader) && !/cgChannelFalloff/.test(displayShader),
+    'the compression of the later rounds is gone');
 }
 
 // The bloom is where "brighter than white" is actually visible, and it is built
@@ -422,49 +406,38 @@ const softHdrClamp = (value) => {
     'postProcessingShader.frag has to guard what it reads');
 }
 
-// A cloud-to-ground stroke does not only draw a bolt and a halo around it: it
-// lights the frame. The scene pass lifts the cloudscape (through onLight, which
-// multiplies the scene's own colour, so the structure survives), and the additive
-// intra-cloud pass - which runs over the finished picture - carries the same flash
-// into the sky the scene pass never touches. Both are driven by the strike's own
-// intensity curve and both take the strongest running stroke, not the sum.
+// A cloud-to-ground stroke lights its own neighbourhood and no further: the two
+// lobes on the clouds around it are the original values, and there is no
+// frame-wide term any more. Later rounds lifted the whole picture and carried the
+// flash into the sky through the additive pass; both went with the look that was
+// asked for back, so these checks hold the original numbers instead.
 const lightningCurvePeak = (intensity) => 20.0 * intensity * intensity; // 1/(T*2)^3 at T0 = 0
 {
-  const screenGain = Number((displayShader.match(/const float icScreenFlashGain = ([\d.]+);/) || [])[1]);
-  const screenCeiling = Number((displayShader.match(/const float icScreenFlashCeiling = ([\d.]+);/) || [])[1]);
-  const sceneLift = Number((displayShader.match(/#define lightningScreenFlashBrightness ([\d.]+)/) || [])[1]);
+  const onLift = Number((displayShader.match(/#define lightningOnLightBrightness ([\d.]+)/) || [])[1]);
   const skyLift = Number((displayShader.match(/#define lightningSkyLightBrightness ([\d.]+)/) || [])[1]);
-  const frameLight = (intensity) => {
-    const flash = lightningCurvePeak(intensity);
-    return screenCeiling * (1 - Math.exp(-flash * screenGain / screenCeiling));
-  };
 
-  check('a cloud-to-ground stroke lights the frame, not just its own halo',
-    Number.isFinite(sceneLift) && sceneLift > 0 &&
-    /if \(lightningData\[INTENSITY\] > LIGHTNING_IC_MAX_INTENSITY\) \{[\s\S]{0,400}?screenFlash = max\(screenFlash, currentLightningIntensity\);/ .test(displayShader) &&
-    /onLight \+= vec3\(0\.70, 0\.78, 1\.0\) \* \(screenFlash \* lightningScreenFlashBrightness\);/.test(displayShader),
-    'the scene pass has to lift the whole cloudscape from the strongest stroke');
-  check('... and the sky above the cloud deck as well',
-    /cgFlash = max\(cgFlash, cgIntensity\);/ .test(displayShader) &&
-    /return flashLight \+ glareLight \+ screenLight;/.test(displayShader),
-    'the scene pass only draws clouds and terrain; the sky needs the additive pass');
-  check('a storm-core stroke covers the frame',
-    frameLight(2.5) > 2.5 && frameLight(4.5) <= screenCeiling,
-    'frame-wide light ' + frameLight(2.5).toFixed(2) + ' HDR at intensity 2.5, ' +
-    frameLight(4.5).toFixed(2) + ' at 4.5 (ceiling ' + screenCeiling.toFixed(2) + ')');
-  check('a weak stroke only lifts it a little',
-    frameLight(0.95) > 0.15 && frameLight(0.95) < frameLight(2.5) * 0.75,
-    frameLight(0.95).toFixed(2) + ' HDR at the lowest cloud-to-ground intensity');
-  check('the frame-wide light is bounded and cannot go infinite',
-    Number.isFinite(screenCeiling) && screenCeiling > 0.5 && screenCeiling < 8 &&
-    /screenCeiling \*|icScreenFlashCeiling \*/.test(displayShader),
-    'ceiling ' + screenCeiling);
-  check('an intra-cloud flash never lights the whole frame',
-    !/screenFlash = max\(screenFlash, icIntensity\)/.test(displayShader),
-    'an IC flash is light inside a cloud; the screen-wide term is for return strokes');
-  check('the local sky lobe of a strike grew with it',
-    Number.isFinite(skyLift) && skyLift > 0.0011,
-    'lightningSkyLightBrightness ' + skyLift);
+  check('a cloud-to-ground stroke lights the clouds around it',
+    Number.isFinite(onLift) && /lightningOnLight = lightningOnLightBrightness \/ \(distanceSquared \+ 0\.03\)/.test(displayShader) &&
+    /onLight \+= vec3\(lightningOnLight\)/.test(displayShader),
+    'the tight lobe has to sit on the channel it came from');
+  check('at the original strength',
+    onLift === 0.004 && skyLift === 0.0011,
+    'on-light ' + onLift + ', sky lobe ' + skyLift + ' - the values the app shipped with');
+  check('and the wide lobe is the weaker of the two',
+    skyLift < onLift / 2,
+    'sky ' + skyLift + ' against ' + onLift + ': a return stroke lights its own neighbourhood, not the whole sky');
+  check('there is no frame-wide flash any more',
+    !/lightningScreenFlashBrightness/.test(displayShader) &&
+    !/screenFlash/.test(displayShader) &&
+    !/icScreenFlash/.test(displayShader),
+    'the screen-wide light of the later rounds is gone with the rest of the look');
+  check('and the additive pass carries no cloud-to-ground light',
+    !/cgFlash/.test(displayShader) &&
+    /return flashLight \+ glareLight;/.test(displayShader),
+    'the IC pass draws intra-cloud light, and only that');
+  check('the lobes are driven by the strike\'s own curve',
+    /lightningOnLight \*= currentLightningIntensity;/.test(displayShader),
+    'so a weak flash lights less than a storm core');
 }
 
 check('IC flashes stay cloud-scale, not storm-scale',

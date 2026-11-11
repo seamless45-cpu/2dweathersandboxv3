@@ -5,12 +5,9 @@
  * Two kinds of artwork come out of the same single-channel (luminance) canvas:
  *
  *   mode: 'CG'  Cloud-to-ground bolt. One dominant channel grows downward with
- *               the classic dendritic forks, and it is drawn thick: a return
- *               stroke is a heavy column of light, and thinning it to a hair is
- *               what makes a bright flash read as a scratch on the lens. The
- *               heading is the original one jittered walk - step, kick, pull
- *               back toward vertical (see CG_SHAPE) - because that is what a
- *               channel looks like on its way down. This is the artwork used by
+ *               the classic dendritic forks, drawn exactly as the original app
+ *               drew it: one heading, step, kick, pull back toward vertical, and
+ *               a 4.5 pixel channel (see CG_SHAPE). This is the artwork used by
  *               the legacy (cloud-density triggered) lightning in app.js.
  *
  *   mode: 'IC'  Intra-cloud flash. A network of thin filaments that spreads
@@ -119,21 +116,19 @@ function stepHeading(s, st, y, bandLo, bandHi, rand) {
 /* ===================== cloud-to-ground bolt ============================== */
 
 /*
- * The shape of a cloud-to-ground channel - the original model, restored.
+ * The shape of a cloud-to-ground channel: the original one, unchanged.
  *
- * This is one heading, turned every step by its own noise (`(rand - 0.5) * 1.4`,
- * up to +-40 degrees a pixel) and pulled back toward straight down by 8% a step.
- * The result is a channel that buzzes down the picture: high-frequency kinks with
- * no long arc to them.
+ * One heading, turned every step by its own noise (`(rand - 0.5) * 1.4`, up to
+ * +-40 degrees a pixel) and pulled back toward straight down by 8% a step. The
+ * result is a channel that buzzes down the picture: high-frequency kinks with no
+ * long arc to them, which is what makes it read as a return stroke rather than as
+ * a filament.
  *
- * A two-scale heading (a slow aim for the arcs, a fast jag for the buzz) was tried
- * in between and taken back out: it bent the channel, but it also thinned the bolt
- * out into a wandering line, and a return stroke reads as a *crack* - straight
- * down, hard, and thick. The shape is the original one on purpose now; what has
- * changed is how much light it carries (see mainBoltBrightness and the lobes in
- * realisticDisplayShader.frag) and how wide the channel is drawn (CG_SHAPE.lineWidth,
- * up from 4.5 artwork pixels, because a hair-thin bolt is an intra-cloud channel,
- * not a return stroke).
+ * This is the artwork the app shipped with, and it is where it stays: the shapes
+ * and widths tried on top of it (a two-scale heading, a hair-thin channel) were
+ * taken back out when the look was restored. The numbers are the original ones -
+ * 4.5 artwork pixels for the trunk, half of that at most for a fork - and they
+ * are named here only so tests/check-lightning-bolt.js can hold them.
  *
  * Numbers are in artwork pixels per step; a step is one pixel.
  */
@@ -142,8 +137,8 @@ const CG_SHAPE = {
   jitter : 1.4,              // the kick it takes every step, rad
   straighten : 0.08,         // ... and the pull back toward straight down
   branchJitter : 0.7,        // the same, for a fork
-  lineWidth : 6.5,           // artwork pixels; a return stroke is a thick channel
-  branchWidthRatio : 0.35    // a fork is a fraction of its parent's width, at most
+  lineWidth : 4.5,           // artwork pixels - the original trunk width
+  branchWidthRatio : 0.5     // the original fork width: up to half the trunk
 };
 
 function generateLightningBolt(width, height)

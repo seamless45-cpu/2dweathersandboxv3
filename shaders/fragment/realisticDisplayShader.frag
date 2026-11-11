@@ -139,7 +139,7 @@ const float lightningTexAspect = lightningTexRes.x / lightningTexRes.y;
 float calcLightningTime(float startIterNum)
 {
   float lightningTime = iterNum - startIterNum;
-  return lightningTime / 5.0; // 5 iterations per unit of the intensity curve
+  return lightningTime / 5.0; // 30.0    0. to 1. leader stage, 1. + Flash stage
 }
 
 float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
@@ -156,13 +156,6 @@ float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
   return max((1. / (0.05 + pow(T * 2.0, 3.))) - 0.005, 0.) * pow(intensity, 2.0); // fading out curve
 }
 
-// The peak of lightningIntensityOverTime(): the curve at T = 0, i.e. 1 / 0.05 -
-// 0.005. Dividing a strike's curve by intensity^2 * this gives the share of that
-// strike's own peak light, which is what the channel's fade is shaped by (see
-// cgChannelFalloff). The share does not depend on how strong the stroke is, so a
-// weak stroke and a storm-core stroke fade over the same part of their lives.
-const float lightningCurvePeak = 19.995;
-
 // Height of whatever the bolt is landing on. A strike that was captured by a
 // lightning rod ends on the rod's tip instead of on the ground plane.
 float lightningGroundHeight(vec2 pos)
@@ -176,30 +169,19 @@ float lightningGroundHeight(vec2 pos)
   return 0.0;
 }
 
-// How much of a stroke's tail is spent fading, instead of switching off.
+// A cloud-to-ground channel, drawn the way the original app drew it.
 //
-// A return stroke's channel is written at mainBoltBrightness - a hundred thousand
-// HDR units, four decades over the point where the tonemap runs out of range. Fed
-// the intensity curve straight, as curve * mainBoltBrightness, the channel is
-// therefore pure white for the whole strike and then gone in the iteration the
-// curve reaches zero: the stroke's last lit iteration still carries 355 HDR units
-// (a storm core; the tonemap is white from 6.3 up), and the iteration after it
-// carries nothing at all. There is no frame in between. That is a switch, not a
-// fade - which is exactly what it looked like: the halo around the channel faded
-// while the channel itself vanished.
-//
-// So the channel's range is compressed, the way softHdrClamp() compresses the top
-// of the scene's: the share of the strike's peak light is raised to
-// cgChannelFalloff before it is multiplied by mainBoltBrightness, which pulls the
-// curve's last decades down into the band the display can actually show. At 1.6 a
-// stroke spends eight iterations - about 130 ms at 60 iterations per second -
-// coming down from white, and its last lit iteration is worth 29/255: the channel
-// has arrived at black before it goes instead of leaving from white. The peak of
-// every flicker is still exactly 1.0, i.e. the full 100000, so a stroke is as
-// over-bright as it ever was; only the way it lets go has changed.
-const float cgChannelFalloff = 1.6;
-
-vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity, float groundY, float strikeIntensity)
+// The bolt is written at a hundred thousand HDR units - four decades over the
+// point where the tonemap runs out of range - so the channel itself is clipped
+// white for as long as it is lit, and what a player sees of a stroke is the light
+// it throws around itself: the two lobes on its own clouds, and the halo the
+// bloom's bright pass builds out of the surplus. Its colour is the original
+// violet-white, and its brightness is the intensity curve times
+// mainBoltBrightness with nothing reshaping either: a stroke is white from the
+// iteration it is booked until the iteration the curve reaches zero, and then it
+// is gone. That is the look that was asked for back - the compressions and the
+// cooling colour that a later round put in here are gone with it.
+vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity, float groundY)
 {
   float boltHeight = max(pos.y - groundY, 0.02); // cloud base down to the ground / rod tip
   vec2 lightningTexCoord = texCoord;
@@ -219,48 +201,39 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
 
   float pixVal = texture(lightningTex, lightningTexCoord).r;
 
-  const float mainBoltBrightness = 200000.; // 200000.
+  const float branchShowFactor = 2.5;       // 1.5
+  const float leaderBrightness = 50000.;    // 200.0
+  const float mainBoltBrightness = 100000.; // 100000.
 
-  // The whole channel, at once.
-  //
-  // A stepped leader is a real thing, but it is not the part of a return stroke
-  // anybody sees, and drawing it as a lit stage cost more than it was worth: a
-  // strike spent its first iterations with the bolt held at one fixed brightness
-  // (it could not follow the flicker curve, because the curve is still near zero
-  // while a leader would be crawling), so the glow on screen was static - a frozen
-  // bright shape for a fifth of a second on a slow machine, before the flash it
-  // was announcing had even started. A return stroke is a few tens of
-  // microseconds of light: it should be there, whole, in the iteration it is
-  // booked, and then flicker with the curve like every other strike.
-  //
-  // The brightness is the share of the strike's peak light, compressed so that
-  // the last of it lands where it can be seen; see cgChannelFalloff above.
-  float curveShare = clamp(currentLightningIntensity / max(lightningCurvePeak * pow(strikeIntensity, 2.0), 1e-6), 0.0, 1.0);
-  // pow(0, n) is 0 on paper and has been NaN on real drivers, so the base is
-  // floored: at the end of a stroke this is 5e-5 HDR units, which is black.
-  float channelBrightness = mainBoltBrightness * pow(max(curveShare, 1e-6), cgChannelFalloff);
+  // The leader only gets a fraction of one iteration to run down the channel.
+  // At the speed a stepped leader actually moves this is still slow motion, and
+  // it stops a bolt taking five iterations (a fifth of a second on a slow
+  // machine) to appear: the strike lands, and the whole channel is there.
+  const float leaderRevealSpeed = 6.0;
 
-  float brightnessThreshold = 0.95;
+  float leaderReveal = min(lightningTime * leaderRevealSpeed, 1.);
+
+  float brightnessThreshold = 1. - leaderReveal * branchShowFactor;
+  brightnessThreshold += lightningTexCoord.y * branchShowFactor; // grow from the top to the bottem
+
+  brightnessThreshold = clamp(brightnessThreshold, 0., 1.);
+
+  if (lightningTime > 1.0) { // main bolt
+    brightnessThreshold = 0.95;
+    currentLightningIntensity *= mainBoltBrightness;
+  } else {
+    currentLightningIntensity = leaderBrightness;
+  }
+
   pixVal -= brightnessThreshold;
 
   pixVal = max(pixVal, 0.0);
 
-  pixVal *= channelBrightness;
+  pixVal *= currentLightningIntensity;
 
-  // The colour of a return stroke, and of the channel as it cools.
-  //
-  // A stroke is white-blue and blinding while the current is in it. It is a
-  // violet line only when it is *dim*, and a saturated violet at low brightness
-  // is not something to draw: the eye reads it as a fault, and against a night
-  // sky it left a purple ghost of the channel behind every fade. So the channel
-  // is a cold white (0.90 red, 0.93 green against a full blue) rather than a
-  // violet, and it *warms* as the current leaves it - a cooling channel radiates
-  // redder, so the last of a stroke is an ember, not a bruise.
-  const vec3 lightningCol = vec3(0.90, 0.93, 1.0);
-  const vec3 lightningCoolingCol = vec3(1.00, 0.66, 0.36);
-  vec3 lightningTone = mix(lightningCoolingCol, lightningCol, smoothstep(0.0, 0.30, curveShare));
+  const vec3 lightningCol = vec3(0.70, 0.57, 1.0); // 0.584, 0.576, 1.0
 
-  vec3 outputColor = max(pixVal * lightningTone, vec3(0));
+  vec3 outputColor = max(pixVal * lightningCol, vec3(0));
 
   return outputColor;
 }
@@ -495,7 +468,6 @@ vec3 computeICLight()
 {
   vec3 icLight = vec3(0.0);
   float icGlare = 0.0; // light past white, on the channels themselves
-  float cgFlash = 0.0; // the frame-wide light of a cloud-to-ground stroke
 
   // How many artwork pixels one screen pixel covers, worked out once, outside
   // the slot loop: screen-space derivatives inside a loop with `continue` are
@@ -508,22 +480,18 @@ vec3 computeICLight()
       continue; // never used / released
     if (iterNum < lightningStartIterNum || iterNum >= strikeAnimEnd(lightningData))
       continue; // not started yet, or its own animation is over
+    if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY)
+      continue; // cloud-to-ground stroke, drawn by the scene pass
+
     vec2 lightningPos = lightningData.xy;
     float lightningTime = calcLightningTime(lightningStartIterNum);
 
-    if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY) {
-      // A cloud-to-ground stroke draws its own bolt in the scene pass, but the
-      // light it throws over the *frame* has to be added here: this pass runs over
-      // the finished picture, so it reaches the sky above the cloud deck as well,
-      // which the scene pass (clouds and terrain only) cannot.
-      float cgIntensity = lightningIntensityOverTime(lightningTime + 1.0, lightningPos, lightningData[INTENSITY]);
-      cgFlash = max(cgFlash, cgIntensity);
-      continue;
-    }
-
-    // The curve starts one unit in: no strike has a leader stage to climb out of,
-    // so a flash is at its peak brightness in the iteration it is booked and the
-    // curve is what the player sees from the first frame on (strikeAnimEnd knows).
+    // An intra-cloud flash has no leader stage. The intensity curve spends its
+    // first unit ramping a stepped leader down a channel, which is a
+    // cloud-to-ground idea: a flash is a network lighting up inside the cloud all
+    // at once. So its curve is sampled one unit in and it is at its peak in the
+    // iteration it is booked (strikeAnimEnd knows: a stroke is booked one unit
+    // longer than a flash for exactly this reason).
     float icIntensity = lightningIntensityOverTime(lightningTime + 1.0, lightningPos, lightningData[INTENSITY]);
     if (icIntensity <= 0.0)
       continue;
@@ -535,18 +503,8 @@ vec3 computeICLight()
     icGlare += ic.a;
   }
 
-  if (dot(icLight, vec3(1.0)) <= 0.0 && icGlare <= 0.0 && cgFlash <= 0.0)
+  if (dot(icLight, vec3(1.0)) <= 0.0 && icGlare <= 0.0)
     return vec3(0.0); // nothing running: no cloud sample needed
-
-  // The light a cloud-to-ground stroke throws over the whole frame, including the
-  // part of the sky the scene pass never touches. It is bounded by its own ceiling
-  // so that a storm-core stroke covers the frame instead of blowing it out to a
-  // value the post-processing has to guess about.
-  const vec3 icScreenFlashCol = vec3(0.66, 0.74, 1.0);
-  const float icScreenFlashGain = 0.050;
-  const float icScreenFlashCeiling = 5.50;
-  vec3 screenLight = icScreenFlashCol * (icScreenFlashCeiling *
-                     (1.0 - exp(-cgFlash * icScreenFlashGain / icScreenFlashCeiling)));
 
   // Seen through the cloud it is in. A channel has to stay readable against the
   // cloud around it, and a sunlit cloud is ~1.0 in HDR units - about 230/255 on
@@ -590,7 +548,7 @@ vec3 computeICLight()
   vec3 glare = icFlareCol * icGlare * icFlareBoost * (1.0 + icCloudScatter * cloudOpacity);
   vec3 glareLight = vec3(icFlareCeiling) * (1.0 - exp(-max(glare, vec3(0.0)) / icFlareCeiling));
 
-  return flashLight + glareLight + screenLight;
+  return flashLight + glareLight;
 }
 
 
@@ -696,23 +654,15 @@ vec4 getAirColor(vec2 fragCoordIn)
   vec3 color = (smokeOrFireCol * smokeOpacity / opacity) + (cloudCol * cloudOpacity * (1. - smokeOpacity) / opacity); // color blending
 
 
-#define lightningOnLightBrightness 0.0095  // 0.002
-#define lightningSkyLightBrightness 0.0055 // the wide lobe of the same flash
-// How much of the frame a cloud-to-ground stroke lights.
-//
-// A bolt drawn on its own, with a halo around it, reads as a spark in a dark room.
-// A return stroke is a current of tens of kiloamps over a channel some kilometres
-// long, and what a player recognises as lightning is the whole sky going up with
-// it: the cloudscape jumps several stops and every shadow in the scene is redrawn
-// by the flash. That is this number. It is driven by the strike's own intensity
-// curve, so a weak stroke lifts the frame a little and a storm-core stroke covers
-// it, and it only ever *adds* light.
-#define lightningScreenFlashBrightness 0.030
+// The light a stroke throws on the clouds around it: one tight lobe and one wide
+// one. These are the original values - a return stroke lights its own
+// neighbourhood and no further.
+#define lightningOnLightBrightness 0.004  // 0.002
+#define lightningSkyLightBrightness 0.0011 // the wide lobe of the same flash
 
   // Every strike in the slot array is drawn until its own animation is over.
   // Slots are independent, so a new strike never truncates a running one.
   vec3 lightningBoltLight = vec3(0.0); // cloud-to-ground strokes
-  float screenFlash = 0.0;             // the frame-wide light of the strongest stroke
   for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
     vec4 lightningData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
     float lightningStartIterNum = lightningData[START_ITERNUM];
@@ -725,23 +675,17 @@ vec4 getAirColor(vec2 fragCoordIn)
 
     vec2 lightningPos = lightningData.xy;
     float lightningTime = calcLightningTime(lightningStartIterNum);
-    // One unit in, for both kinds: there is no leader stage to climb out of, so a
-    // strike is at its peak brightness in the iteration it is booked and the curve
-    // is what the player sees from the first frame on (see strikeAnimEnd).
-    float currentLightningIntensity = lightningIntensityOverTime(lightningTime + 1.0, lightningPos, lightningData[INTENSITY]);
+    // A cloud-to-ground stroke is sampled where the curve starts, not one unit in:
+    // its first unit is the leader running down the channel, and that unit is part
+    // of the look (see displayLightning).
+    float currentLightningIntensity = lightningIntensityOverTime(lightningTime, lightningPos, lightningData[INTENSITY]);
     if (currentLightningIntensity <= 0.0)
       continue;
 
     // Cloud-to-ground strokes light the scene here; intra-cloud flashes are the
     // additive pass, so they only contribute their light-on-objects term below.
-    // The strongest running stroke also sets how much of the frame is lit: `max`
-    // rather than a sum, because six strikes at once must not light the sky six
-    // times over.
-    if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY) {
-      lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight(lightningPos),
-                                             lightningData[INTENSITY]);
-      screenFlash = max(screenFlash, currentLightningIntensity);
-    }
+    if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY)
+      lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight(lightningPos));
 
     // The light a strike throws on the clouds around it: one tight lobe that
     // blows out the cloud right next to the channel, and one wide lobe that lifts
@@ -758,13 +702,6 @@ vec4 getAirColor(vec2 fragCoordIn)
     lightningOnLight *= currentLightningIntensity;
     onLight += vec3(lightningOnLight);
   }
-
-  // ... and the light that is no longer local to one strike. This is added to
-  // `onLight`, which multiplies the scene's own colour, so a flash brightens what
-  // is there (cloud, terrain, smoke) instead of painting a flat white over it, and
-  // the structure of the cloudscape survives the flash.
-  if (screenFlash > 0.0)
-    onLight += vec3(0.70, 0.78, 1.0) * (screenFlash * lightningScreenFlashBrightness);
 
   emittedLight += lightningBoltLight / (1. + cloudDensity * 100.0);
 
@@ -1122,7 +1059,7 @@ void main()
       continue;
 
     // The current this mast is carrying, if it has taken a strike: the same curve
-    // at the same one-unit offset the bolt itself is drawn with.
+    // the bolt itself is drawn with, from the same instant.
     float strikeGlow = 0.0;
     for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
       vec4 strikeData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
@@ -1130,8 +1067,7 @@ void main()
         continue;
       if (iterNum < strikeData[START_ITERNUM] || iterNum >= strikeAnimEnd(strikeData))
         continue; // this strike is not running
-      strikeGlow = max(strikeGlow, lightningIntensityOverTime(calcLightningTime(strikeData[START_ITERNUM]) + 1.0,
-                                                              strikeData.xy, strikeData[INTENSITY]));
+      strikeGlow = max(strikeGlow, lightningIntensityOverTime(calcLightningTime(strikeData[START_ITERNUM]), strikeData.xy, strikeData[INTENSITY]));
     }
 
     float alongRod = clamp(dyCells / max(rodHeight, 1.), 0., 1.);                      // 0 base .. 1 tip
@@ -1208,26 +1144,10 @@ void main()
    */
   opacity = clamp(opacity + length(emittedLight), 0.0, 1.0);
 
-  // The emitted light is written premultiplied.
-  //
-  // This fragment is composited as `colour * opacity + what is behind it`, so
-  // light added to `color` and then multiplied by an opacity of 0.2 arrived at a
-  // fifth of its strength. Over a cloud that never showed, because opacity is 1
-  // there - but a channel against the clear sky dimmed *with its own fade*, and
-  // since the alpha is raised by the same emitted light, the two fell together:
-  // the last iterations of a fade went out quadratically, and what was left of
-  // them arrived as a violet smear over the place the sky used to be. Dividing
-  // the emission by the opacity it is about to be multiplied by hands the blend
-  // exactly the light the stroke emitted, whatever the sky behind it is doing.
-  // The divisor is floored so a nearly empty fragment cannot produce a huge
-  // colour, and `opacity` is at least the length of the emission by the line
-  // above, so what comes out is bounded.
-  vec3 emitted = emittedLight / max(opacity, 1e-3);
-
   // The intra-cloud flash is not in this fragment: it is added afterwards, by
   // the additive light pass (see computeICLight), so it can never trade a cloud
   // for itself or dim what it is drawn over.
-  fragmentColor = vec4(softHdrClamp(max(color * finalLight, 0.) + emitted), opacity);
+  fragmentColor = vec4(softHdrClamp(max(color * finalLight, 0.) + emittedLight), opacity);
 
   drawCursor(cursor, view); // over everything else
 }

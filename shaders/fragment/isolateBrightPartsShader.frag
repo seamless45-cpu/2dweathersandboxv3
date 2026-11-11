@@ -40,7 +40,7 @@ out vec3 fragmentColor;
 const float ambientGain = 0.02;
 const float brightKnee = 32.0;
 const float brightGain = 0.45;
-const float brightCeiling = 5450.0;
+const float brightCeiling = 4000.0;
 
 void main()
 {
