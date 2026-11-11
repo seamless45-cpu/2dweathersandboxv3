@@ -216,7 +216,7 @@ check('the light pass returns only the flash light',
   /icLight \+= ic\.rgb;/.test(displayShader) &&
   /icGlare \+= ic\.a;/.test(displayShader));
 check('the scene pass carries no IC light any more',
-  /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emittedLight\), opacity\)/.test(displayShader) &&
+  /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emitted\), opacity\)/.test(displayShader) &&
   !/icAlpha/.test(displayShader) &&
   !/icEmission/.test(displayShader));
 {
@@ -304,8 +304,18 @@ const softHdrClamp = (value) => {
     boltBrightness > HDR_CEILING * 1.5,
     'stroke ' + boltBrightness + ', ceiling ' + HDR_CEILING);
   check('the scene fragment is written through that compression, not a clamp',
-    /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emittedLight\), opacity\);/
+    /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emitted\), opacity\);/
       .test(displayShader) && !/const float hdrCeiling/.test(displayShader));
+
+  // The emitted light - the bolt - used to be added to the fragment colour and
+  // then multiplied by the fragment's alpha by the blend. Over a cloud that cost
+  // nothing (alpha is 1 there); against the sky it dimmed the channel with its own
+  // fade, quadratically, and left a violet smear where the sky had been. It is
+  // written premultiplied now, against a floored divisor.
+  check('the emitted light is written premultiplied, so the alpha cannot eat a fade',
+    /vec3 emitted = emittedLight \/ max\(opacity, 1e-3\);/.test(displayShader) &&
+    /\+ emitted\), opacity\);/.test(displayShader),
+    'a light multiplied by the alpha it raises itself is a light squared');
   check('the intra-cloud pass is written through it too',
     /fragmentColor = vec4\(softHdrClamp\(computeICLight\(\), 0\.0\);|fragmentColor = vec4\(softHdrClamp\(computeICLight\(\)\), 0\.0\);/
       .test(displayShader) || /softHdrClamp\(computeICLight\(\)\)/.test(displayShader));
@@ -337,6 +347,50 @@ const softHdrClamp = (value) => {
   check('a stroke past the ceiling is still white after the tonemap, and finite',
     Number.isFinite(toneMap(strong)) && toneMap(strong) >= 250,
     'tonemapped to ' + toneMap(strong).toFixed(1) + '/255');
+}
+
+// The colour of the light, and the two ways a fade used to go wrong.
+//
+// A return stroke was drawn in vec3(0.70, 0.57, 1.0) - a saturated violet - which
+// is fine while the channel is clipped white and wrong the moment it dims: at low
+// brightness the eye reads a violet line as a fault on the screen, and behind
+// every fade it left a purple ghost of the channel. The channel is a cold white
+// now and warms as it cools, because a cooling channel radiates redder.
+//
+// The other half of the same complaint was the blend. The bolt's light was added
+// to the fragment colour and then multiplied by the fragment's alpha - and the
+// alpha is raised by that same light, so a fade went out as light-squared, twice
+// as fast as the curve, and against the sky what was left of it arrived as a
+// violet smear. The emission is written premultiplied now.
+{
+  const vec3Const = (name) => {
+    const m = displayShader.match(new RegExp('const vec3 ' + name + ' = vec3\\(([^)]*)\\);'));
+    return m ? m[1].split(',').map(Number) : null;
+  };
+  const luminance = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+
+  const boltCol = vec3Const('lightningCol');
+  const coolingCol = vec3Const('lightningCoolingCol');
+  const liftCol = [ 0.70, 0.78, 1.0 ]; // pinned below against the shader line itself
+
+  check('the channel is a cold white at its peak, not a violet',
+    boltCol && Math.min(...boltCol) >= 0.85 && luminance(boltCol) >= 0.85,
+    'lightningCol ' + JSON.stringify(boltCol) + ', luminance ' +
+      (boltCol ? luminance(boltCol).toFixed(2) : 'n/a') + ' (was 0.70/0.57/1.00, 0.65)');
+  check('... which is a third more light for the same channel',
+    boltCol && luminance(boltCol) > 0.65 * 1.3,
+    'luminance ' + (boltCol ? luminance(boltCol).toFixed(2) : 'n/a') + ' against 0.65');
+  check('and it warms as it cools instead of going purple',
+    coolingCol && coolingCol[0] > coolingCol[2] && coolingCol[0] > coolingCol[1] &&
+    /mix\(lightningCoolingCol, lightningCol, smoothstep\(0\.0, 0\.30, curveShare\)\)/.test(displayShader),
+    'a cooling channel radiates redder: ' + JSON.stringify(coolingCol));
+  check('the light a stroke throws on its own clouds is pale, not violet',
+    /onLight \+= vec3\(0\.70, 0\.78, 1\.0\) \* \(screenFlash \* lightningScreenFlashBrightness\);/
+      .test(displayShader) && luminance(liftCol) > 0.72,
+    'luminance ' + luminance(liftCol).toFixed(2) + ' against 0.60 before');
+  check('the channel falloff cannot be asked for the power of zero',
+    /pow\(max\(curveShare, 1e-6\), cgChannelFalloff\)/.test(displayShader),
+    'pow(0, 1.6) is 0 on paper and has been NaN on real drivers');
 }
 
 // The bloom is where "brighter than white" is actually visible, and it is built
@@ -388,14 +442,14 @@ const lightningCurvePeak = (intensity) => 20.0 * intensity * intensity; // 1/(T*
   check('a cloud-to-ground stroke lights the frame, not just its own halo',
     Number.isFinite(sceneLift) && sceneLift > 0 &&
     /if \(lightningData\[INTENSITY\] > LIGHTNING_IC_MAX_INTENSITY\) \{[\s\S]{0,400}?screenFlash = max\(screenFlash, currentLightningIntensity\);/ .test(displayShader) &&
-    /onLight \+= vec3\(0\.50, 0\.58, 1\.0\) \* \(screenFlash \* lightningScreenFlashBrightness\);/.test(displayShader),
+    /onLight \+= vec3\(0\.70, 0\.78, 1\.0\) \* \(screenFlash \* lightningScreenFlashBrightness\);/.test(displayShader),
     'the scene pass has to lift the whole cloudscape from the strongest stroke');
   check('... and the sky above the cloud deck as well',
     /cgFlash = max\(cgFlash, cgIntensity\);/ .test(displayShader) &&
     /return flashLight \+ glareLight \+ screenLight;/.test(displayShader),
     'the scene pass only draws clouds and terrain; the sky needs the additive pass');
   check('a storm-core stroke covers the frame',
-    frameLight(2.5) > 1.0 && frameLight(4.5) <= screenCeiling,
+    frameLight(2.5) > 2.5 && frameLight(4.5) <= screenCeiling,
     'frame-wide light ' + frameLight(2.5).toFixed(2) + ' HDR at intensity 2.5, ' +
     frameLight(4.5).toFixed(2) + ' at 4.5 (ceiling ' + screenCeiling.toFixed(2) + ')');
   check('a weak stroke only lifts it a little',
