@@ -68,11 +68,15 @@ check('both lightning programs declare the rod uniforms',
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(locationShader) &&
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(displayShader));
 check('every strike is drawn with the same bolt, with no dispatch on kind',
-  /lightningBoltLight \+= displayLightning\(lightningPos, lightningTime, currentLightningIntensity,\s*\n?\s*isFlash, isFlash \? 0\.15 : 0\.95\);/
+  /vec3 strikeLight = displayLightning\(lightningPos, lightningTime, currentLightningIntensity,\s*\n?\s*isFlash, isFlash \? 0\.15 : 0\.95\);/
     .test(displayShader) &&
   /bool isFlash = lightningData\[INTENSITY\] <= LIGHTNING_IC_MAX_INTENSITY;/.test(displayShader) &&
   !/lightningGroundHeight/.test(displayShader),
   'one call and one artwork; the kind only chooses how the tile is sampled, never which picture it is');
+check('a flash channel stops at the cloud base and a stroke runs to the ground',
+  /if \(isFlash\)\s*\n\s*strikeLight \*= smoothstep\(0\.0, 3\.0, cloudDensity\);/.test(displayShader) &&
+  !/if \(!isFlash\)\s*\n\s*strikeLight/.test(displayShader),
+  'a flash drawn all the way down is a stroke with the wrong name on it');
 check('a flash reads the tile mip-filtered and a stroke does not',
   /float pixVal = mipped \? texture\(lightningTex, lightningTexCoord\)\.r\s*\n\s*: textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.r;/
     .test(displayShader),

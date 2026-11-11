@@ -358,8 +358,25 @@ vec4 getAirColor(vec2 fragCoordIn)
     // cloud - where taking the whole channel (a threshold of 0) whitewashes eight
     // pixels of the cloud around the channel instead of three.
     bool isFlash = lightningData[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY;
-    lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity,
-                                           isFlash, isFlash ? 0.15 : 0.95);
+    vec3 strikeLight = displayLightning(lightningPos, lightningTime, currentLightningIntensity,
+                                        isFlash, isFlash ? 0.15 : 0.95);
+
+    // The other difference is where the channel is. The artwork is a channel from
+    // the storm down to the ground, and a stroke runs to the bottom of the
+    // simulation because that is what a stroke does - reaching the ground is the
+    // point of it. A flash never leaves its cloud: it is born inside the deck and
+    // dies inside the deck. Drawn from the same artwork all the way down, a flash
+    // is a full-length bolt to the ground with the wrong name on it, which is
+    // what it looked like the moment it became visible again.
+    //
+    // So a flash's channel only exists where the column has cloud in it, and it
+    // stops at the cloud base: no channel below the deck, none in the rain shaft
+    // under it, none on the ground. `cloudDensity` is cloudwater * 13.6, so this
+    // ramp is full at cloudwater 0.22 - the first density at which the cloud is
+    // more than half opaque up there. A stroke is untouched by it.
+    if (isFlash)
+      strikeLight *= smoothstep(0.0, 3.0, cloudDensity);
+    lightningBoltLight += strikeLight;
 
     // The light a strike throws on the clouds around it: the one lobe the app
     // shipped with, scaled by the strike's own intensity.
