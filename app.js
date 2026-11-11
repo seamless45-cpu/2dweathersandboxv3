@@ -6649,8 +6649,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.12'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.12')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.13'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.13')
   ]);
 
   const [
@@ -7509,7 +7509,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.12');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.13');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -7532,10 +7532,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     };
 
     if (job.kind === 'network') {
-      // The intra-cloud channel network: 2048 x 512, a megabyte, one of them. The
-      // display maps it onto 0.45 by 0.225 of the simulation, which puts one
-      // artwork pixel on about one screen pixel.
-      lightningGeneratorWorker.postMessage({kind : 'network', width : 2048, height : 512});
+      // The intra-cloud channel network: 1024 x 256, a quarter of a megabyte, one
+      // of them. The display maps it onto 0.25 by 0.125 of the simulation, which
+      // puts one artwork pixel on about one screen pixel.
+      lightningGeneratorWorker.postMessage({kind : 'network', width : 1024, height : 256});
     } else {
       // The original tile: 2500 x 5000 at a 9 pixel channel. The fork this repo
       // started from halved both and doubled the brightness gain (1250 x 2500 at
@@ -9402,7 +9402,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.12');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.13');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

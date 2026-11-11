@@ -215,13 +215,20 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
  * flash reads its own artwork now, generated once at load by the same generator,
  * on a 2048 x 512 tile (see generateLightningNetwork in lightningGenerator.js).
  *
- * Where it goes: 0.45 of the simulation's width and 0.225 of its height, which at
- * the scales this sim runs at is a slab about ten kilometres across and three
- * deep - the volume a real flash occupies - with one artwork pixel landing on
- * about one screen pixel. It is mirrored per strike in both axes off the strike's
- * own position, so two flashes never draw the same network the same way round, and
- * it always starts at the strike itself, because the network artwork starts at its
+ * Where it goes: 0.25 of the simulation's width and 0.125 of its height - a slab a
+ * few kilometres across rather than the ten the first cut of this spanned, which
+ * read as a web over half the sky - with one artwork pixel landing on about one
+ * screen pixel. It is mirrored per strike in both axes off the strike's own
+ * position, so two flashes never draw the same network the same way round, and it
+ * always starts at the strike itself, because the network artwork starts at its
  * own left edge.
+ *
+ * It is not masked by the cloud it is born in. A channel that leaves one deck and
+ * runs through the clear air to the next is cloud-to-cloud lightning, which is what
+ * most intra-cloud light actually is: masking it to its own cloud cut every channel
+ * off at the cloud's edge, and cut the connections to the neighbouring turret that
+ * are the point of the thing. Only the stroke's cloud attenuation applies, which is
+ * a filter on the light, not a mask on the channel.
  *
  * How it plays out: the same way the bolt does. The threshold starts at one and
  * falls at branchShowFactor a unit of lightningTime, so over the leader stage the
@@ -237,11 +244,20 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
  */
 vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity)
 {
-  const vec2 flashSpan = vec2(0.45, 0.225);      // of the simulation's width and height
+  const vec2 flashSpan = vec2(0.25, 0.125);      // of the simulation's width and height
   const float branchShowFactor = 2.5;            // the leader's outward speed
-  const float leaderBrightness = 50000.;         // 200.0
-  const float mainBoltBrightness = 100000.;      // 100000.
   const float flashThreshold = 0.15;             // the whole network, not just the trunk
+
+  // A stroke is written at a hundred thousand because it is only ever seen
+  // *through* a cloud column, which divides it by a thousand. A flash is not: with
+  // the mask gone its channels run through clear air as well, where nothing
+  // divides them, and the stroke's budget there would write four hundred thousand
+  // over the white point and take the frame with it in bloom. A flash is written
+  // at a fortieth of that - white in a cloud, where the column divides it down to
+  // about a hundred and twenty, and a few times a stroke's own light in the clear
+  // air between two decks.
+  const float leaderBrightness = 8000.;
+  const float mainBoltBrightness = 25000.;
 
   float flashDir = random2d(vec2(pos.y * 3.77, 1.23)) < 0.5 ? -1. : 1.;
   float flashFlip = random2d(vec2(pos.x * 5.11, 7.77)) < 0.5 ? -1. : 1.;
@@ -412,21 +428,20 @@ vec4 getAirColor(vec2 fragCoordIn)
       continue;
 
     // The two kinds, two channels: a stroke is one channel down the picture, a
-    // flash is a network spreading across the cloud (see displayLightning and
+    // flash is a network spreading across the sky (see displayLightning and
     // displayFlash). The kind is a fact about the strike - its intensity - and it
     // is also what a lightning rod snaps to.
     //
-    // A flash is then confined to the cloud it was born in: its own volume is 0.225
-    // of the simulation's height, and the deck it lives in is usually thinner than
-    // that, so the part of the network outside cloud is not drawn. A stroke is not
-    // touched by any of this - it runs to the ground, which is the point of it.
+    // A flash is not masked to the cloud it was born in. Its channels leave one deck
+    // and carry on through the clear air to the next, which is what cloud-to-cloud
+    // lightning is, and what a mask on cloud density threw away: every channel was
+    // cut off at its own cloud's edge. What still applies to both kinds is the
+    // cloud's attenuation of the *light* at the end of this function, which is a
+    // filter on how bright a channel seen through a cloud is, not a mask on whether
+    // the channel exists.
     bool isFlash = lightningData[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY;
-    vec3 strikeLight = isFlash ? displayFlash(lightningPos, lightningTime, currentLightningIntensity)
-                               : displayLightning(lightningPos, lightningTime, currentLightningIntensity);
-
-    if (isFlash)
-      strikeLight *= smoothstep(0.0, 3.0, cloudDensity);
-    lightningBoltLight += strikeLight;
+    lightningBoltLight += isFlash ? displayFlash(lightningPos, lightningTime, currentLightningIntensity)
+                                  : displayLightning(lightningPos, lightningTime, currentLightningIntensity);
 
     // The light a strike throws on the clouds around it.
     float lightningOnLight;
