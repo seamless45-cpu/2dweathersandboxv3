@@ -234,10 +234,15 @@ check('the slot count agrees between app.js, common.glsl and this test',
     !/leaderBrightness/.test(displayShader) && !/leaderRevealSpeed/.test(displayShader) &&
     !/brightnessThreshold = 1\. - /.test(displayShader),
     'a leader stage is a fixed brightness the curve cannot reach, i.e. a frozen glow');
-  check('both passes sample the curve at the same one-unit offset',
-    (displayShader.match(/lightningIntensityOverTime\(lightningTime \+ 1\.0, lightningPos/g) || []).length === 2,
+  check('every call site samples the curve at the same one-unit offset',
+    (displayShader.match(/lightningIntensityOverTime\(lightningTime \+ 1\.0,/g) || []).length ===
+      (displayShader.match(/lightningIntensityOverTime\(lightningTime/g) || []).length &&
+    (displayShader.match(/lightningIntensityOverTime\(lightningTime/g) || []).length >= 2,
     'the cloud-to-ground slot loop and the intra-cloud pass have to agree, or a ' +
     'stroke is drawn dark for its first iterations');
+  check('the rod too, so a mast lights up with the bolt that hit it',
+    /lightningIntensityOverTime\(calcLightningTime\(strikeData\[START_ITERNUM\]\) \+ 1\.0,/.test(displayShader),
+    'the rod corona has to follow the same curve the bolt is drawn with');
 }
 
 /* ---------------------------------------------------------- 2. the schedule */

@@ -195,7 +195,7 @@ check('the halo is compressed by the same knee as the channels',
     'a boosted wide ring is the white slab this pass exists to avoid');
   check('the flash itself is still compressed under 1.0',
     /vec3 flashLight = vec3\(1\.0\) - exp\(-gained\);/.test(displayShader) &&
-    /return flashLight \+ glareLight;/.test(displayShader));
+    /return flashLight \+ glareLight \+ screenLight;/.test(displayShader));
 }
 
 // Strokes must not erase what is under them (source-over) nor pile up into a
@@ -366,6 +366,51 @@ const softHdrClamp = (value) => {
     /color \+= safeSample\(texture\(bloomTex, uv\)\.rgb\) \* 0\.990;/.test(post) &&
     /color = safeSample\(texture\(hdrTex, uv\)\.rgb\);/.test(post),
     'postProcessingShader.frag has to guard what it reads');
+}
+
+// A cloud-to-ground stroke does not only draw a bolt and a halo around it: it
+// lights the frame. The scene pass lifts the cloudscape (through onLight, which
+// multiplies the scene's own colour, so the structure survives), and the additive
+// intra-cloud pass - which runs over the finished picture - carries the same flash
+// into the sky the scene pass never touches. Both are driven by the strike's own
+// intensity curve and both take the strongest running stroke, not the sum.
+const lightningCurvePeak = (intensity) => 20.0 * intensity * intensity; // 1/(T*2)^3 at T0 = 0
+{
+  const screenGain = Number((displayShader.match(/const float icScreenFlashGain = ([\d.]+);/) || [])[1]);
+  const screenCeiling = Number((displayShader.match(/const float icScreenFlashCeiling = ([\d.]+);/) || [])[1]);
+  const sceneLift = Number((displayShader.match(/#define lightningScreenFlashBrightness ([\d.]+)/) || [])[1]);
+  const skyLift = Number((displayShader.match(/#define lightningSkyLightBrightness ([\d.]+)/) || [])[1]);
+  const frameLight = (intensity) => {
+    const flash = lightningCurvePeak(intensity);
+    return screenCeiling * (1 - Math.exp(-flash * screenGain / screenCeiling));
+  };
+
+  check('a cloud-to-ground stroke lights the frame, not just its own halo',
+    Number.isFinite(sceneLift) && sceneLift > 0 &&
+    /if \(lightningData\[INTENSITY\] > LIGHTNING_IC_MAX_INTENSITY\) \{[\s\S]{0,400}?screenFlash = max\(screenFlash, currentLightningIntensity\);/ .test(displayShader) &&
+    /onLight \+= vec3\(0\.50, 0\.58, 1\.0\) \* \(screenFlash \* lightningScreenFlashBrightness\);/.test(displayShader),
+    'the scene pass has to lift the whole cloudscape from the strongest stroke');
+  check('... and the sky above the cloud deck as well',
+    /cgFlash = max\(cgFlash, cgIntensity\);/ .test(displayShader) &&
+    /return flashLight \+ glareLight \+ screenLight;/.test(displayShader),
+    'the scene pass only draws clouds and terrain; the sky needs the additive pass');
+  check('a storm-core stroke covers the frame',
+    frameLight(2.5) > 1.0 && frameLight(4.5) <= screenCeiling,
+    'frame-wide light ' + frameLight(2.5).toFixed(2) + ' HDR at intensity 2.5, ' +
+    frameLight(4.5).toFixed(2) + ' at 4.5 (ceiling ' + screenCeiling.toFixed(2) + ')');
+  check('a weak stroke only lifts it a little',
+    frameLight(0.95) > 0.15 && frameLight(0.95) < frameLight(2.5) * 0.75,
+    frameLight(0.95).toFixed(2) + ' HDR at the lowest cloud-to-ground intensity');
+  check('the frame-wide light is bounded and cannot go infinite',
+    Number.isFinite(screenCeiling) && screenCeiling > 0.5 && screenCeiling < 4 &&
+    /screenCeiling \*|icScreenFlashCeiling \*/.test(displayShader),
+    'ceiling ' + screenCeiling);
+  check('an intra-cloud flash never lights the whole frame',
+    !/screenFlash = max\(screenFlash, icIntensity\)/.test(displayShader),
+    'an IC flash is light inside a cloud; the screen-wide term is for return strokes');
+  check('the local sky lobe of a strike grew with it',
+    Number.isFinite(skyLift) && skyLift > 0.0011,
+    'lightningSkyLightBrightness ' + skyLift);
 }
 
 check('IC flashes stay cloud-scale, not storm-scale',
