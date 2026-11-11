@@ -13,9 +13,11 @@
 //
 //   1. The model. One heading, the original two numbers, the same walk for the
 //      forks, and no leftover of the two-scale version.
-//   2. The channel's weight. It is the original 4.5 pixel channel - wider than an
-//      intra-cloud hair (which is sub-pixel), and asserted on the constant so it
-//      cannot quietly become a hair or a slab.
+//   2. The channel's weight. It is the original 9 pixel channel on the original
+//      2500 x 5000 tile, and asserted on the constant so it cannot quietly become
+//      a hair or a slab. The fork this repo started from halved both and doubled
+//      the brightness gain; the radiance is the same either way, so the check that
+//      matters is pow(lineWidth, 2) and the ratio of the two.
 //   3. The buzz, measured. The real heading arithmetic is ported out of
 //      lightningGenerator.js and run for forty seeded bolts: the heading moves a
 //      third of a radian per pixel and reverses direction many times over the
@@ -51,8 +53,8 @@ function check(name, condition, detail) {
 }
 
 const CG = gen.CG_SHAPE;
-const TILE_W = 1250;
-const TILE_H = 2500;
+const TILE_W = gen.ARTWORK_SIZE.width;  // 2500, the original tile
+const TILE_H = gen.ARTWORK_SIZE.height; // 5000
 
 /* ---------------------------------------------- 1. the model */
 
@@ -70,14 +72,24 @@ check('the original step is what runs: next position, then the kick',
 
 /* ---------------------------------------------- 2. the channel's weight */
 
+check('the tile is the original 2500 x 5000',
+  TILE_W === 2500 && TILE_H === 5000,
+  'artwork ' + TILE_W + ' x ' + TILE_H + ' - the fork this repo started from had halved it');
 check('a return stroke is drawn at the original channel width',
-  CG.lineWidth === 4.5,
-  'lineWidth ' + CG.lineWidth + ' artwork px - the width the app shipped with');
+  CG.lineWidth === 9.0,
+  'lineWidth ' + CG.lineWidth + ' artwork px on a ' + TILE_W + ' px tile - the width the app shipped with');
+check('a fork sheds the original fifth of a pixel as it narrows',
+  CG.taper === 0.2,
+  'taper ' + CG.taper + ' artwork px per step');
+check('the artwork carries the original radiance, not the fork\'s doubled gain',
+  /Math\.pow\(lineWidth, 2\.0\)/.test(source) && Math.pow(CG.lineWidth, 2) === 81,
+  'pow(' + CG.lineWidth + ', 2) = ' + Math.pow(CG.lineWidth, 2) +
+    '; the half-size fork wrote pow(lineWidth * 2, 2) to match, which is why halving it changed nothing on screen but everything in texels');
 check('its forks leave at up to half the trunk, as they always did',
   CG.branchWidthRatio === 0.5,
   'a fork leaves at up to ' + CG.branchWidthRatio + ' of the trunk');
 check('and it is the only channel width there is now',
-  CG.lineWidth >= 4 && !/IC_WIDTH/.test(source),
+  CG.lineWidth >= 9 && !/IC_WIDTH/.test(source),
   'every strike is drawn with this one channel');
 
 /* ---------------------------------------------- 3. the buzz, measured */
