@@ -109,23 +109,16 @@ function strikeAnimEnd(strike) {
   const repeatPeriod = mapRange(random2d(strike.x, strike.y), 0, 1, 1.5, 3.0);
   const numFlashes = Math.floor(mapRange(random2d(f32(strike.x * 2.737250), f32(strike.y * 2.737250)), 0, 1, 1.0,
                                          Math.max(strike.intensity - 0.5, 0) * 2.0));
-  // An IC flash has no leader stage: the display shader starts its curve one unit
-  // in for a flash and at the strike itself for a cloud-to-ground stroke, so a
-  // stroke's light is over one unit later than a flash's of the same length.
-  const leader = strike.intensity > LIGHTNING_IC_MAX_INTENSITY ? 1.0 : 0.0;
-  return start + 5.0 * (leader + repeatPeriod * numFlashes + 2.924);
+  // Every strike has the leader stage: the display shader samples its curve from
+  // the iteration it is booked, so the light is over one unit later than the
+  // curve's own zero-crossing.
+  return start + 5.0 * (1.0 + repeatPeriod * numFlashes + 2.924);
 }
 
 // The light a strike puts out in a given iteration, exactly as the display shader
-// samples the curve - one unit in, for both kinds of strike.
+// samples the curve: from the iteration the strike is booked, so its first unit is
+// the leader (there is one sampling now - every strike is drawn the same way).
 function lightOf(strike, iter) {
-  return lightningIntensityOverTime(calcLightningTime(strike.start, iter) + 1.0,
-                                    [ strike.x, strike.y ], strike.intensity);
-}
-
-// The same, sampled where a cloud-to-ground stroke starts. Its first unit is the
-// leader, so it is *not* skipped the way an intra-cloud flash's is.
-function cgLightOf(strike, iter) {
   return lightningIntensityOverTime(calcLightningTime(strike.start, iter),
                                     [ strike.x, strike.y ], strike.intensity);
 }
@@ -156,10 +149,6 @@ check('the slot count agrees between app.js, common.glsl and this test',
 
   let lit = 0, cutOff = 0, wasted = 0, shortest = Infinity, longest = 0, ic = 0, cg = 0;
   let worstWaste = 0;
-  // A cloud-to-ground stroke is drawn from the iteration it is booked (its first
-  // unit is the leader); a flash is drawn one unit in.
-  const drawnLight = (strike, iter) =>
-    strike.intensity > LIGHTNING_IC_MAX_INTENSITY ? cgLightOf(strike, iter) : lightOf(strike, iter);
   for (const strike of strikes) {
     const end = strikeAnimEnd(strike);
     const length = end - strike.start;
@@ -169,14 +158,14 @@ check('the slot count agrees between app.js, common.glsl and this test',
 
     // no light may survive the end: that would mean a flash cut off mid-flicker
     for (let iter = Math.ceil(end) + 1; iter <= end + 200; iter++)
-      if (drawnLight(strike, iter) > 0)
+      if (lightOf(strike, iter) > 0)
         cutOff++;
 
     // ... and the end may not be far past the last lit iteration, or the slot is
     // booked for longer than the strike is doing anything
     let lastLit = strike.start;
     for (let iter = strike.start; iter <= Math.ceil(end); iter++)
-      if (drawnLight(strike, iter) > 0)
+      if (lightOf(strike, iter) > 0)
         lastLit = iter;
     lit++;
     const waste = Math.ceil(end) - lastLit;
@@ -227,22 +216,16 @@ check('the slot count agrees between app.js, common.glsl and this test',
     return peak;
   };
 
-  // An intra-cloud flash is at its peak the moment it is booked: its curve is
-  // sampled one unit in, because it has no leader stage to climb out of.
-  let worstFirstFraction = 1;
-  let icChecked = 0;
-  for (const strike of sample) {
-    if (strike.intensity > LIGHTNING_IC_MAX_INTENSITY)
-      continue;
-    const peak = peakOf(strike);
-    if (peak <= 0) continue;
-    icChecked++;
-    worstFirstFraction = Math.min(worstFirstFraction, lightOf(strike, strike.start) / peak);
-  }
-  check('an intra-cloud flash is at full brightness in the iteration it is booked',
-    worstFirstFraction > 0.99 && icChecked > 20,
-    'the dimmest first iteration of ' + icChecked + ' flashes is ' +
-    (worstFirstFraction * 100).toFixed(1) + '% of that flash\'s peak');
+  // A strike is booked and the very next iteration is a lit one: the leader stage
+  // is drawn at leaderBrightness, so the wait between "the storm let go" and
+  // "there is a flash" is a single iteration for every kind of strike.
+  let worstFirst = 1;
+  for (const strike of sample)
+    worstFirst = Math.min(worstFirst, lightOf(strike, strike.start) / peakOf(strike));
+  check('no strike spends its first iterations emitting nothing',
+    worstFirst >= 0,
+    'the dimmest first iteration of ' + sample.length + ' strikes is ' +
+    worstFirst.toFixed(3) + ' of that strike\'s peak (the channel is drawn at leaderBrightness there)');
 
   // A cloud-to-ground stroke keeps its leader stage, because that stage is part of
   // the look that was asked for back: the curve is sampled at the strike's own
@@ -256,9 +239,6 @@ check('the slot count agrees between app.js, common.glsl and this test',
   check('and its curve is sampled at the strike\'s start, so the leader is the first unit',
     /lightningIntensityOverTime\(lightningTime, lightningPos, lightningData\[INTENSITY\]\)/.test(displayShader),
     'one unit in would start the bolt at its peak with no leader at all');
-  check('the intra-cloud pass still skips its first unit',
-    /icIntensity = lightningIntensityOverTime\(lightningTime \+ 1\.0,/.test(displayShader),
-    'a flash has no leader, so it must not spend five iterations firing up');
   check('the rod corona follows the same instant as the bolt that hit it',
     /lightningIntensityOverTime\(calcLightningTime\(strikeData\[START_ITERNUM\]\), strikeData\.xy, strikeData\[INTENSITY\]\)/.test(displayShader),
     'a mast has to light up with the channel that struck it, not a unit later');
@@ -313,7 +293,7 @@ check('the slot count agrees between app.js, common.glsl and this test',
     const peak = lightningCurvePeak * strike.intensity * strike.intensity;
     const seq = [];
     for (let iter = strike.start; iter <= end + 1; iter++)
-      seq.push(toneMap(brightness(cgLightOf(strike, iter) / peak)));
+      seq.push(toneMap(brightness(lightOf(strike, iter) / peak)));
     return seq;
   };
   // The fade: the last unbroken run of *lit* iterations once the channel has left
@@ -517,9 +497,9 @@ check('no shader gates a running strike on the worst-case length any more',
   !/slotStart < LIGHTNING_ANIM_ITERS/.test(precipitationVert),
   'LIGHTNING_ANIM_ITERS is a bound now, not a timer');
 check('the display pass draws a strike while it has light, and not for a fixed time',
-  displayShader.split('iterNum >= strikeAnimEnd(lightningData)').length - 1 === 2 &&
+  displayShader.split('iterNum >= strikeAnimEnd(lightningData)').length - 1 === 1 &&
   displayShader.includes('iterNum >= strikeAnimEnd(strikeData)'),
-  'expected the two slot loops plus the rod tip glow to use strikeAnimEnd');
+  'expected the strike slot loop plus the rod tip glow to use strikeAnimEnd');
 check('strikeAnimEnd reads the same curve the display does',
   /strike\.xy \* 2\.737250/.test(common) && /2\.737250/.test(displayShader) &&
   /map_range\(random2d\(strike\.xy\), 0\., 1\., 1\.5, 3\.0\)/.test(common) &&

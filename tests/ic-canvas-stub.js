@@ -1,10 +1,10 @@
 /*
  * A tiny, deterministic stand-in for the 2d canvas that lightningGenerator.js
- * draws its intra-cloud artwork on.
+ * draws its lightning artwork on.
  *
- * The point of this file is that the IC artwork can be rendered and measured by
- * `node tests/check-ic-lightning.js` without a browser: the generator is the real
- * one, only the canvas underneath it is replaced. Strokes are rasterised with an
+ * The point of this file is that the artwork can be rendered and measured by
+ * `node tests/check-lightning-bolt.js` without a browser: the generator is the
+ * real one, only the canvas underneath it is replaced. Strokes are rasterised with an
  * analytic coverage (a pixel is covered by the part of the stroke within half a
  * pixel of it), which is what a browser's antialiased line drawing does, and the
  * two composite modes the generator uses are honoured:
