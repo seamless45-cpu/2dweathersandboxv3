@@ -78,9 +78,13 @@ check('a flash channel stops at the cloud base and a stroke runs to the ground',
   !/if \(!isFlash\)\s*\n\s*strikeLight/.test(displayShader),
   'a flash drawn all the way down is a stroke with the wrong name on it');
 check('a flash reads the tile mip-filtered and a stroke does not',
-  /float pixVal = mipped \? texture\(lightningTex, lightningTexCoord\)\.r\s*\n\s*: textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.r;/
+  /float pixVal = flash \? texture\(lightningTex, lightningTexCoord\)\.r\s*\n\s*: textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.r;/
     .test(displayShader),
   'a sub-pixel channel point-sampled row by row is a dashed line, and dashes vanish over a bright cloud');
+check('a flash runs across the cloud and a stroke runs down it',
+  /lightningTexCoord\.y = flashDir \* \(texCoord\.x - mod\(pos\.x, 1\.\)\) \/ 0\.45;/.test(displayShader) &&
+  /lightningTexCoord\.x = 0\.5 \+ \(texCoord\.y - pos\.y\) \* scaleMult \* aspectRatios\[0\] \/ lightningTexAspect;/.test(displayShader),
+  'a flash drawn down the same axis as a stroke is a stroke, however it is lit and however high it stops');
 check('the bolt tiles have a mip chain for the flash to read',
   /gl\.generateMipmap\(gl\.TEXTURE_2D\);/.test(appSource) &&
   /gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR/.test(appSource),

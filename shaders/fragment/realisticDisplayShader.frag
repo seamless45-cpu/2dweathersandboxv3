@@ -150,20 +150,34 @@ float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
 // second, wide lobe: a stroke goes from white to gone as fast as the curve does,
 // which is what it did before any of this was touched.
 vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity,
-                      bool mipped, float coreThreshold)
+                      bool flash, float coreThreshold)
 {
   vec2 lightningTexCoord = texCoord;
 
-  lightningTexCoord.x -= mod(pos.x, 1.);
-
-  lightningTexCoord.y -= pos.y;
-
   float scaleMult = 1. / pos.y; // 1.0 means lightning is as tall as the simheight
 
-  lightningTexCoord.x *= scaleMult * aspectRatios[0] / lightningTexAspect;
-  lightningTexCoord.y *= -scaleMult;
+  if (flash) {
+    // An intra-cloud channel runs *across* the cloud. That is the one thing that
+    // tells the two kinds apart at a glance, and it is the thing this was still
+    // missing: a flash drawn down the same axis as a stroke is a stroke, however
+    // it is lit and however high it stops. So for a flash the artwork's length
+    // lies along x - as long as 0.45 of the simulation's width, a hundred-odd
+    // kilometres of cloud at the scales this sim runs at, jumping left or right
+    // per strike - and its width lies along y, at the same scale the stroke uses,
+    // so the channel is as wide on screen as a stroke's and no wider.
+    float flashDir = random2d(vec2(pos.y * 3.77, 1.23)) < 0.5 ? -1. : 1.;
+    lightningTexCoord.y = flashDir * (texCoord.x - mod(pos.x, 1.)) / 0.45;
+    lightningTexCoord.x = 0.5 + (texCoord.y - pos.y) * scaleMult * aspectRatios[0] / lightningTexAspect;
+  } else {
+    lightningTexCoord.x -= mod(pos.x, 1.);
 
-  lightningTexCoord.x += 0.5;                                                                                               // center lightning bolt
+    lightningTexCoord.y -= pos.y;
+
+    lightningTexCoord.x *= scaleMult * aspectRatios[0] / lightningTexAspect;
+    lightningTexCoord.y *= -scaleMult;
+
+    lightningTexCoord.x += 0.5;                                                                                             // center lightning bolt
+  }
 
   if (lightningTexCoord.x < 0.01 || lightningTexCoord.x > 1.01 || lightningTexCoord.y < 0.01 || lightningTexCoord.y > 1.01) // prevent edge effect when mipmapping
     return vec3(0);
@@ -173,8 +187,8 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   // call site) - its channel is about a screen pixel wide, and a level-0 fetch of
   // a 9-texel line that a pixel covers ten times over hits it or misses it row by
   // row, which over a bright cloud reads as nothing at all.
-  float pixVal = mipped ? texture(lightningTex, lightningTexCoord).r
-                        : textureLod(lightningTex, lightningTexCoord, 0.0).r;
+  float pixVal = flash ? texture(lightningTex, lightningTexCoord).r
+                       : textureLod(lightningTex, lightningTexCoord, 0.0).r;
 
   const float branchShowFactor = 2.5;       // 1.5
   const float leaderBrightness = 50000.;    // 200.0
