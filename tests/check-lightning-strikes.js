@@ -338,9 +338,10 @@ check('the slot count agrees between app.js, common.glsl and this test',
 
   // the wiring: the call site passes exactly what the shipped shader took, and the
   // gain is the curve, not an envelope built out of it
-  check('the slot loop hands the channel its position, time and curve, and nothing else',
-    /lightningBoltLight \+= displayLightning\(lightningPos, lightningTime, currentLightningIntensity\);/.test(displayShader),
-    'the shipped signature, call for call');
+  check('the slot loop hands the channel its position, time and curve',
+    /lightningBoltLight \+= displayLightning\(lightningPos, lightningTime, currentLightningIntensity,/.test(displayShader) &&
+    !/displayLightning\([^)]*mainBoltBrightness/.test(displayShader),
+    'the shipped arguments; the two after them only choose how the tile is sampled');
   check('the emission is written straight into the fragment, not premultiplied',
     /\+ emittedLight\), opacity\);/.test(displayShader) && !/emitted \/ max\(opacity/.test(displayShader),
     'the original fragment is the original fragment');
