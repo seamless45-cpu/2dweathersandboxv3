@@ -111,14 +111,55 @@ check('a flash never changes shape while it is on screen',
   !/artCoord \* lightningTime/.test(displayShader) &&
   !/stretch\.x/.test(displayShader));
 
-// Glow layers are what a fading flash leaves behind as a dark rim, so an IC
-// channel has to be the stroke and nothing else, like a CG bolt.
-check('IC channels carry no glow layer',
+// The artwork holds channels and nothing else: no painted halo around them. A
+// halo painted into the tile is baked at one resolution (so it aliases when the
+// flash is small), it is painted in the tile's own grey (so it cannot be tinted),
+// and it is cut off dead where the tile ends. The halo a player sees is drawn by
+// the display shader out of the artwork's mip chain instead - see the checks
+// below - which has none of those problems.
+check('the artwork carries no painted glow layer',
   !/drawHalo/.test(generatorSource) &&
   (() => {
     const fn = (generatorSource.match(/function stroke\(pts, w, tone\)[\s\S]*?\n  \}/) || [''])[0];
     return (fn.match(/ctx\.stroke\(\)/g) || []).length === 1;
   })());
+// The halo lives in the display shader, out of the artwork's own mip chain.
+// These are the four things that make it a halo rather than a flood fill: it is a
+// blur of the real artwork (three explicit mip taps), it is tinted cold, it is
+// weighted well below the channels, and it is confined to a known reach.
+check('the display shader draws the halo out of the mip chain',
+  /float wide = textureLod\(icLightningTex, vec3\(uv, layer\), icGlowWideLod\)\.r;/.test(displayShader) &&
+  /textureLod\(icLightningTex, vec3\(uv, layer\), icGlowMidLod\)\.r/.test(displayShader) &&
+  /textureLod\(icLightningTex, vec3\(uv, layer\), artLod \+ icGlowTightBias\)\.r/.test(displayShader),
+  'expected three textureLod() taps of the IC array texture');
+{
+  const col = (displayShader.match(/const vec3 icGlowCol = vec3\(([\d.]+), ([\d.]+), ([\d.]+)\);/) || []).slice(1).map(Number);
+  const tint = displayShader.includes('vec3 light = vec3(core) + icGlowCol * glow;');
+  check('the halo is cold light added to a white channel',
+    col.length === 3 && col[2] > col[1] && col[1] >= col[0] && tint,
+    'icGlowCol ' + col.join(', ') + (tint ? '' : ', and the tint is missing from the sum'));
+}
+{
+  const weight = (name) => Number((displayShader.match(new RegExp('const float ' + name + ' = ([\\d.]+);')) || [])[1]);
+  const tight = weight('icGlowTight'), mid = weight('icGlowMid'), wide = weight('icGlowWide');
+  check('the halo stays well under the channels it surrounds',
+    tight > 0 && tight < 1 && mid > 0 && mid < 1 && wide > 0 && wide < 1,
+    'weights ' + tight + '/' + mid + '/' + wide);
+  const reach = Number((displayShader.match(/if \(reach > ([\d.]+)\)/) || [])[1]);
+  check('the halo is confined to a reach of its own',
+    reach > 0.5 && reach < 0.75,
+    'reach ' + reach + ' sprite halves (the sprite is 0.5)');
+}
+// A halo that could exceed the knee would clip to white and erase the channels
+// under it, so it goes through the same compression as the channels do.
+check('the halo is compressed by the same knee as the channels',
+  displayShader.indexOf('icGlowCol * glow') < displayShader.indexOf('return light * icPower * icBrightness * icEnergy;') &&
+  displayShader.indexOf('return light * icPower * icBrightness * icEnergy;') <
+  displayShader.indexOf('vec3 gained = max(icLight, vec3(0.0))') &&
+  displayShader.indexOf('vec3 gained = max(icLight, vec3(0.0))') <
+  displayShader.indexOf('return vec3(1.0) - exp(-gained);'),
+  'the halo has to be multiplied into the light before the cloud gain and the knee');
+
 // Strokes must not erase what is under them (source-over) nor pile up into a
 // saturated slab ('lighter'): 'lighten' takes the brighter of stroke and
 // backdrop, so crossing channels cannot churn the tile into dark troughs.

@@ -2,7 +2,8 @@
 //
 // Every other lightning test in this repo reads source text; this one runs the
 // real code. It loads lightningGenerator.js with a stubbed 2D canvas
-// (tests/ic-canvas-stub.js), draws the eight atlas tiles, and then measures them -
+// (tests/ic-canvas-stub.js), draws the eight array-texture layers, and then
+// measures them -
 // and it ports the display shader's intra-cloud maths to JS so the artwork can be
 // judged at the size and the zoom a player actually sees it at.
 //
@@ -17,6 +18,10 @@
 //   3. The screen. The IC pass ported line by line from
 //      realisticDisplayShader.frag and run over a range of sprite sizes, in cloud
 //      and in clear air, through the strike curve and the reveal, for many strikes.
+//   3b. The halo. The glow around a channel is drawn out of the artwork's own mip
+//      chain, so it is measured the same way: that it exists, that it is colder
+//      than the channels, that it dies away inside its reach, that it never
+//      outshines the channel it came from and that it cannot fill the frame.
 //   4. Consistency. The tile size, layer count and filtering in app.js against the
 //      shader, and the constants the two have to agree on.
 //
@@ -68,6 +73,24 @@ const IC_TILE_COUNT = shaderNumber('icTileCount');
 const IC_POWER_KNEE = Number((shaderSource.match(/currentLightningIntensity \/ \(1\.0 \+ currentLightningIntensity \* ([\d.]+)\)/) || [])[1]);
 const IC_ENERGY_MAX = Number((shaderSource.match(/clamp\(artPerPixel, ([\d.]+), ([\d.]+)\)/) || [])[2]);
 const IC_ENERGY_MIN = Number((shaderSource.match(/clamp\(artPerPixel, ([\d.]+), ([\d.]+)\)/) || [])[1]);
+// the halo (see displayICLightning in realisticDisplayShader.frag)
+const IC_GLOW_TIGHT_BIAS = shaderNumber('icGlowTightBias');
+const IC_GLOW_MID_LOD = shaderNumber('icGlowMidLod');
+const IC_GLOW_WIDE_LOD = shaderNumber('icGlowWideLod');
+const IC_GLOW_TIGHT = shaderNumber('icGlowTight');
+const IC_GLOW_MID = shaderNumber('icGlowMid');
+const IC_GLOW_WIDE = shaderNumber('icGlowWide');
+const IC_GLOW_COL = (() => {
+  const m = shaderSource.match(/const vec3 icGlowCol = vec3\(([\d.]+), ([\d.]+), ([\d.]+)\);/);
+  return m ? [ Number(m[1]), Number(m[2]), Number(m[3]) ] : null;
+})();
+// how far past the sprite the halo is allowed to reach, in sprite halves, and
+// the fade that gets it there - both read from the shader, not copied
+const IC_HALO_REACH = Number((shaderSource.match(/if \(reach > ([\d.]+)\)/) || [])[1]);
+const IC_HALO_SOFT = (() => {
+  const m = shaderSource.match(/1\.0 - smoothstep\(([\d.]+), ([\d.]+), max\(edge\.x, edge\.y\)\)/);
+  return m ? [ Number(m[1]), Number(m[2]) ] : [ NaN, NaN ];
+})();
 
 
 /* =========================== 1. the channel model ========================= */
@@ -423,38 +446,69 @@ function strikeLook(tileSeed) {
   };
 }
 
-/* one screen pixel of the IC pass: the additive light before the cloud gain */
-function icPixel(layer, look, lx, ly, time, intensity, artPerPixel) {
-  if (Math.abs(lx) > 0.5 || Math.abs(ly) > 0.5) return 0;
+/*
+ * One screen pixel of the IC pass: the additive light before the cloud gain.
+ *
+ * Returns the two parts separately, because they are what the look is made of:
+ * `core` is the channel itself, `glow` is the light the artwork's mip chain
+ * spreads around it (already weighted, before the cold tint is applied).
+ */
+function icPixel(layer, look, lx, ly, time, intensity, artPerPixel, opts) {
+  opts = opts || {};
+  const reach = Math.max(Math.abs(lx), Math.abs(ly));
+  if (reach > IC_HALO_REACH) return { core : 0, glow : 0 };
   const ax = (look % 2 === 0) ? lx : -lx;
   const ay = (look < 2) ? ly : -ly;
-  const lod = Math.log2(Math.max(1e-4, artPerPixel));
-  const channel = Math.max(0, sampleTile(layer, ax + 0.5, 0.5 - ay, lod));
+  const artLod = Math.log2(Math.max(1e-4, artPerPixel));
+  const channel = Math.max(0, sampleTile(layer, ax + 0.5, 0.5 - ay, artLod));
 
-  const radial = Math.max(Math.abs(lx), Math.abs(ly)) * 2;
+  const radial = reach * 2;
   const spread = clamp01(time * 2.4);
   const reveal = clamp01((spread - radial * 0.9) / 0.3);
-  if (reveal <= 0) return 0;
+  const haloReveal = clamp01((spread * 1.30 - radial * 0.55) / 0.45);
+  if (reveal <= 0 && haloReveal <= 0) return { core : 0, glow : 0 };
+
   const edgeX = Math.abs(lx) * 2, edgeY = Math.abs(ly) * 2;
   const window_ = (1 - smoothstep(0.80, 0.99, edgeX)) * (1 - smoothstep(0.80, 0.99, edgeY));
+  const glowWindow = 1 - smoothstep(IC_HALO_SOFT[0], IC_HALO_SOFT[1], Math.max(edgeX, edgeY));
 
   const energy = Math.min(IC_ENERGY_MAX, Math.max(IC_ENERGY_MIN, artPerPixel));
   const power = intensity / (1 + intensity * IC_POWER_KNEE);
-  return channel * reveal * window_ * power * IC_BRIGHTNESS * energy;
+  const scale = power * IC_BRIGHTNESS * energy;
+
+  const core = channel * reveal * window_ * scale;
+
+  let glow = 0;
+  if (opts.glow !== false && haloReveal > 0) {
+    const wide = sampleTile(layer, ax + 0.5, 0.5 - ay, IC_GLOW_WIDE_LOD);
+    glow = wide * IC_GLOW_WIDE;
+    if (wide > 0 || channel > 0) {
+      glow += sampleTile(layer, ax + 0.5, 0.5 - ay, IC_GLOW_MID_LOD) * IC_GLOW_MID;
+      glow += sampleTile(layer, ax + 0.5, 0.5 - ay, artLod + IC_GLOW_TIGHT_BIAS) * IC_GLOW_TIGHT;
+    }
+    glow *= haloReveal * glowWindow * scale;
+  }
+  return { core : core, glow : glow };
 }
 
 const knee = (x) => 1 - Math.exp(-x);
+const glowLuma = IC_GLOW_COL ? (IC_GLOW_COL[0] + IC_GLOW_COL[1] + IC_GLOW_COL[2]) / 3 : 0;
 
 /*
  * Render the flash into a frame and report what a player would see.
  *
  * `spritePx` is how many screen pixels the 2400 m flash covers, which depends on
- * the camera: about a hundred at the default zoom on a 1280-wide canvas.
+ * the camera: about a hundred at the default zoom on a 1280-wide canvas. The
+ * frame is drawn larger than the sprite, because the halo is allowed to spill a
+ * little past it and this has to be measurable.
  */
+const FRAME_HALF = 0.72; // local units; the sprite is 0.5 and the halo 0.62
+
 function renderFlash(options) {
   const spritePx = options.spritePx;
-  const width = Math.round(spritePx * 2);
-  const height = Math.round(spritePx);
+  const spriteH = spritePx / 2; // the sprite is 2:1
+  const width = Math.max(8, Math.round(2 * FRAME_HALF * spritePx));
+  const height = Math.max(8, Math.round(2 * FRAME_HALF * spriteH));
   const artPerPixel = IC_TILE_WIDTH / spritePx;
   const cloud = options.cloud ? 1.0 : 0.0;
   const cloudGain = 1 + IC_CLOUD_SCATTER * cloud;
@@ -462,36 +516,40 @@ function renderFlash(options) {
 
   const light = new Float32Array(width * height);
   const display = new Float32Array(width * height);
-  const spriteW = spritePx / width, spriteH = (spritePx / 2) / height; // 2:1 sprite
+  const glowOnly = new Float32Array(width * height);
+  const localX = (px) => (px + 0.5) / width * 2 * FRAME_HALF - FRAME_HALF;
+  const localY = (py) => FRAME_HALF - (py + 0.5) / height * 2 * FRAME_HALF;
+
   let peak = 0, lit = 0, inside = 0, sum = 0, nan = 0;
-  let edgeMax = 0;
+  let glowPeak = 0;
 
   for (let py = 0; py < height; py++) {
     for (let px = 0; px < width; px++) {
-      const lx = (px / width - 0.5) / spriteW;
-      const ly = (0.5 - py / height) / spriteH;
-      const insideSprite = Math.abs(lx) <= 0.5 && Math.abs(ly) <= 0.5;
-      const raw = icPixel(layer, look, lx, ly, options.time, options.intensity, artPerPixel);
-      const gained = raw * cloudGain;
-      if (!Number.isFinite(gained)) nan++;
-      const litOut = knee(Math.max(0, gained));
-      light[py * width + px] = gained;
-      display[py * width + px] = Math.pow(clamp01(litOut + (options.backdrop || 0)), 1 / 2.2);
-      if (insideSprite) {
+      const lx = localX(px), ly = localY(py);
+      const pixel = icPixel(layer, look, lx, ly, options.time, options.intensity, artPerPixel, options);
+      const raw = (pixel.core + pixel.glow * glowLuma) * cloudGain;
+      if (!Number.isFinite(raw)) nan++;
+      light[py * width + px] = raw;
+      glowOnly[py * width + px] = pixel.glow * glowLuma * cloudGain;
+      display[py * width + px] = Math.pow(clamp01(knee(Math.max(0, raw)) + (options.backdrop || 0)), 1 / 2.2);
+      if (Math.abs(lx) <= 0.5 && Math.abs(ly) <= 0.5) {
         inside++;
-        peak = Math.max(peak, gained);
-        sum += gained;
-        if (gained > 0.25) lit++;
-        const edge = Math.max(Math.abs(lx), Math.abs(ly)) * 2;
-        if (edge > 0.97) edgeMax = Math.max(edgeMax, gained);
+        peak = Math.max(peak, raw);
+        sum += raw;
+        if (raw > 0.25) lit++;
+        glowPeak = Math.max(glowPeak, pixel.glow * glowLuma * cloudGain);
       }
     }
   }
   return {
-    width : width, height : height, light : light, display : display,
+    width : width, height : height, light : light, display : display, glowOnly : glowOnly,
+    localX : localX, localY : localY,
     peak : peak, coverage : lit / Math.max(1, inside), mean : sum / Math.max(1, inside),
-    nan : nan, edgeMax : edgeMax, artPerPixel : artPerPixel,
-    layer : layer, look : look
+    glowPeak : glowPeak, nan : nan, artPerPixel : artPerPixel, cloudGain : cloudGain,
+    layer : layer, look : look, spritePx : spritePx,
+    // the light anywhere near the flash, including the part outside the sprite
+    maxLight : (() => { let m = 0; for (let i = 0; i < light.length; i++) m = Math.max(m, light[i]); return m; })(),
+    at : (px, py) => light[py * width + px]
   };
 }
 
@@ -527,25 +585,189 @@ check('the knee separates a trunk from a hair',
   knee(3.0) - knee(0.8) > 0.2,
   'knee(3.0) = ' + knee(3.0).toFixed(2) + ', knee(0.8) = ' + knee(0.8).toFixed(2));
 
-/* nothing outside the sprite */
+/*
+ * The halo, and the border.
+ *
+ * A flash is allowed a margin of light outside its own rectangle - that is what
+ * makes it read as light scattered in cloud rather than as a decal - but the
+ * light has to be gone before its reach ends, and nothing may step at the border.
+ */
 {
-  let outside = 0;
   const frame = renderFlash({ spritePx : DEFAULT_SPRITE, time : 1.0, intensity : 20, cloud : true, tileSeed : 3.7 });
-  const spriteW = DEFAULT_SPRITE / frame.width;
-  const spriteH = (DEFAULT_SPRITE / 2) / frame.height;
+  let beyond = 0, spillPeak = 0, spillPixels = 0, edgePixels = 0;
   for (let py = 0; py < frame.height; py++)
     for (let px = 0; px < frame.width; px++) {
-      const lx = (px / frame.width - 0.5) / spriteW, ly = (0.5 - py / frame.height) / spriteH;
-      if (Math.abs(lx) > 0.5 || Math.abs(ly) > 0.5)
-        if (frame.light[py * frame.width + px] !== 0) outside++;
+      const reach = Math.max(Math.abs(frame.localX(px)), Math.abs(frame.localY(py)));
+      const v = frame.at(px, py);
+      if (reach > IC_HALO_REACH)
+        beyond = Math.max(beyond, v);
+      else if (reach > 0.5) {
+        edgePixels++;
+        if (v > 0) spillPixels++;
+        spillPeak = Math.max(spillPeak, v);
+      }
     }
-  check('a flash never lights a pixel outside its sprite', outside === 0, outside + ' pixels lit outside');
+  check('no light at all survives past the halo\'s reach',
+    beyond === 0,
+    'brightest ' + beyond.toFixed(4) + ' beyond ' + IC_HALO_REACH + ' sprite halves');
+  check('the halo reaches a little way past the sprite edge',
+    spillPeak > 0 && spillPixels > edgePixels * 0.5,
+    spillPixels + ' of ' + edgePixels + ' pixels past the edge are lit, peak ' + spillPeak.toFixed(3));
+  check('the spill is dimmer than the flash it came from',
+    spillPeak < frame.peak * 0.5,
+    'brightest light past the edge ' + spillPeak.toFixed(3) + ' vs peak ' + frame.peak.toFixed(2));
 }
 
-check('a flash does not end in a hard cut at the sprite border',
-  inCloud.edgeMax <= inCloud.peak * 0.02,
-  'brightest light in the outer 3% of the sprite: ' + inCloud.edgeMax.toFixed(4) +
-  ' (peak ' + inCloud.peak.toFixed(2) + ')');
+{
+  // A step at the sprite border would show up as a jump between two neighbouring
+  // pixels that straddle it. Light may legitimately vary quickly *inside* the
+  // sprite (a channel crossing a row), so only the straddling pair is compared.
+  const frame = renderFlash({ spritePx : DEFAULT_SPRITE, time : 1.0, intensity : 20, cloud : true, tileSeed : 3.7 });
+  let worst = 0;
+  for (let py = 1; py < frame.height; py++) {
+    for (let px = 1; px < frame.width; px++) {
+      const lx0 = frame.localX(px - 1), lx1 = frame.localX(px);
+      const ly0 = frame.localY(py - 1), ly1 = frame.localY(py);
+      const acrossX = Math.abs(lx0) <= 0.5 && Math.abs(lx1) > 0.5;
+      const acrossY = Math.abs(ly0) <= 0.5 && Math.abs(ly1) > 0.5;
+      if (acrossX) worst = Math.max(worst, Math.abs(frame.at(px, py) - frame.at(px - 1, py)));
+      if (acrossY) worst = Math.max(worst, Math.abs(frame.at(px, py) - frame.at(px, py - 1)));
+    }
+  }
+  check('the light does not step at the sprite border',
+    worst <= frame.peak * 0.25,
+    'largest jump across the border ' + worst.toFixed(3) + ' vs peak ' + frame.peak.toFixed(2));
+}
+
+/* ============================== the halo ================================= */
+
+check('the halo constants are readable and sane',
+  Number.isFinite(IC_GLOW_TIGHT) && Number.isFinite(IC_GLOW_MID) && Number.isFinite(IC_GLOW_WIDE) &&
+  Number.isFinite(IC_GLOW_TIGHT_BIAS) && Number.isFinite(IC_GLOW_MID_LOD) && Number.isFinite(IC_GLOW_WIDE_LOD) &&
+  Number.isFinite(IC_HALO_REACH) && Number.isFinite(IC_HALO_SOFT[0]) && Number.isFinite(IC_HALO_SOFT[1]) &&
+  IC_GLOW_TIGHT > 0 && IC_GLOW_MID > 0 && IC_GLOW_WIDE > 0 &&
+  IC_GLOW_MID_LOD > IC_GLOW_TIGHT_BIAS && IC_GLOW_WIDE_LOD > IC_GLOW_MID_LOD && IC_HALO_REACH > 0.5,
+  `tight ${IC_GLOW_TIGHT} mid ${IC_GLOW_MID} wide ${IC_GLOW_WIDE}, ` +
+  `lods +${IC_GLOW_TIGHT_BIAS}/${IC_GLOW_MID_LOD}/${IC_GLOW_WIDE_LOD}, reach ${IC_HALO_REACH}, fade ${IC_HALO_SOFT.join('..')}`);
+
+check('the halo is cold light, not white paint',
+  IC_GLOW_COL !== null && IC_GLOW_COL[2] > IC_GLOW_COL[1] && IC_GLOW_COL[1] >= IC_GLOW_COL[0] && IC_GLOW_COL[2] <= 1,
+  'icGlowCol = ' + (IC_GLOW_COL ? IC_GLOW_COL.join(', ') : 'missing'));
+
+check('only the halo is tinted - the channel itself stays white',
+  /vec3 light = vec3\(core\) \+ icGlowCol \* glow;/.test(shaderSource),
+  'expected: vec3(core) + icGlowCol * glow');
+
+{
+  /*
+   * The halo has to fill the space between the channels without filling the
+   * sprite. "Gap" here means a pixel in the sprite where the artwork itself is
+   * dark, i.e. one the channels do not cover.
+   */
+  const frame = renderFlash({ spritePx : DEFAULT_SPRITE, time : 1.0, intensity : 20, cloud : true, tileSeed : 3.7 });
+  let gaps = 0, gapsLit = 0, gapSum = 0, gapHot = 0, corePeak = 0;
+  for (let py = 0; py < frame.height; py++)
+    for (let px = 0; px < frame.width; px++) {
+      const lx = frame.localX(px), ly = frame.localY(py);
+      if (Math.abs(lx) > 0.5 || Math.abs(ly) > 0.5) continue;
+      const coreOnly = icPixel(frame.layer, frame.look, lx, ly, 1.0, 20, frame.artPerPixel, { glow : false }).core
+                     * frame.cloudGain;
+      corePeak = Math.max(corePeak, coreOnly);
+      if (coreOnly > 0.02) continue;
+      const total = frame.at(px, py);
+      gaps++;
+      gapSum += total;
+      if (total > 0.05) gapsLit++;
+      if (total > 0.6) gapHot++;
+    }
+  const gapMean = gapSum / Math.max(1, gaps);
+  check('the halo lights the gaps between the channels',
+    gapsLit / Math.max(1, gaps) > 0.35 && gapMean > 0.03,
+    `${(gapsLit / Math.max(1, gaps) * 100).toFixed(0)}% of ${gaps} gap pixels lit, mean light ${gapMean.toFixed(3)} HDR`);
+  check('the halo does not turn the sprite into a slab',
+    gapHot / Math.max(1, gaps) < 0.25,
+    `${(gapHot / Math.max(1, gaps) * 100).toFixed(1)}% of the gaps are near-white`);
+  check('the halo never outshines the channel it came from',
+    frame.glowPeak < corePeak,
+    'halo peak ' + frame.glowPeak.toFixed(3) + ' vs channel peak ' + corePeak.toFixed(2));
+}
+
+{
+  /* The halo is a blur of the artwork, so it has to fall off with distance from
+   * the ink that produced it. Distance is measured in artwork pixels, on the
+   * layer this strike uses, with a flood fill outward from the bright ink. */
+  const frame = renderFlash({ spritePx : DEFAULT_SPRITE, time : 1.0, intensity : 20, cloud : true, tileSeed : 3.7 });
+  const tile = tiles[frame.layer];
+  const dist = new Int32Array(TILE_W * TILE_H).fill(-1);
+  const queue = [];
+  for (let i = 0; i < dist.length; i++)
+    if (tile.data[i] > 76) { dist[i] = 0; queue.push(i); }
+  for (let q = 0; q < queue.length; q++) {
+    const i = queue[q], x = i % TILE_W, y = (i / TILE_W) | 0;
+    for (const [ dx, dy ] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= TILE_W || ny >= TILE_H) continue;
+      const j = ny * TILE_W + nx;
+      if (dist[j] !== -1) continue;
+      dist[j] = dist[i] + 1;
+      queue.push(j);
+    }
+  }
+  const bins = [[0, 2], [2, 4], [4, 8], [8, 16], [16, 40]];
+  const sums = bins.map(() => 0), counts = bins.map(() => 0);
+  for (let py = 0; py < frame.height; py++)
+    for (let px = 0; px < frame.width; px++) {
+      const lx = frame.localX(px), ly = frame.localY(py);
+      if (Math.abs(lx) > 0.45 || Math.abs(ly) > 0.45) continue;
+      const ax = (frame.look % 2 === 0) ? lx : -lx;
+      const ay = (frame.look < 2) ? ly : -ly;
+      const tx = Math.round((ax + 0.5) * (TILE_W - 1)), ty = Math.round((0.5 - ay) * (TILE_H - 1));
+      const d = dist[Math.min(dist.length - 1, Math.max(0, ty * TILE_W + tx))];
+      if (d < 0) continue;
+      for (let b = 0; b < bins.length; b++)
+        if (d >= bins[b][0] && d < bins[b][1]) { sums[b] += frame.at(px, py); counts[b]++; break; }
+    }
+  const means = sums.map((v, i) => (counts[i] ? v / counts[i] : NaN));
+  const falling = means.every((v, i) => i === 0 || !Number.isFinite(v) || v <= means[i - 1] * 1.05);
+  check('the halo falls off with distance from the ink',
+    falling && means[0] > means[means.length - 1] * 2,
+    bins.map((b, i) => `${b[0]}-${b[1]}px ${Number.isFinite(means[i]) ? means[i].toFixed(3) : 'n/a'}`).join(' > '));
+}
+
+{
+  const at = (time, intensity, extra) => renderFlash(Object.assign(
+    { spritePx : DEFAULT_SPRITE, time : time, intensity : intensity, cloud : true, tileSeed : 3.7 }, extra || {}));
+  const early = at(0.10, 20), mid = at(0.60, 20), none = at(0.60, 0);
+  const radiusOf = (frame, field) => {
+    let r = 0;
+    for (let py = 0; py < frame.height; py++)
+      for (let px = 0; px < frame.width; px++) {
+        const reach = Math.max(Math.abs(frame.localX(px)), Math.abs(frame.localY(py)));
+        if (reach > 0.5) continue;
+        const glowHere = frame.glowOnly[py * frame.width + px];
+        const v = field === 'glow' ? glowHere : frame.at(px, py) - glowHere;
+        if (v > 0.05) r = Math.max(r, reach);
+      }
+    return r;
+  };
+  check('the halo runs ahead of the channels as the flash spreads',
+    radiusOf(mid, 'glow') > radiusOf(mid, 'core') * 1.05,
+    'halo reaches ' + radiusOf(mid, 'glow').toFixed(3) + ', channels ' + radiusOf(mid, 'core').toFixed(3) + ' (sprite halves)');
+  check('the halo grows with the flash instead of appearing whole',
+    radiusOf(early, 'glow') < radiusOf(mid, 'glow') * 0.8,
+    'halo radius ' + radiusOf(early, 'glow').toFixed(3) + ' at t=0.10 vs ' + radiusOf(mid, 'glow').toFixed(3) + ' at t=0.60');
+  check('a strike with no intensity has no halo either',
+    none.glowPeak === 0, 'halo peak ' + none.glowPeak.toFixed(3));
+}
+
+check('the halo comes out of the artwork, not out of a painted layer',
+  /float wide = textureLod\(icLightningTex, vec3\(uv, layer\), icGlowWideLod\)\.r;/.test(shaderSource) &&
+  /textureLod\(icLightningTex, vec3\(uv, layer\), icGlowMidLod\)\.r/.test(shaderSource) &&
+  /textureLod\(icLightningTex, vec3\(uv, layer\), artLod \+ icGlowTightBias\)\.r/.test(shaderSource),
+  'expected three textureLod() taps of the IC array, at the wide, mid and screen LODs');
+check('the far rings are only fetched when there is light to fetch',
+  /if \(wide > 0\.0 \|\| channel > 0\.0\) \{/.test(shaderSource),
+  'the wide tap is the gate for the two expensive ones');
 
 /* every zoom: the flash has to be visible at the sizes a camera actually uses */
 {
@@ -637,7 +859,7 @@ check('the atlas zoom factor is gone (one tile is the whole flash)',
   !/icArtZoom/.test(appSource) && !/icArtZoom/.test(shaderSource));
 check('the shader picks the layer from the strike, not from the slot',
   /float layer = min\(floor\(tileHash \* icTileCount\), icTileCount - 1\.0\);/.test(shaderSource) &&
-  /texture\(icLightningTex, vec3\(uv, layer\)\)/.test(shaderSource));
+  /textureLod\(icLightningTex, vec3\(uv, layer\), artLod\)/.test(shaderSource));
 check('the IC light is added by its own pass and never blended over the scene',
   /uniform float icLightPass/.test(shaderSource) &&
   /if \(icLightPass > 0\.5\)/.test(shaderSource) &&
