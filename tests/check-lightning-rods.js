@@ -53,10 +53,9 @@ const appNumSlots = Number((appSource.match(/const\s+numLightningSlots\s*=\s*(\d
 const appICtiles = (appSource.match(/const\s+numICLightningTiles\s*=\s*([^;]+);/) || [])[1];
 
 check('common.glsl declares MAX_LIGHTNING_RODS', Number.isInteger(MAX_LIGHTNING_RODS) && MAX_LIGHTNING_RODS > 0);
-// The threshold between an intra-cloud flash and a cloud-to-ground stroke. It
-// came down from 1.0 to 0.9 this round: a strike a tenth of an intensity unit
-// below the old line now reaches the ground, which is what makes CG lightning more
-// common in a storm without touching how the strikes themselves are drawn.
+// Strikes at or below this intensity are born inside a cloud, above it at the
+// cloud base: it is what the rod snapping is gated on, not a choice of artwork -
+// every strike is drawn with the same bolt.
 check('common.glsl declares the intra-cloud / cloud-to-ground threshold',
   LIGHTNING_IC_MAX_INTENSITY === 1.0, 'got ' + LIGHTNING_IC_MAX_INTENSITY);
 check('app.js MAX_LIGHTNING_RODS matches common.glsl',
@@ -65,216 +64,56 @@ check('app.js MAX_LIGHTNING_RODS matches common.glsl',
 check('app.js numLightningSlots matches LIGHTNING_SLOTS',
   appNumSlots === LIGHTNING_SLOTS,
   'app.js ' + appNumSlots + ' vs common.glsl ' + LIGHTNING_SLOTS);
-check('the IC artwork has eight patterns',
-  /const numICLightningTiles = 8;/.test(appSource) &&
-  /const float icTileCount = 8\.0;/.test(displayShader),
-  'app.js: ' + appICtiles);
 check('both lightning programs declare the rod uniforms',
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(locationShader) &&
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(displayShader));
-check('strike dispatch uses LIGHTNING_IC_MAX_INTENSITY',
-  displayShader.includes('lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY'));
-check('IC flashes are drawn with the generator artwork',
-  displayShader.includes('displayICLightning') && appSource.includes("mode : 'IC'"));
+check('every strike is drawn with the same bolt, with no dispatch on kind',
+  /lightningBoltLight \+= displayLightning\(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight\(lightningPos\),/
+    .test(displayShader) &&
+  !/displayLightning\([^)]*LIGHTNING_IC_MAX_INTENSITY/.test(displayShader),
+  'the artwork no longer depends on which kind of strike it is');
 
 /*
- * Intra-cloud artwork.
+ * One artwork.
  *
- * The deep checks for the IC model live in tests/check-ic-lightning.js, which
- * renders the real generator through a stubbed canvas and measures the artwork
- * and the display maths. What belongs here is only what this file is about: the
- * contract between app.js, the shader and the generator - the tile size, the
- * filtering, and the additive pass that makes a flash visible inside a cloud.
+ * Intra-cloud flashes used to be a network of hair-thin filaments, drawn from
+ * eight tiles of their own through a second, additive light pass. Every strike is
+ * drawn with the cloud-to-ground bolt now, so all of that is gone - the generator
+ * mode, the array texture, the pass - and what is left is one picture drawn in one
+ * place. These checks are here to catch any of it coming back by halves.
  */
 const generatorSource = fs.readFileSync(path.join(ROOT, 'lightningGenerator.js'), 'utf8');
 
-check('the IC generator draws one flash per tile request',
-  /msg\.mode === 'IC'/.test(generatorSource) && /generateIntraCloudBolt\(/.test(generatorSource));
-check('every tile asks the generator for its own drawing',
-  /variant : tileIndex/.test(appSource) && /msg\.variant/.test(generatorSource));
-check('the IC artwork is generated off the main thread',
-  /new Worker\('\.\/lightningGenerator\.js\?v=/.test(appSource) &&
-  /postMessage\(bitmap, \[bitmap\]\)/.test(generatorSource));
+check('the generator draws one kind of artwork',
+  !/mode === 'IC'/.test(generatorSource) && !/generateIntraCloudBolt/.test(generatorSource) &&
+  /function generateLightningBolt\(/.test(generatorSource),
+  'the filament artwork and its eight variants are gone');
+check('the display shader has no intra-cloud pass left',
+  !/computeICLight/.test(displayShader) && !/displayICLightning/.test(displayShader) &&
+  !/icLightPass/.test(displayShader) && !/icLightningTex/.test(displayShader),
+  'a second additive pass would draw the filaments again');
+check('and app.js neither generates nor draws one',
+  !/icLightningTex|icLightPass|icSpriteSize/.test(appSource) &&
+  !/'IC'/.test(appSource) && !/ICLightning/.test(appSource),
+  'no array texture, no worker, no second drawArrays');
+check('the bolt is still attenuated by the cloud it is born in',
+  /emittedLight \+= lightningBoltLight \/ \(1\. \+ cloudDensity \* 100\.0\)/.test(displayShader),
+  'light inside a cloud is scattered by it, not painted over the top of it');
 
-// The tile is the whole flash now, so the artwork is only correct if app.js and
-// the shader agree on its size: the shader samples the tile edge to edge.
-{
-  const appW = Number((appSource.match(/const icLightningTileWidth = (\d+);/) || [])[1]);
-  const appH = Number((appSource.match(/const icLightningTileHeight = (\d+);/) || [])[1]);
-  const shaderW = Number((displayShader.match(/const float icTileWidthPx = ([\d.]+);/) || [])[1]);
-  check('app.js and the shader agree on the IC tile size',
-    appW === shaderW && appW > 0 && appH > 0 && Math.abs(appW / appH - 2) < 1e-6,
-    'app.js ' + appW + 'x' + appH + ', shader ' + shaderW);
-}
-check('a strike picks its layer and its mirroring from its own hash',
-  /float tileHash = fract\(sin\(tileSeed/.test(displayShader) &&
-  /float look = floor\(fract\(tileHash \* ([\d.]+)\) \* 4\.0\);/.test(displayShader) &&
-  /lightningStartIterNum \* 0\.6180339 \+ float\(slot\) \* 11\.7/.test(displayShader));
-check('a flash never changes shape while it is on screen',
-  // the mirroring comes from the strike hash, not from the flash's age
-  !/look = floor\(fract\(lightningTime/.test(displayShader) &&
-  !/artCoord \* lightningTime/.test(displayShader) &&
-  !/stretch\.x/.test(displayShader));
+// The light of every strike is drawn in the scene pass, in one fragment, and the
+// only blending there is the ordinary source-over of the scene.
+check('lightning is drawn once, in the scene fragment',
+  /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emittedLight\), opacity\)/
+    .test(displayShader) &&
+  /gl\.drawArrays\(gl\.TRIANGLE_STRIP, 0, 4\); \/\/ draw to hdr framebuffer/.test(appSource),
+  'one draw of the display program, and the bolt is in the fragment it writes');
 
-// The artwork holds channels and nothing else: no painted halo around them. A
-// halo painted into the tile is baked at one resolution (so it aliases when the
-// flash is small), it is painted in the tile's own grey (so it cannot be tinted),
-// and it is cut off dead where the tile ends. The halo a player sees is drawn by
-// the display shader out of the artwork's mip chain instead - see the checks
-// below - which has none of those problems.
-check('the artwork carries no painted glow layer',
-  !/drawHalo/.test(generatorSource) &&
-  (() => {
-    const fn = (generatorSource.match(/function stroke\(pts, w, tone\)[\s\S]*?\n  \}/) || [''])[0];
-    if (!fn || /shadowBlur|filter\s*=/.test(fn))
-      return false;
-    // Every stroke is either the channel itself or a *narrower* core inside it. A
-    // painted halo would be a wider, dimmer stroke behind the channel, so that is
-    // exactly what this rules out.
-    const widths = fn.match(/ctx\.lineWidth = [^;]+;/g) || [];
-    return widths.length >= 2 &&
-           widths[0] === 'ctx.lineWidth = w;' &&
-           widths.every((line) => line === 'ctx.lineWidth = w;' || /ctx\.lineWidth = w \* IC_CORE_WIDTH;/.test(line));
-  })());
-// The halo lives in the display shader, out of the artwork's own mip chain.
-// These are the four things that make it a halo rather than a flood fill: it is a
-// blur of the real artwork (three explicit mip taps), it is tinted cold, it is
-// weighted well below the channels, and it is confined to a known reach.
-check('the display shader draws the halo out of the mip chain',
-  /float wide = textureLod\(icLightningTex, vec3\(uv, layer\), icGlowWideLod\)\.r;/.test(displayShader) &&
-  /textureLod\(icLightningTex, vec3\(uv, layer\), icGlowMidLod\)\.r/.test(displayShader) &&
-  /textureLod\(icLightningTex, vec3\(uv, layer\), artLod \+ icGlowTightBias\)\.r/.test(displayShader),
-  'expected three textureLod() taps of the IC array texture');
-{
-  const col = (displayShader.match(/const vec3 icGlowCol = vec3\(([\d.]+), ([\d.]+), ([\d.]+)\);/) || []).slice(1).map(Number);
-  const tint = displayShader.includes('vec3 light = vec3(core) + icGlowCol * glow;');
-  check('the halo is cold light added to a white channel',
-    col.length === 3 && col[2] > col[1] && col[1] >= col[0] && tint,
-    'icGlowCol ' + col.join(', ') + (tint ? '' : ', and the tint is missing from the sum'));
-}
-{
-  const weight = (name) => Number((displayShader.match(new RegExp('const float ' + name + ' = ([\\d.]+);')) || [])[1]);
-  const tight = weight('icGlowTight'), mid = weight('icGlowMid'), wide = weight('icGlowWide');
-  check('the halo stays well under the channels it surrounds',
-    tight > 0 && tight < 1 && mid > 0 && mid < 1 && wide > 0 && wide < 1,
-    'weights ' + tight + '/' + mid + '/' + wide);
-  const reach = Number((displayShader.match(/if \(reach > ([\d.]+)\)/) || [])[1]);
-  check('the halo is confined to a reach of its own',
-    reach > 0.5 && reach < 0.75,
-    'reach ' + reach + ' sprite halves (the sprite is 0.5)');
-}
-// A halo that could exceed the knee would clip to white and erase the channels
-// under it, so it goes through the same compression as the channels do.
-check('the halo is compressed by the same knee as the channels',
-  displayShader.indexOf('icGlowCol * glow') < displayShader.indexOf('return vec4(light * icPower * icBrightness * icEnergy,') &&
-  displayShader.indexOf('return vec4(light * icPower * icBrightness * icEnergy,') <
-  displayShader.indexOf('vec3 gained = max(icLight, vec3(0.0))') &&
-  displayShader.indexOf('vec3 gained = max(icLight, vec3(0.0))') <
-  displayShader.indexOf('vec3 flashLight = vec3(1.0) - exp(-gained);'),
-  'the halo has to be multiplied into the light before the cloud gain and the knee');
-
-// The glare on a channel is the one part of an intra-cloud flash that is allowed
-// past white, so that a channel blooms the way a cloud-to-ground bolt does. It has
-// to go through its own ceiling - a ceiling high enough to reach the bloom's bright
-// pass - and the wide ring must stay out of it.
-{
-  const num = (source, name) => Number((source.match(new RegExp('const (?:float|vec3) ' + name + ' = (?:vec3\\()?([\\d.]+)')) || [])[1]);
-  const boost = num(displayShader, 'icFlareBoost');
-  const ceiling = num(displayShader, 'icFlareCeiling');
-  check('an intra-cloud channel carries a glare that is brighter than white',
-    boost > 1 && ceiling > 100,
-    'icFlareBoost ' + boost + ', icFlareCeiling ' + ceiling);
-  check('the glare reaches past the bloom knee, so it actually blooms',
-    /const float icFlareBoost = ([\d.]+);/.test(displayShader) &&
-    Number((displayShader.match(/const float icFlareBoost = ([\d.]+);/) || [])[1]) * 0.02 > 0 &&
-    /vec3 glareLight = vec3\(icFlareCeiling\) \* \(1\.0 - exp\(-max\(glare, vec3\(0\.0\)\) \/ icFlareCeiling\)\);/.test(displayShader),
-    'the glare has to bypass the 1.0 knee that squeezes the rest of the flash');
-  check('the wide ring and the network itself are not boosted',
-    /glare = tight \* icGlowTight \+ mid \* icGlowMid \* 0\.55;/.test(displayShader) &&
-    !/glare = wide/.test(displayShader),
-    'a boosted wide ring is the white slab this pass exists to avoid');
-  check('the flash itself is still compressed under 1.0',
-    /vec3 flashLight = vec3\(1\.0\) - exp\(-gained\);/.test(displayShader) &&
-    /return flashLight \+ glareLight;/.test(displayShader));
-}
-
-// Strokes must not erase what is under them (source-over) nor pile up into a
-// saturated slab ('lighter'): 'lighten' takes the brighter of stroke and
-// backdrop, so crossing channels cannot churn the tile into dark troughs.
-check('IC strokes only ever brighten the artwork',
-  /globalCompositeOperation = 'lighten'/.test(generatorSource) &&
-  !/globalCompositeOperation = 'lighter'/.test(generatorSource) &&
-  !/globalCompositeOperation = 'screen'/.test(generatorSource));
-
-// The light pass returns only the flash light, and is drawn additively on top of
-// the finished scene - the reason a flash is visible inside a cloud at all.
-check('the light pass returns only the flash light',
-  /uniform float icLightPass/.test(displayShader) &&
-  /if \(icLightPass > 0\.5\) \{[\s\S]{0,400}?fragmentColor = vec4\(softHdrClamp\(computeICLight\(\)\), 0\.0\);[\s\S]{0,80}?return;/.test(displayShader) &&
-  /vec3 computeICLight\(\)/.test(displayShader) &&
-  /vec4 ic = displayICLightning\(/.test(displayShader) &&
-  /icLight \+= ic\.rgb;/.test(displayShader) &&
-  /icGlare \+= ic\.a;/.test(displayShader));
-check('the scene pass carries no IC light any more',
-  /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emittedLight\), opacity\)/.test(displayShader) &&
-  !/icAlpha/.test(displayShader) &&
-  !/icEmission/.test(displayShader));
-{
-  // draw order: set the pass flag, switch to ONE/ONE, draw, reset, restore
-  const passIdx = appSource.indexOf("'icLightPass'), 1.0");
-  const addBlendIdx = appSource.indexOf('gl.blendFunc(gl.ONE, gl.ONE);', passIdx);
-  const passDrawIdx = appSource.indexOf('gl.drawArrays', passIdx);
-  const resetIdx = appSource.indexOf("'icLightPass'), 0.0", passIdx);
-  const restoreIdx = appSource.indexOf('gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);', passIdx);
-  check('the IC light pass is drawn additively and then switched back off',
-    passIdx > 0 && addBlendIdx > passIdx && passDrawIdx > addBlendIdx &&
-    resetIdx > passDrawIdx && restoreIdx > resetIdx,
-    'pass ' + passIdx + ', additive ' + addBlendIdx + ', draw ' + passDrawIdx +
-    ', reset ' + resetIdx + ', restore ' + restoreIdx);
-}
-
-// Light born inside a cloud is not dimmed by that cloud (it is the medium that
-// scatters it towards the viewer), and what does depend on the cloud is a gain,
-// so a flash inside one is seen through it.
-check('IC light is not dimmed by the cloud it is in',
-  !/icLight \/ \(1\. \+ cloud/.test(displayShader) &&
-  /1\.0 \+ icCloudScatter \* cloudOpacity/.test(displayShader));
-{
-  const gain = Number((displayShader.match(/const float icCloudScatter = ([\d\.]+)/) || [])[1]);
-  check('an IC flash inside a cloud gets a scatter gain',
-    gain > 0 && gain <= 8,
-    'icCloudScatter = ' + gain);
-}
-
-// The default display path has no tonemapping at all, so anything above 1.0 in
-// HDR is clipped: every tier of channel would arrive as the same white. The soft
-// knee is what keeps a trunk, an arm and a hair apart on screen.
-check('the IC light is compressed by a soft knee before it reaches the frame',
-  /vec3 flashLight = vec3\(1\.0\) - exp\(-gained\);/.test(displayShader) &&
-  /vec3 gained = max\(icLight, vec3\(0\.0\)\) \* \(1\.0 \+ icCloudScatter \* cloudOpacity\);/.test(displayShader));
-
-// Additive light can only add: over the whole plausible range - a flash fading
-// from nothing to full brightness, over backdrops from a night sky to a sunlit
-// cloud - the picture is never darker, and always brighter as the light grows.
+// The tonemap, for the checks below.
 const toneMap = (c) => {
   c = Math.max(c, 0);
   const aces = Math.min(1, Math.max(0, (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14)));
-  return 255 * Math.sqrt(aces);
+  return 255 * Math.pow(aces, 1 / 2.2);
 };
-{
-  let darkening = 0, inversion = 0;
-  for (let backdrop = 0.02; backdrop <= 3.0; backdrop += 0.02) {
-    let previous = toneMap(backdrop);
-    for (let L = 0; L <= 4; L += 0.01) {
-      const lit = toneMap(backdrop + L);
-      if (lit < toneMap(backdrop)) darkening++;
-      if (lit < previous - 1e-9) inversion++;
-      previous = lit;
-    }
-  }
-  check('an IC flash can never darken what it is drawn over', darkening === 0);
-  check('a fading IC flash faintly brightens instead of flickering darker', inversion === 0);
-}
 
 // A CG return stroke is 100000 by design and the scene is rendered into an
 // RGBA16F buffer (largest finite value 65504). Written raw, that light overflowed
@@ -315,9 +154,6 @@ const softHdrClamp = (value) => {
     /\+ emittedLight\), opacity\);/.test(displayShader) &&
     !/emitted \/ max\(opacity/.test(displayShader),
     'no premultiplication in the fragment the original wrote');
-  check('the intra-cloud pass is written through it too',
-    /fragmentColor = vec4\(softHdrClamp\(computeICLight\(\), 0\.0\);|fragmentColor = vec4\(softHdrClamp\(computeICLight\(\)\), 0\.0\);/
-      .test(displayShader) || /softHdrClamp\(computeICLight\(\)\)/.test(displayShader));
   check('the emission alpha cannot run past opaque',
     /opacity = clamp\(opacity \+ length\(emittedLight\), 0\.0, 1\.0\)/.test(displayShader));
 
@@ -431,21 +267,14 @@ const lightningCurvePeak = (intensity) => 20.0 * intensity * intensity; // 1/(T*
     !/screenFlash/.test(displayShader) &&
     !/icScreenFlash/.test(displayShader),
     'the screen-wide light of the later rounds is gone with the rest of the look');
-  check('and the additive pass carries no cloud-to-ground light',
-    !/cgFlash/.test(displayShader) &&
-    /return flashLight \+ glareLight;/.test(displayShader),
-    'the IC pass draws intra-cloud light, and only that');
+  check('and there is no second light pass for it to carry anything into',
+    !/cgFlash/.test(displayShader) && !/screenFlash/.test(displayShader),
+    'the frame-wide and additive light terms went with the pass that used them');
   check('the lobes are driven by the strike\'s own curve',
     /lightningOnLight \*= currentLightningIntensity;/.test(displayShader),
     'so a weak flash lights less than a storm core');
 }
 
-check('IC flashes stay cloud-scale, not storm-scale',
-  /const icFlashWidthMeters = (\d+)/.test(appSource) &&
-  Number(appSource.match(/const icFlashWidthMeters = (\d+)/)[1]) <= 8000 &&
-  Number(appSource.match(/const icFlashHeightMeters = (\d+)/)[1]) <= 4000,
-  'width ' + (appSource.match(/const icFlashWidthMeters = (\d+)/) || [])[1] +
-  ', height ' + (appSource.match(/const icFlashHeightMeters = (\d+)/) || [])[1]);
 check('rod snaps are gated to cloud-to-ground strikes',
   locationShader.includes('strike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY'));
 

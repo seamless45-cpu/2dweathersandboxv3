@@ -23,8 +23,6 @@ uniform sampler2D surfaceTextureMap;
 uniform sampler2D curlTex;
 uniform sampler2D lightningTex;
 uniform sampler2D lightningDataTex;
-uniform sampler2DArray icLightningTex; // one layer of intra-cloud artwork per pattern
-uniform vec2 icSpriteSize;        // size of one intra-cloud flash, in normalized sim coords
 
 uniform sampler2D ambientLightTex;
 
@@ -55,11 +53,6 @@ uniform float displayVectorField;
 uniform float iterNum;
 uniform bool volumetricCloudLighting;
 
-// Set to 1.0 for the second, additive draw of this same program: that draw
-// returns nothing but the intra-cloud light (see computeICLight and the draw in
-// app.js) and leaves the scene alone.
-uniform float icLightPass;
-
 out vec4 fragmentColor;
 
 #include "common.glsl"
@@ -81,15 +74,6 @@ vec3 color;
 float opacity = 1.0;
 
 vec3 emittedLight = vec3(0.); // pure light, like lightning
-
-// Intra-cloud light is not part of this pass at all: it is drawn afterwards, on
-// top of the finished scene, by a second additive draw of this program (see
-// computeICLight and the draw in app.js). Alpha blending can only *trade* a
-// backdrop for a source, so a channel drawn in an alpha-blended fragment has to
-// give up as much cloud as it is opaque - and a sunlit cloud is brighter than
-// the light of a channel, so the channel lost that trade and disappeared inside
-// it. An addition cannot lose: the cloud stays exactly as it is and the channel
-// sits on top of it.
 
 float shadowLight;
 
@@ -266,317 +250,6 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
 }
 
 
-// Intra-cloud flash.
-//
-// The artwork comes from lightningGenerator.js ('IC' mode): a network of
-// hair-thin channels spreading through a charge layer and never reaching the
-// ground. The generator draws eight different networks, one per layer of a 2D
-// array texture, and every strike picks one of them - and a mirroring of it -
-// from its own start iteration and position, so two flashes rarely look alike.
-//
-// One atlas tile is the whole flash: the tile is drawn at the size a flash
-// covers on screen, so the artwork is sampled at roughly one artwork pixel per
-// screen pixel and its strokes arrive as strokes. An earlier version sampled a
-// quarter of a much bigger tile, which minified the artwork four to one - a
-// hair then fell between screen pixels and the flash dissolved into a sprinkle
-// of hot dots.
-//
-// The artwork lives in a 2D array texture, one layer per pattern, so each layer
-// gets its own mip chain and the flash is filtered correctly at every camera
-// zoom: crisp where a channel is several pixels wide, and a smooth glow where the
-// whole flash is a hundred pixels across. An atlas would have needed an inset per
-// tile and would have bled one pattern into the next as soon as it was mipmapped.
-const float icTileCount = 8.0;
-// Keep in step with icLightningTileWidth in app.js.
-const float icTileWidthPx = 256.0;
-
-// The light a channel carries per unit of artwork luminance. The artwork's own
-// tone already separates a trunk (1.0) from an arm (0.70) from a hair (0.44);
-// this constant only sets what one unit of that tone is worth in HDR light.
-//
-// It is small on purpose. The knee in computeICLight() is fed
-// channel * icBrightness * icPower * icEnergy * cloudGain, which at the default
-// camera is about 10x the artwork tone (icEnergy 2.56 x cloud gain 3), so the
-// constant has to be well below one for the tiers to land apart instead of all
-// arriving as the same pure white. It went up from 0.58 when the strokes became
-// sub-pixel (IC_WIDTH in lightningGenerator.js): a line thinner than the pixel it
-// is drawn in loses ink to coverage, and a flash of hair-thin channels that is
-// dimmer than it was is not what "thinner" is supposed to cost.
-const float icBrightness = 0.74;
-
-// ---------------------------------------------------------------- the halo ---
-//
-// A cloud-to-ground bolt gets its glow for free. It is written at a hundred
-// thousand HDR units, so the two percent of the frame that the bloom pyramid
-// keeps is still blinding, and that smeared-out brightness is what the eye reads
-// as the bolt's halo. An intra-cloud flash cannot be written that way: its pass
-// is added over a finished, sunlit cloud, where anything past 1.0 is clipped and
-// a flash of clipped white is a slab with no channels left in it.
-//
-// So the halo is drawn here, out of the same artwork, and built the way the bloom
-// pyramid builds one: by averaging the tile over larger and larger areas, which
-// is exactly what the hardware mip chain already holds. That average is not a
-// stand-in for the light, it *is* the light - it is the share of the flash's ink
-// that falls in that area - so a trunk glows hard, a hair barely, and the halo
-// follows the shape of the network instead of hanging around it as a blob.
-//
-// Three radii, because one radius never looks like light: a flare of a couple of
-// screen pixels right on a channel (a lens effect, so it is measured in screen
-// pixels), the light a channel scatters into the cloud it is in, and a bed of
-// light over half a kilometre of cloud that the whole network sits in - the part
-// that reads as a cloud lit from the inside.
-//
-// The weights are counterweights to the averaging: a ring four times wider has a
-// mean about four times smaller, so it needs a bigger weight just to sit at the
-// same brightness. And all three together are deliberately kept far below the
-// channels they surround - the halo is light *around* the network, and a halo as
-// bright as a channel would fill the gaps between channels and turn the flash
-// into the bright slab this whole pass exists to avoid.
-// ------------------------------------------------ the glare on a channel ---
-//
-// The halo above is light *around* the network and it has to stay dimmer than the
-// channels it surrounds, or the gaps between channels fill in and the flash turns
-// into the white slab this whole pass exists to avoid. A channel's own glare is
-// the opposite kind of light: it is the part of a flash that is brighter than the
-// frame can hold, and it is what a cloud-to-ground bolt has always had (it is
-// written at a hundred thousand HDR units and the bloom's bright pass - knee 32 -
-// turns that surplus into the halo around it).
-//
-// An intra-cloud flash could never have one, because everything it wrote was
-// squeezed under 1.0 before it reached the buffer. So the two rings that hug a
-// channel - a flare a couple of screen pixels wide and the light it scatters a few
-// pixels out - are lifted to their own ceiling instead, where the bright pass can
-// see them. The wide ring, the cloud glow and the tiers of the network itself are
-// not lifted, so the glow hangs on the channels and not on the whole sprite.
-const vec3 icFlareCol = vec3(0.86, 0.90, 1.0); // hotter and less blue than the halo
-const float icFlareBoost = 55.0;               // lifts a channel's glare past white
-const float icFlareCeiling = 220.0;            // its own ceiling, far inside a 16F texel
-
-const float icGlowTightBias = 1.5; // extra LOD on top of the sampling LOD
-const float icGlowMidLod = 4.0;
-const float icGlowWideLod = 6.5;
-const float icGlowTight = 0.32;
-const float icGlowMid = 0.25;
-const float icGlowWide = 0.30;
-// Scattered light is colder than the channel it came from - the cloud absorbs and
-// re-emits it, and it is the diffuse part that reaches the eye. It is the same
-// family of colour as the CG bolt's lightningCol, only bluer: intra-cloud light
-// arrives through the cloud, which takes the violet out of it.
-const vec3 icGlowCol = vec3(0.64, 0.70, 1.0);
-
-// Returns the flash in .rgb and the channel glare in .a. The two go through
-// different ceilings in computeICLight(): the flash has to stay inside the range a
-// thin channel can carry, while the glare is the part that is allowed past white
-// so that a channel carries a glow the way a cloud-to-ground bolt does.
-vec4 displayICLightning(vec2 pos, float lightningTime, float currentLightningIntensity,
-                        float tileSeed, float artPerPixel)
-{
-  // The flash is always the same size and orientation on screen: the artwork is
-  // deliberately never stretched, so a flash does not swim while it is on. Its
-  // variety comes from the eight tiles and the mirroring below.
-  const float revealSpeed = 2.4;
-
-  // position inside the flash, -0.5 .. 0.5
-  vec2 local = vec2((texCoord.x - mod(pos.x, 1.)) / max(icSpriteSize.x, 1e-5),
-                    (texCoord.y - pos.y) / max(icSpriteSize.y, 1e-5));
-
-  // The halo reaches a little past the sprite, so this is wider than the artwork
-  // rectangle: the light has faded out to nothing by 0.62 anyway.
-  float reach = max(abs(local.x), abs(local.y));
-  if (reach > 0.62)
-    return vec4(0.0);
-
-  // Which of the eight networks this strike uses, and which way round it is
-  // mirrored. The hash runs on the strike's own start iteration and position, so
-  // it is fixed for the whole flash and different for the next one. Eight tiles
-  // times four mirrorings is thirty-two looks out of a texture of eight.
-  float tileHash = fract(sin(tileSeed * 12.9898 + dot(pos, vec2(41.7, 91.3))) * 43758.5453);
-  float layer = min(floor(tileHash * icTileCount), icTileCount - 1.0);
-  float look = floor(fract(tileHash * 17.31) * 4.0);
-  vec2 artCoord = vec2(mod(look, 2.0) < 0.5 ? local.x : -local.x,
-                       look < 2.0 ? local.y : -local.y);
-  vec2 uv = vec2(artCoord.x + 0.5, 0.5 - artCoord.y);
-
-  // The level the artwork is sampled at is the one the screen can resolve, worked
-  // out from artPerPixel rather than from fwidth() inside this loop: a screen
-  // pixel covers artPerPixel artwork pixels, so one texel of level log2() of it
-  // is a screen pixel. Every fetch below is an explicit LOD for the same reason -
-  // derivatives are undefined inside a loop that skips slots.
-  float artLod = log2(max(artPerPixel, 1e-4));
-  float channel = max(textureLod(icLightningTex, vec3(uv, layer), artLod).r, 0.0);
-
-  // The flash spreads outwards from the origin: channels appear at the centre
-  // first and the outer branches light up as lightningTime grows.
-  float radial = reach * 2.0; // 0 centre .. 1 at the sprite edge
-  float spread = clamp(lightningTime * revealSpeed, 0.0, 1.0);
-  float reveal = clamp((spread - radial * 0.9) / 0.3, 0.0, 1.0);
-
-  // The halo of a flash runs ahead of its channels and outlives them: the cloud
-  // around a channel starts to glow a little before the channel itself arrives,
-  // and the light it has scattered lingers as the flash decays. Slightly wider
-  // and slightly earlier than the reveal above, so the flash is a growing ball of
-  // light with channels in it instead of a hard-edged rectangle of artwork.
-  float haloReveal = clamp((spread * 1.30 - radial * 0.55) / 0.45, 0.0, 1.0);
-  if (reveal <= 0.0 && haloReveal <= 0.0)
-    return vec4(0.0);
-
-  // Fade the outer part of the sprite out, so a branch never ends in a hard cut
-  // where the artwork stops. The artwork keeps a margin of its own, so this only
-  // has to soften the last few percent.
-  vec2 edge = abs(local) * 2.0; // 0 at the centre, 1 at the sprite border
-  float window = (1.0 - smoothstep(0.80, 0.99, edge.x)) * (1.0 - smoothstep(0.80, 0.99, edge.y));
-
-  // The halo is allowed its margin outside the sprite, and is only cut where the
-  // light has already run out - a hard edge here would be a visible box.
-  float glowWindow = 1.0 - smoothstep(1.00, 1.24, max(edge.x, edge.y));
-
-  // A channel loses light to filtering as the sprite shrinks, so the artwork is
-  // scaled by how many artwork pixels one screen pixel covers. The clamp is
-  // deliberately narrow: outside it this becomes a licence to overdrive the
-  // whole flash, and an overdriven flash clips to one flat white slab in which
-  // the thickness of a channel means nothing.
-  float icEnergy = clamp(artPerPixel, 1.0, 3.0);
-
-  // The strike intensity curve peaks around 20 for a couple of iterations.
-  // Driving the artwork straight from it pushed every channel past white at the
-  // peak, so the peak is compressed: the flash still flickers, but it stays in
-  // the range a thin channel can carry.
-  float icPower = currentLightningIntensity / (1.0 + currentLightningIntensity * 0.85);
-
-  float core = channel * reveal * window;
-
-  // The halo. The widest ring is fetched first and on its own: most of the screen
-  // is nowhere near a flash, and for those pixels it is the only fetch paid.
-  float glow = 0.0;
-  float glare = 0.0;
-  if (haloReveal > 0.0) {
-    float wide = textureLod(icLightningTex, vec3(uv, layer), icGlowWideLod).r;
-    glow = wide * icGlowWide;
-    if (wide > 0.0 || channel > 0.0) {
-      float mid = textureLod(icLightningTex, vec3(uv, layer), icGlowMidLod).r;
-      // the flare is measured in screen pixels, so it keeps the artwork's own
-      // sampling LOD and only adds a couple of levels to it
-      float tight = textureLod(icLightningTex, vec3(uv, layer), artLod + icGlowTightBias).r;
-      glow += mid * icGlowMid;
-      glow += tight * icGlowTight;
-      // The two rings that hug a channel are also the glare on it: this is the
-      // light that is allowed past white (see icFlareCeiling), so a channel
-      // blooms the way a bolt does. The wide ring is deliberately not in here -
-      // it is the cloud lit from the inside, and that has to stay under the
-      // channels or the whole sprite turns into the white slab this pass exists
-      // to avoid.
-      glare = tight * icGlowTight + mid * icGlowMid * 0.55;
-    }
-    glow *= haloReveal * glowWindow;
-    glare *= haloReveal * glowWindow;
-  }
-
-  // The channel is white and the light around it is cold. Adding them keeps the
-  // channel readable inside its own halo, which is the whole difference between
-  // a flash and a bright smear.
-  vec3 light = vec3(core) + icGlowCol * glow;
-  return vec4(light * icPower * icBrightness * icEnergy, glare * icPower * icBrightness * icEnergy);
-}
-
-
-// Light of every running intra-cloud flash, and nothing else.
-//
-// This is drawn as a second, additive pass over the finished scene (see the draw
-// in app.js), so it is added to whatever a pixel already shows and can neither
-// replace a cloud nor darken anything. No cloud mask and no depth attenuation:
-// an intra-cloud flash is *inside* the cloud, so the cloud it was born in is not
-// something the light has to get through - it is the medium that scatters it
-// towards the viewer, and it is also what the channel has to be readable
-// against.
-//
-// Between the flashes the pass returns zero and the additive draw is a no-op,
-// which is why it can safely run every frame.
-vec3 computeICLight()
-{
-  vec3 icLight = vec3(0.0);
-  float icGlare = 0.0; // light past white, on the channels themselves
-
-  // How many artwork pixels one screen pixel covers, worked out once, outside
-  // the slot loop: screen-space derivatives inside a loop with `continue` are
-  // undefined, and every flash shares the same sprite scale anyway.
-  float artPerPixel = fwidth(texCoord.x) * icTileWidthPx / max(icSpriteSize.x, 1e-5);
-  for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
-    vec4 lightningData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
-    float lightningStartIterNum = lightningData[START_ITERNUM];
-    if (lightningStartIterNum <= 0.0)
-      continue; // never used / released
-    if (iterNum < lightningStartIterNum || iterNum >= strikeAnimEnd(lightningData))
-      continue; // not started yet, or its own animation is over
-    if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY)
-      continue; // cloud-to-ground stroke, drawn by the scene pass
-
-    vec2 lightningPos = lightningData.xy;
-    float lightningTime = calcLightningTime(lightningStartIterNum);
-
-    // An intra-cloud flash has no leader stage. The intensity curve spends its
-    // first unit ramping a stepped leader down a channel, which is a
-    // cloud-to-ground idea: a flash is a network lighting up inside the cloud all
-    // at once. So its curve is sampled one unit in and it is at its peak in the
-    // iteration it is booked (strikeAnimEnd knows: a stroke is booked one unit
-    // longer than a flash for exactly this reason).
-    float icIntensity = lightningIntensityOverTime(lightningTime + 1.0, lightningPos, lightningData[INTENSITY]);
-    if (icIntensity <= 0.0)
-      continue;
-
-    vec4 ic = displayICLightning(lightningPos, lightningTime, icIntensity,
-                                 lightningStartIterNum * 0.6180339 + float(slot) * 11.7,
-                                 artPerPixel);
-    icLight += ic.rgb;
-    icGlare += ic.a;
-  }
-
-  if (dot(icLight, vec3(1.0)) <= 0.0 && icGlare <= 0.0)
-    return vec3(0.0); // nothing running: no cloud sample needed
-
-  // Seen through the cloud it is in. A channel has to stay readable against the
-  // cloud around it, and a sunlit cloud is ~1.0 in HDR units - about 230/255 on
-  // screen - while a thin channel only carries a fraction of that. How much
-  // light gets from a flash to the viewer grows with the amount of cloud in the
-  // way, because that is the medium scattering it, so the light is scaled by the
-  // cloud it is seen through. In clear air there is nothing to scatter and no
-  // bright backdrop to beat, so the gain is 1 there.
-  // Same smooth 2x2 water sample the scene pass uses, so the gain follows the
-  // cloud instead of stepping from cell to cell along a channel.
-  float cloudWater = max(bilerpWallVis(waterTex, wallTex, fragCoord)[CLOUD], 0.0);
-  float cloudDensity = cloudWater * 13.6; // same scale as getAirColor
-  float cloudOpacity = clamp(1.0 - 1.0 / (1.0 + cloudDensity), 0.0, 1.0);
-  const float icCloudScatter = 2.0;
-  vec3 gained = max(icLight, vec3(0.0)) * (1.0 + icCloudScatter * cloudOpacity);
-
-  // ... and then compressed with a soft knee before it reaches the frame.
-  //
-  // The default display path has no tone mapping (ACES off), so anything above
-  // 1.0 in HDR is simply clipped: without a knee, a bright trunk and a faint
-  // hair both arrive as the same pure white and the channel structure - the one
-  // thing that makes a flash look like a flash - is thrown away exactly where
-  // the flash is brightest. 1 - exp(-x) passes small values almost untouched,
-  // gives the trunk a shoulder, and cannot exceed 1, so every tier stays a
-  // different colour on screen instead of all of them clipping together.
-  vec3 flashLight = vec3(1.0) - exp(-gained);
-
-  // The glare on the channels goes through a second, much higher ceiling.
-  //
-  // A cloud-to-ground bolt is written at a hundred thousand HDR units and gets a
-  // halo out of the bloom's bright pass, which only sees light above its knee
-  // (32). An intra-cloud flash could never have one: everything it wrote was
-  // squeezed under 1.0 by the knee above, and the frame only carries halo-making
-  // light above 32. So the two rings that hug a channel - a screen-pixel flare
-  // and the light it scatters a few pixels out - are kept out of that knee and
-  // written against their own ceiling instead. They are the glare of the channel,
-  // the part that is allowed to be brighter than white, and the bright pass picks
-  // them up; the flash, the wide cloud glow and the tiers above them are not
-  // touched by it, so the network keeps its structure instead of turning into the
-  // white slab this pass exists to avoid.
-  vec3 glare = icFlareCol * icGlare * icFlareBoost * (1.0 + icCloudScatter * cloudOpacity);
-  vec3 glareLight = vec3(icFlareCeiling) * (1.0 - exp(-max(glare, vec3(0.0)) / icFlareCeiling));
-
-  return flashLight + glareLight;
-}
 
 
 float saturate(float x) { return min(1.0, max(0.0, x)); }
@@ -702,18 +375,17 @@ vec4 getAirColor(vec2 fragCoordIn)
 
     vec2 lightningPos = lightningData.xy;
     float lightningTime = calcLightningTime(lightningStartIterNum);
-    // A cloud-to-ground stroke is sampled where the curve starts, not one unit in:
-    // its first unit is the leader running down the channel, and that unit is part
-    // of the look (see displayLightning).
+    // Every strike is sampled where its curve starts: the first unit is the
+    // leader running down the channel, and it is part of the look (see
+    // displayLightning).
     float currentLightningIntensity = lightningIntensityOverTime(lightningTime, lightningPos, lightningData[INTENSITY]);
     if (currentLightningIntensity <= 0.0)
       continue;
 
-    // Cloud-to-ground strokes light the scene here; intra-cloud flashes are the
-    // additive pass, so they only contribute their light-on-objects term below.
-    if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY)
-      lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight(lightningPos),
-                                             lightningData[INTENSITY]);
+    // Every strike is drawn as a bolt now, cloud-to-ground and intra-cloud alike:
+    // the one channel artwork, at the one brightness (see displayLightning).
+    lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight(lightningPos),
+                                           lightningData[INTENSITY]);
 
     // The light a strike throws on the clouds around it: one tight lobe that
     // blows out the cloud right next to the channel, and one wide lobe that lifts
@@ -740,17 +412,6 @@ float rand(float n) { return fract(sin(n) * 43758.5453123); }
 
 void main()
 {
-  // Intra-cloud light pass: nothing but the flash light, added on top of the
-  // finished scene by an additive draw (gl.blendFunc(gl.ONE, gl.ONE) in app.js).
-  // Everything the scene pass does - lighting, clouds, terrain - is skipped.
-  if (icLightPass > 0.5) {
-    // Clamped through the same ceiling as the scene: an intra-cloud flash lives
-    // far below it, so nothing about its look changes, but no sample it writes
-    // can be infinite either.
-    fragmentColor = vec4(softHdrClamp(computeICLight()), 0.0);
-    return;
-  }
-
   color = vec3(0.0);
   opacity = 1.0;
   emittedLight = vec3(0.0);
@@ -1172,9 +833,6 @@ void main()
    */
   opacity = clamp(opacity + length(emittedLight), 0.0, 1.0);
 
-  // The intra-cloud flash is not in this fragment: it is added afterwards, by
-  // the additive light pass (see computeICLight), so it can never trade a cloud
-  // for itself or dim what it is drawn over.
   fragmentColor = vec4(softHdrClamp(max(color * finalLight, 0.) + emittedLight), opacity);
 
   drawCursor(cursor, view); // over everything else

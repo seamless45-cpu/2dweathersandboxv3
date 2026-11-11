@@ -116,10 +116,12 @@ precision highp isampler2D;
 // margin.
 #define LIGHTNING_ANIM_ITERS 126.0
 
-// Strikes at or below this intensity are intra-cloud (IC) flashes: they stay
-// inside the cloud, are drawn with the IC artwork from lightningGenerator.js
-// and never reach the ground. Above it the strike is a cloud-to-ground (CG)
-// return stroke drawn with the tall bolt artwork.
+// Strikes at or below this intensity are intra-cloud flashes - born inside a
+// cloud rather than at its base - and above it they are cloud-to-ground return
+// strokes. Both are drawn with the same bolt artwork and the same light now, so
+// this is a fact about the strike, not a choice of picture: it is what the
+// lightning rod snaps to (only a stroke reaches the ground) and what the
+// location and display passes use to tell the two kinds apart.
 #define LIGHTNING_IC_MAX_INTENSITY 1.0
 
 // Lightning rods. A rod is placed with the Lightning Rod tool; it is a mast
@@ -255,12 +257,10 @@ float strikeAnimEnd(vec4 strike)
   float repeatPeriod = map_range(random2d(strike.xy), 0., 1., 1.5, 3.0);
   float numFlashes = floor(map_range(random2d(strike.xy * 2.737250), 0., 1., 1.0, max(strike[INTENSITY] - 0.5, 0.) * 2.0));
 
-  // An IC flash has no leader stage: the display shader starts its intensity
-  // curve one unit in (realisticDisplayShader.frag), so its light is over one
-  // unit earlier than a CG stroke's of the same length.
-  float leader = strike[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY ? 1.0 : 0.0;
-
-  return start + 5.0 * (leader + repeatPeriod * numFlashes + 2.924);
+  // Every strike has the leader stage: the display shader samples its curve from
+  // the iteration it is booked, so its light is over one unit later than the
+  // curve's own zero-crossing.
+  return start + 5.0 * (1.0 + repeatPeriod * numFlashes + 2.924);
 }
 
 float rand2d(vec2 co)

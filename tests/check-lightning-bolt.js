@@ -76,9 +76,9 @@ check('a return stroke is drawn at the original channel width',
 check('its forks leave at up to half the trunk, as they always did',
   CG.branchWidthRatio === 0.5,
   'a fork leaves at up to ' + CG.branchWidthRatio + ' of the trunk');
-check('and that is still wider than an intra-cloud channel',
-  CG.lineWidth / gen.IC_WIDTH.trunk >= 3,
-  'trunk ' + CG.lineWidth + ' artwork px against an IC trunk of ' + gen.IC_WIDTH.trunk);
+check('and it is the only channel width there is now',
+  CG.lineWidth >= 4 && !/IC_WIDTH/.test(source),
+  'every strike is drawn with this one channel');
 
 /* ---------------------------------------------- 3. the buzz, measured */
 
