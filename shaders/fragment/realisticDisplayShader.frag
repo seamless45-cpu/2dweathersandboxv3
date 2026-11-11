@@ -149,7 +149,8 @@ float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
 // percent of the frame as it always did. There is no easing of the tail and no
 // second, wide lobe: a stroke goes from white to gone as fast as the curve does,
 // which is what it did before any of this was touched.
-vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity)
+vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity,
+                      bool mipped, float coreThreshold)
 {
   vec2 lightningTexCoord = texCoord;
 
@@ -167,7 +168,13 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   if (lightningTexCoord.x < 0.01 || lightningTexCoord.x > 1.01 || lightningTexCoord.y < 0.01 || lightningTexCoord.y > 1.01) // prevent edge effect when mipmapping
     return vec3(0);
 
-  float pixVal = texture(lightningTex, lightningTexCoord).r;
+  // A cloud-to-ground stroke reads the tile the way it always has: level 0, one
+  // bilinear fetch, no mip. A flash lets the sampler choose the level (see the
+  // call site) - its channel is about a screen pixel wide, and a level-0 fetch of
+  // a 9-texel line that a pixel covers ten times over hits it or misses it row by
+  // row, which over a bright cloud reads as nothing at all.
+  float pixVal = mipped ? texture(lightningTex, lightningTexCoord).r
+                        : textureLod(lightningTex, lightningTexCoord, 0.0).r;
 
   const float branchShowFactor = 2.5;       // 1.5
   const float leaderBrightness = 50000.;    // 200.0
@@ -179,7 +186,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   brightnessThreshold = clamp(brightnessThreshold, 0., 1.);
 
   if (lightningTime > 1.0) { // main bolt
-    brightnessThreshold = 0.95;
+    brightnessThreshold = coreThreshold;
     currentLightningIntensity *= mainBoltBrightness;
   } else {
     currentLightningIntensity = leaderBrightness;
@@ -331,8 +338,28 @@ vec4 getAirColor(vec2 fragCoordIn)
       continue;
 
     // Every strike is drawn as a bolt now, cloud-to-ground and intra-cloud alike:
-    // the one channel artwork, at the one brightness (see displayLightning).
-    lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity);
+    // the one channel artwork, at the one brightness (see displayLightning). The
+    // two differences are both about a stroke's channel being sub-pixel:
+    //
+    //   * a stroke is drawn level 0 and only where the artwork is solid white
+    //     (0.95), exactly as it shipped - it lives below the cloud, over dark
+    //     ground, so a line that lands on some rows and misses others still reads;
+    //   * a flash is inside a cloud that is already bright, so "misses" are
+    //     invisible. It reads the tile mip-filtered, which recovers the channel's
+    //     average instead of point-sampling it, and takes nearly the whole channel
+    //     rather than only its core (0.15 against 0.95). Without those, a flash at
+    //     any normal zoom was a handful of dashes on a white cloud, which is what
+    //     "the intra-cloud lightning is gone" was.
+    //
+    // Measured on the real artwork, a flash in a cloud at 300 pixels of sim
+    // height: 36 of the 84 cloud rows the flash crosses carry light as a stroke.
+    // A flash with the mip chain and 0.15 carries 82 of 84, at a peak of 221 HDR
+    // inside the cloud - the same order as the 162 a stroke puts into the same
+    // cloud - where taking the whole channel (a threshold of 0) whitewashes eight
+    // pixels of the cloud around the channel instead of three.
+    bool isFlash = lightningData[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY;
+    lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity,
+                                           isFlash, isFlash ? 0.15 : 0.95);
 
     // The light a strike throws on the clouds around it: the one lobe the app
     // shipped with, scaled by the strike's own intensity.

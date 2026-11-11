@@ -68,11 +68,19 @@ check('both lightning programs declare the rod uniforms',
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(locationShader) &&
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(displayShader));
 check('every strike is drawn with the same bolt, with no dispatch on kind',
-  /lightningBoltLight \+= displayLightning\(lightningPos, lightningTime, currentLightningIntensity\);/
+  /lightningBoltLight \+= displayLightning\(lightningPos, lightningTime, currentLightningIntensity,\s*\n?\s*isFlash, isFlash \? 0\.15 : 0\.95\);/
     .test(displayShader) &&
-  !/displayLightning\([^)]*LIGHTNING_IC_MAX_INTENSITY/.test(displayShader) &&
+  /bool isFlash = lightningData\[INTENSITY\] <= LIGHTNING_IC_MAX_INTENSITY;/.test(displayShader) &&
   !/lightningGroundHeight/.test(displayShader),
-  'one call, one artwork, and no ground anchor: the bolt runs to the bottom of the sim as it shipped');
+  'one call and one artwork; the kind only chooses how the tile is sampled, never which picture it is');
+check('a flash reads the tile mip-filtered and a stroke does not',
+  /float pixVal = mipped \? texture\(lightningTex, lightningTexCoord\)\.r\s*\n\s*: textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.r;/
+    .test(displayShader),
+  'a sub-pixel channel point-sampled row by row is a dashed line, and dashes vanish over a bright cloud');
+check('the bolt tiles have a mip chain for the flash to read',
+  /gl\.generateMipmap\(gl\.TEXTURE_2D\);/.test(appSource) &&
+  /gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR/.test(appSource),
+  'the threshold is applied to the averaged level, which is what makes the channel continuous');
 
 /*
  * One artwork.

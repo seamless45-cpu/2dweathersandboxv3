@@ -6649,8 +6649,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.8'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.8')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.9'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.9')
   ]);
 
   const [
@@ -7421,8 +7421,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.bindTexture(gl.TEXTURE_2D, lightningTextures[i]);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, gl.RED, gl.UNSIGNED_BYTE, bitmap);
     bitmap.close();
-    // gl.generateMipmap(gl.TEXTURE_2D);                                                // optional
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); // LINEAR_MIPMAP_LINEAR
+    // The bolt is a 9 pixel channel on a tile that is minified about ten texels per
+    // screen pixel at the default camera, so a single level-0 fetch lands on the
+    // channel or beside it from one screen row to the next. A stroke still takes
+    // that fetch (textureLod 0.0, see displayLightning); a flash, which is drawn
+    // inside a bright cloud where a miss is invisible, reads the mip chain instead
+    // and gets the channel's average. The chain costs a third on top of the tile.
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -7465,7 +7471,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.8');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.9');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9331,7 +9337,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.8');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.9');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
