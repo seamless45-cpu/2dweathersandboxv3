@@ -140,65 +140,27 @@ float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
   return max((1. / (0.05 + pow(T * 2.0, 3.))) - 0.005, 0.) * pow(intensity, 2.0); // fading out curve
 }
 
-// Height of whatever the bolt is landing on. A strike that was captured by a
-// lightning rod ends on the rod's tip instead of on the ground plane.
-float lightningGroundHeight(vec2 pos)
+// The cloud-to-ground channel: the code the app shipped with, restored in full.
+//
+// One heading down the picture, revealed by a threshold that grows with
+// lightningTime, held at leaderBrightness while the leader runs and then written
+// at the stroke's own curve times mainBoltBrightness. The light it throws is the
+// bolt itself plus one tight lobe on the cloud around it, and the bloom takes two
+// percent of the frame as it always did. There is no easing of the tail and no
+// second, wide lobe: a stroke goes from white to gone as fast as the curve does,
+// which is what it did before any of this was touched.
+vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity)
 {
-  for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
-    if (i >= rodCount)
-      break;
-    if (abs(pos.x - rodPositions[i].x) < 1e-6 && pos.y > rodPositions[i].y)
-      return rodPositions[i].y;
-  }
-  return 0.0;
-}
-
-// The peak of lightningIntensityOverTime(): the curve at T = 0, i.e. 1 / 0.05 -
-// 0.005. Dividing a strike's own curve by intensity^2 * this gives the share of
-// that strike's peak light, which is what the channel's fade is shaped by (see
-// cgChannelFalloff). The share does not depend on how strong the stroke is, so a
-// weak stroke and a storm core let go over the same part of their lives.
-const float lightningCurvePeak = 19.995;
-
-// How slowly a stroke's channel lets go.
-//
-// A return stroke's channel is written at mainBoltBrightness - a hundred thousand
-// HDR units, four decades over the point where the tonemap runs out of range - so
-// fed the intensity curve straight, as curve * mainBoltBrightness, it is pure
-// white for the whole strike and then gone in the iteration the curve reaches
-// zero. That is a switch, not a fade, and it is what the channel used to do: on
-// screen the halo dwindled and the line itself disappeared between two frames.
-//
-// Raising the share of the strike's peak to cgChannelFalloff before multiplying by
-// mainBoltBrightness pulls the tail of the curve down into the band the display
-// can show, so the channel comes down through greys and arrives at black instead
-// of leaving from white. The exponent is how much of the stroke's life is spent
-// fading: at 1.6 a stroke was down to its last lit frame in nine iterations (about
-// 150 ms); 2.2 stretches the same tail over twelve or thirteen (about 200 ms),
-// which is what "the fade is a bit too fast" was asking for. Every flicker peak is
-// still exactly 1.0, i.e. the full 100000, so a stroke is as over-bright as it ever
-// was - only the way it lets go changes.
-const float cgChannelFalloff = 2.2;
-
-// A cloud-to-ground channel: the original artwork, colour and leader, and a fade
-// that slows down instead of switching off.
-//
-// The bolt is written at a hundred thousand HDR units, so what a player sees of a
-// stroke is the light it throws around itself - the two lobes on its own clouds and
-// the halo the bloom's bright pass builds out of the surplus - and, at the end, the
-// channel coming down through grey to black (see cgChannelFalloff).
-vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity, float groundY, float strikeIntensity)
-{
-  float boltHeight = max(pos.y - groundY, 0.02); // cloud base down to the ground / rod tip
   vec2 lightningTexCoord = texCoord;
 
   lightningTexCoord.x -= mod(pos.x, 1.);
 
-  lightningTexCoord.y = (pos.y - lightningTexCoord.y) / boltHeight; // 0 at cloud base, 1 at ground
+  lightningTexCoord.y -= pos.y;
 
-  float scaleMult = 1. / boltHeight; // 1.0 means lightning is as tall as the simheight
+  float scaleMult = 1. / pos.y; // 1.0 means lightning is as tall as the simheight
 
   lightningTexCoord.x *= scaleMult * aspectRatios[0] / lightningTexAspect;
+  lightningTexCoord.y *= -scaleMult;
 
   lightningTexCoord.x += 0.5;                                                                                               // center lightning bolt
 
@@ -211,36 +173,23 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   const float leaderBrightness = 50000.;    // 200.0
   const float mainBoltBrightness = 100000.; // 100000.
 
-  // The leader only gets a fraction of one iteration to run down the channel.
-  // At the speed a stepped leader actually moves this is still slow motion, and
-  // it stops a bolt taking five iterations (a fifth of a second on a slow
-  // machine) to appear: the strike lands, and the whole channel is there.
-  const float leaderRevealSpeed = 6.0;
-
-  float leaderReveal = min(lightningTime * leaderRevealSpeed, 1.);
-
-  float brightnessThreshold = 1. - leaderReveal * branchShowFactor;
+  float brightnessThreshold = 1. - lightningTime * branchShowFactor;
   brightnessThreshold += lightningTexCoord.y * branchShowFactor; // grow from the top to the bottem
 
   brightnessThreshold = clamp(brightnessThreshold, 0., 1.);
 
-  float channelBrightness;
   if (lightningTime > 1.0) { // main bolt
     brightnessThreshold = 0.95;
-    // The share of this stroke's own peak light, eased out so the tail of the
-    // curve lands where the display can show it; see cgChannelFalloff. pow(0, n)
-    // is 0 on paper and has been NaN on real drivers, so the base is floored.
-    float curveShare = clamp(currentLightningIntensity / max(lightningCurvePeak * strikeIntensity * strikeIntensity, 1e-6), 0.0, 1.0);
-    channelBrightness = mainBoltBrightness * pow(max(curveShare, 1e-6), cgChannelFalloff);
+    currentLightningIntensity *= mainBoltBrightness;
   } else {
-    channelBrightness = leaderBrightness;
+    currentLightningIntensity = leaderBrightness;
   }
 
   pixVal -= brightnessThreshold;
 
   pixVal = max(pixVal, 0.0);
 
-  pixVal *= channelBrightness;
+  pixVal *= currentLightningIntensity;
 
   const vec3 lightningCol = vec3(0.70, 0.57, 1.0); // 0.584, 0.576, 1.0
 
@@ -358,7 +307,6 @@ vec4 getAirColor(vec2 fragCoordIn)
 // one. These are the original values - a return stroke lights its own
 // neighbourhood and no further.
 #define lightningOnLightBrightness 0.004  // 0.002
-#define lightningSkyLightBrightness 0.0011 // the wide lobe of the same flash
 
   // Every strike in the slot array is drawn until its own animation is over.
   // Slots are independent, so a new strike never truncates a running one.
@@ -384,21 +332,13 @@ vec4 getAirColor(vec2 fragCoordIn)
 
     // Every strike is drawn as a bolt now, cloud-to-ground and intra-cloud alike:
     // the one channel artwork, at the one brightness (see displayLightning).
-    lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight(lightningPos),
-                                           lightningData[INTENSITY]);
+    lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity);
 
-    // The light a strike throws on the clouds around it: one tight lobe that
-    // blows out the cloud right next to the channel, and one wide lobe that lifts
-    // the whole sky it is in. The wide lobe is what makes a return stroke read as
-    // brighter than white rather than as a bright line: the surplus has to go
-    // somewhere the eye can see it, and a cloud is the surface it lands on. Both
-    // lobes scale with the strike's own intensity, so a weak flash only lights its
-    // own neighbourhood.
+    // The light a strike throws on the clouds around it: the one lobe the app
+    // shipped with, scaled by the strike's own intensity.
     vec2 dist = vec2(lightningPos.x - texCoord.x, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1), 0.));
     dist.x *= aspectRatios[0];
-    float distanceSquared = pow(length(dist), 2.);
-    float lightningOnLight = lightningOnLightBrightness / (distanceSquared + 0.03);
-    lightningOnLight += lightningSkyLightBrightness / (distanceSquared + 0.45);
+    float lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03);
     lightningOnLight *= currentLightningIntensity;
     onLight += vec3(lightningOnLight);
   }

@@ -297,7 +297,7 @@ const PRECACHE = (() => {
   const shaderBody = shaderResponse ? await shaderResponse.text() : '';
   check(
     'the cached shader is the current one (CG HDR ceiling present)',
-    shaderBody.includes('softHdrClamp') && shaderBody.includes('lightningSkyLightBrightness'),
+    shaderBody.includes('softHdrClamp') && shaderBody.includes('mainBoltBrightness'),
     shaderBody.length + ' chars'
   );
 
