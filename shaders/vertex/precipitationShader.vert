@@ -130,16 +130,25 @@ void main()
 
           const float minIterationsSinceLastLightningBolt = 0.; // 50.
 
-          // Lightning slots: every running strike owns one slot until its
-          // animation has finished (see lightningLocationShader.frag), so a
-          // new strike may only start when a slot is idle. This is what makes
+          // Lightning slots: every running strike owns one slot until its own
+          // animation has finished (see lightningLocationShader.frag), so a new
+          // strike may only start when a slot is idle. This is what makes
           // strikes uninterruptible: nothing ever overwrites a running flash.
+          //
+          // "Until its own animation has finished" is the whole point.
+          // strikeAnimEnd() works the end of *this* strike out of its own data,
+          // instead of holding the slot for LIGHTNING_ANIM_ITERS - the length of
+          // the longest strike there can be. A typical flash is over in under a
+          // third of that, and the extra time was pure dead air: with every slot
+          // booked out for it, a storm could only manage one strike every ~28
+          // iterations however hard it tried, and the player saw that as seconds
+          // of nothing between flashes.
           float newestStrikeIterNum = 0.;
           bool lightningSlotFree = false;
           for (int i = 0; i < LIGHTNING_SLOTS; i++) {
-            float slotStart = texelFetch(lightningDataTex, ivec2(i, 0), 0)[START_ITERNUM];
-            if (slotStart > 0. && iterNum - slotStart < LIGHTNING_ANIM_ITERS)
-              newestStrikeIterNum = max(newestStrikeIterNum, slotStart);
+            vec4 slotData = texelFetch(lightningDataTex, ivec2(i, 0), 0);
+            if (slotData[START_ITERNUM] > 0. && iterNum < strikeAnimEnd(slotData))
+              newestStrikeIterNum = max(newestStrikeIterNum, slotData[START_ITERNUM]);
             else
               lightningSlotFree = true;
           }

@@ -278,7 +278,15 @@ node tests/check-sw-offline.js # runs sw.js against a fake cache and network
 node tests/check-shaders.js    # glslangValidator on every shader
 node tests/check-lightning-rods.js
 node tests/check-ic-lightning.js # the intra-cloud artwork, rendered and measured
+node tests/check-lightning-strikes.js # how often lightning may strike, and when
 ```
+
+`tests/check-lightning-strikes.js` runs the slot manager - the four slots a strike
+can own, and the rule that a new strike may only start when one is idle - against
+the real intensity curve. A slot is booked for exactly as long as its own strike
+can be seen; booking it for the longest strike there can be instead (which is what
+it used to do) meant every flash held a slot for three or four times its own
+length, and a storm could only manage a strike every ~28 iterations.
 
 `tests/check-ic-lightning.js` is the one that does not just read source: it loads
 `lightningGenerator.js` with a stubbed 2D canvas (`tests/ic-canvas-stub.js`),

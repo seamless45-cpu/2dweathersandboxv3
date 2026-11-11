@@ -41,11 +41,16 @@ uniform float rodAttractRadius; // horizontal reach, in normalized sim width
 // This pass also ping-pongs the slot array (it samples the previous state and
 // writes the next one), because sampling and rendering the same texture in one
 // draw is a feedback loop.
+//
+// A slot is busy while its strike can still be seen, and not one iteration
+// longer: strikeAnimEnd() (common.glsl) works out that strike's own end. Holding
+// a slot for the worst case instead - which is what this used to do - meant a
+// flash booked a slot for three or four times its own length, and a storm spent
+// most of its time with every slot booked and every new strike dropped.
 
 bool slotBusy(vec4 data)
 {
-  float start = data[START_ITERNUM];
-  return start > 0.0 && (iterNum - start) < LIGHTNING_ANIM_ITERS;
+  return data[START_ITERNUM] > 0.0 && iterNum < strikeAnimEnd(data);
 }
 
 // Pull a newly formed CG strike onto the nearest rod it can reach. Strikes that

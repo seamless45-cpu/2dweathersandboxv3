@@ -414,7 +414,10 @@ for (let i = 0; i < 400; i++) {
   if (out[0] === 0.70) nearestWins++;
 }
 check('the nearest rod captures the strike', nearestWins > 300, nearestWins + ' of 400');
-check('LIGHTNING_ANIM_ITERS covers the longest flash', LIGHTNING_ANIM_ITERS >= 112);
+// LIGHTNING_ANIM_ITERS is only a bound now: a slot is released when its own
+// strike's light is gone (strikeAnimEnd in common.glsl), not after the longest
+// strike there can be. tests/check-lightning-strikes.js owns that arithmetic.
+check('LIGHTNING_ANIM_ITERS still covers the longest flash', LIGHTNING_ANIM_ITERS >= 126);
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed === 0 ? 0 : 1);

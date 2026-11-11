@@ -95,13 +95,16 @@ precision highp isampler2D;
 // so a newer strike can never cut a running one short. Keep this in sync with
 // numLightningSlots in app.js.
 #define LIGHTNING_SLOTS 4
-// Longest possible strike animation, in iterations. lightningTime advances 5
-// iterations per unit (calcLightningTime), the flicker period is < 3 units,
-// the flicker count is floor(< 2 * intensity - 1) <= 6 for the maximum
-// intensity of 4, and the brightness reaches exactly zero at T = 2.924
-// (lightningIntensityOverTime). So the longest flash is
-// 5 * (3 * 6 + 2.924 + 1) = 109.6 iterations; 112 keeps a small margin.
-#define LIGHTNING_ANIM_ITERS 112.0
+// Longest a strike can possibly animating, in iterations - a bound, not a timer.
+// A strike is not held for this long: strikeAnimEnd() below works out how long
+// that particular strike lasts, and a slot is released the moment its own light
+// is over. lightningTime advances 5 iterations per unit (calcLightningTime), the
+// leader stage is one unit, the flicker period is < 3 units, the flicker count is
+// floor(< 2 * intensity - 1) <= 7 for the maximum intensity of 4.5, and the
+// brightness reaches zero at T = 2.924 (lightningIntensityOverTime). So the
+// longest flash is 5 * (3 * 7 + 2.924 + 1) = 124.6 iterations; 126 keeps a
+// margin.
+#define LIGHTNING_ANIM_ITERS 126.0
 
 // Strikes at or below this intensity are intra-cloud (IC) flashes: they stay
 // inside the cloud, are drawn with the IC artwork from lightningGenerator.js
@@ -179,6 +182,41 @@ float random2d(vec2 s)
 
   float r2 = uintBitsToFloat(h);
   return mod(r2, 1.0);
+}
+
+// When a strike's animation ends, in simulation iterations, worked out from the
+// strike's own slot data.
+//
+// The slot array only ever held a strike for LIGHTNING_ANIM_ITERS - the length of
+// the *longest* strike there can be - because the slot manager had no way to ask
+// how long a particular strike lasts. A typical intra-cloud flash is over in 27
+// to 35 iterations, so every strike sat on its slot for three or four times as
+// long as it was doing anything, and with four slots that was the whole lightning
+// rate: a storm produced a strike every ~28 iterations and every other attempt
+// was dropped on the floor, which the player saw as seconds of nothing between
+// flashes.
+//
+// lightningIntensityOverTime() is what decides when the light is gone, and it is
+// driven by two hashes of the strike's position, so the end can be worked out
+// exactly from the data already in the slot. Both the slot manager and the
+// display pass call this, so a strike is held for exactly as long as it can
+// still be seen - no cut-off, and no dead time.
+//
+// Layout of the arithmetic: lightningTime = (iterNum - start) / 5 and the leader
+// stage is lightningTime < 1, so iteration = start + 5 * (1 + T0). The last
+// flicker ends when T0 = period * flickers + 2.924 (the T where the intensity
+// curve reaches zero), which is the same expression lightningIntensityOverTime()
+// uses for minT.
+float strikeAnimEnd(vec4 strike)
+{
+  float start = strike[START_ITERNUM];
+  if (start <= 0.0)
+    return 0.0; // an empty slot
+
+  float repeatPeriod = map_range(random2d(strike.xy), 0., 1., 1.5, 3.0);
+  float numFlashes = floor(map_range(random2d(strike.xy * 2.737250), 0., 1., 1.0, max(strike[INTENSITY] - 0.5, 0.) * 2.0));
+
+  return start + 5.0 * (1.0 + repeatPeriod * numFlashes + 2.924);
 }
 
 float rand2d(vec2 co)
