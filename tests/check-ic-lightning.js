@@ -238,11 +238,17 @@ check('channel tiers go from a bright trunk down to a faint wisp',
   gen.IC_TONE.trunk > gen.IC_TONE.arm && gen.IC_TONE.arm > gen.IC_TONE.hair &&
   gen.IC_TONE.hair > gen.IC_TONE.wisp,
   JSON.stringify(gen.IC_TONE));
-check('every tier is drawn at least one artwork pixel wide',
-  gen.IC_WIDTH.trunk >= 1 && gen.IC_WIDTH.arm >= 1 && gen.IC_WIDTH.hair >= 1 && gen.IC_WIDTH.wisp >= 1,
+check('every tier is drawn hair-thin - thinner than the artwork pixel it sits in',
+  gen.IC_WIDTH.trunk <= 1.5 && gen.IC_WIDTH.arm <= 1.15 &&
+  gen.IC_WIDTH.hair <= 0.9 && gen.IC_WIDTH.wisp <= 0.7 &&
+  gen.IC_WIDTH.trunk >= 0.5 && gen.IC_WIDTH.wisp >= 0.3,
+  JSON.stringify(gen.IC_WIDTH) + ' artwork px, and one artwork px is about 0.4 screen px');
+check('the tiers keep their order: a trunk is the widest thing in a flash',
+  gen.IC_WIDTH.trunk > gen.IC_WIDTH.arm && gen.IC_WIDTH.arm > gen.IC_WIDTH.hair &&
+  gen.IC_WIDTH.hair >= gen.IC_WIDTH.wisp,
   JSON.stringify(gen.IC_WIDTH));
 check('a trunk is a channel, not a ribbon',
-  gen.IC_WIDTH.trunk <= 4.5,
+  gen.IC_WIDTH.trunk <= 1.6,
   'trunk ' + gen.IC_WIDTH.trunk + ' artwork px');
 check('tiles get their own parameters from their own seed',
   JSON.stringify(gen.drawICParams(gen.makeRng(5), 0)) !== JSON.stringify(gen.drawICParams(gen.makeRng(5), 1)) &&
@@ -332,9 +338,11 @@ check('the artwork has a visible brightness hierarchy',
 }
 
 check('the strokes are hair-thin',
-  tiles.every((t) => t.lineWidths === undefined || true) &&
-  gen.IC_WIDTH.trunk <= 4.5 && gen.IC_WIDTH.hair <= 1.5,
-  'hair ' + gen.IC_WIDTH.hair + ' px, trunk ' + gen.IC_WIDTH.trunk + ' px');
+  gen.IC_WIDTH.trunk <= 1.6 && gen.IC_WIDTH.hair <= 0.9 &&
+  gen.IC_WIDTH.trunk / gen.IC_WIDTH.hair >= 1.5,
+  'hair ' + gen.IC_WIDTH.hair + ' px, trunk ' + gen.IC_WIDTH.trunk + ' px (' +
+    (gen.IC_WIDTH.trunk * 0.4).toFixed(2) + ' and ' + (gen.IC_WIDTH.hair * 0.4).toFixed(2) +
+    ' screen px at the default camera)');
 
 /* Connected network, not confetti: dilate the lit mask by one pixel and measure
    the largest connected component. */

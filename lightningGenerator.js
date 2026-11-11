@@ -5,8 +5,11 @@
  * Two kinds of artwork come out of the same single-channel (luminance) canvas:
  *
  *   mode: 'CG'  Cloud-to-ground bolt. One dominant channel grows downward with
- *               the classic dendritic forks. This is the original artwork used
- *               by the legacy (cloud-density triggered) lightning in app.js.
+ *               the classic dendritic forks. Its shape is two scales - a slow aim
+ *               that bends it into arcs and a fast jag that keeps it electric (see
+ *               CG_SHAPE) - rather than the one jittered heading it used to have.
+ *               This is the artwork used by the legacy (cloud-density triggered)
+ *               lightning in app.js.
  *
  *   mode: 'IC'  Intra-cloud flash. A network of thin filaments that spreads
  *               through a charge layer and never reaches the ground: a trunk
@@ -111,7 +114,51 @@ function stepHeading(s, st, y, bandLo, bandHi, rand) {
 }
 
 
-/* ===================== cloud-to-ground bolt (original) ==================== */
+/* ===================== cloud-to-ground bolt ============================== */
+
+/*
+ * The shape of a cloud-to-ground channel.
+ *
+ * What the old model did, and why the bolt was straight
+ * -----------------------------------------------------
+ * One heading, turned every step by its own noise (`(rand - 0.5) * 1.4`, i.e. up
+ * to +-40 degrees a pixel) and pulled back toward straight down by 8% a step.
+ * The pull is what decided the shape: a 40-degree kick that decays in a dozen
+ * steps only ever moves the channel a couple of pixels before the next kick
+ * cancels it, so the bolt came out as a *vertical wire with a buzz on it* - all
+ * edge, no arc. Measured along one channel of the old artwork: it changed which
+ * way it was going 17 times over the height of the tile, at 0.33 rad of heading
+ * per artwork pixel. That is a saw, not a bend.
+ *
+ * Two scales, not one
+ * -------------------
+ * A channel is crooked because the path of least resistance curves: it takes a
+ * long arc one way, a longer one back, and only then steps. So the heading is the
+ * sum of two things, exactly as icStepHeading() does it for a filament:
+ *
+ *   `aim`  the slow heading. It wanders, it is pulled back toward straight down
+ *          *weakly* (a time constant of ~800 artwork pixels, so one turn survives
+ *          a third of the picture), and it is what gives the bolt its arcs.
+ *   `jag`  the electrical zigzag on top: a fast random walk pulled back hard, so
+ *          it adds the ragged edge a real channel has without deciding its shape.
+ *
+ * The aim is also what steers the channel back inside the sprite when it nears
+ * the edge - a bend applied over tens of pixels, so the artwork still looks like
+ * lightning instead of being clipped, which is what a bolt that ran off the tile
+ * did (the display shader drops those fragments, so half a bolt disappeared).
+ *
+ * Numbers are in artwork pixels per step; a step is one pixel.
+ */
+const CG_SHAPE = {
+  bend : 0.028,          // slow wander of the aim, rad per step
+  bendPull : 0.0013,     // ... and how weakly the aim is pulled back to straight down
+  jag : 0.80,            // the electrical zigzag, rad per step
+  jagPull : 0.18,        // ... pulled back hard, so it stays a zigzag and not a bend
+  stepKinkChance : 0.004, // an occasional hard break in the channel
+  stepKinkAngle : 0.45,
+  margin : 0.22,         // fraction of the tile kept clear of the channel on each side
+  confine : 0.045        // how hard the aim is turned back when it nears that margin
+};
 
 function generateLightningBolt(width, height)
 {
@@ -130,14 +177,55 @@ function generateLightningBolt(width, height)
     return `rgb(${colR * brightness}, ${colG * brightness}, ${colB * brightness})`;
   }
 
+  /* One step of a channel's heading.
+   *
+   * `state.aimTarget` is the heading the slow part is pulled toward - straight
+   * down for the trunk, the angle a fork left its parent at for a branch - and
+   * `state.confined` says whether this channel has to stay inside the sprite.
+   * A branch does not: it is allowed to run out of the tile, because that is
+   * what a fork does, and clipping it costs nothing (the display shader's window
+   * fades the outer edge of the artwork anyway).
+   */
+  function stepHeading(state) {
+    // the slow part: a wandering aim, pulled weakly toward its own target
+    state.aim += (Math.random() - 0.5) * CG_SHAPE.bend;
+    state.aim -= (state.aim - state.aimTarget) * CG_SHAPE.bendPull;
+
+    // confined to the sprite: turn the aim back toward the middle, over tens of
+    // pixels rather than in one step
+    if (state.confined) {
+      const lo = width * CG_SHAPE.margin;
+      const hi = width * (1.0 - CG_SHAPE.margin);
+      if (state.x < lo || state.x > hi) {
+        const inward = state.x < lo ? 1.0 : -1.0;                    // which way is back
+        state.aim += (inward * 1.1 - state.aim) * CG_SHAPE.confine;  // how far it may lean while turning
+      }
+    }
+
+    // the fast part: the electrical zigzag
+    state.jag += (Math.random() - 0.5) * CG_SHAPE.jag;
+    state.jag -= state.jag * CG_SHAPE.jagPull;
+
+    let angle = state.aim + state.jag;
+
+    // ... and now and then the channel simply breaks
+    if (Math.random() < CG_SHAPE.stepKinkChance)
+      angle += (Math.random() < 0.5 ? -1 : 1) * CG_SHAPE.stepKinkAngle;
+
+    state.angle = angle;
+    return angle;
+  }
+
 
   ctx.beginPath();
 
   let startX = width / 2.0;
   let startY = 0;
-  let angle = Math.PI / 6.;
+  const state = {
+    x : startX, aim : Math.PI / 6., aimTarget : 0.0, jag : 0, angle : Math.PI / 6., confined : true
+  };
+
   let lineWidth = 4.5;
-  const targetAngle = 0.0;
 
   ctx.moveTo(startX, startY);
 
@@ -145,23 +233,20 @@ function generateLightningBolt(width, height)
 
   while (startY < height) {
 
+    const angle = stepHeading(state);
     const nextX = startX + Math.sin(angle);
     const nextY = startY + Math.cos(angle);
-
-    angle += (Math.random() - 0.5) * 1.4;  // 0.7
-
-    angle -= (angle - targetAngle) * 0.08; // keep it going in a general direction
 
     ctx.lineTo(nextX, nextY);
 
     startX = nextX;
     startY = nextY;
-
+    state.x = startX;
 
     if (Math.random() < 0.015 * (1. - nextY / height)) { // branch
       ctx.strokeStyle = genLightningColor(lineWidth);
       ctx.stroke();
-      drawBranch(nextX, nextY, targetAngle + (Math.random() - 0.5) * 2.5, lineWidth * 0.5 * Math.random());
+      drawBranch(nextX, nextY, state.aim + (Math.random() - 0.5) * 2.5, lineWidth * 0.5 * Math.random());
       ctx.beginPath();
       ctx.moveTo(nextX, nextY); // move back to last position after drawing branch
       ctx.lineWidth = lineWidth;
@@ -177,6 +262,7 @@ function generateLightningBolt(width, height)
   function drawBranch(startX, startY, targetAngle, line_width)
   {
     let angle = targetAngle;
+    let state = { x : startX, aim : targetAngle, aimTarget : targetAngle, jag : 0, angle : targetAngle, confined : false };
 
     ctx.beginPath();
     ctx.moveTo(startX, startY);
@@ -184,17 +270,16 @@ function generateLightningBolt(width, height)
 
     while (startY < height) {
 
+      // a branch is a channel too: same two scales, a tighter aim
+      const angle = stepHeading(state);
       const nextX = startX + Math.sin(angle);
       const nextY = startY + Math.cos(angle);
-
-      angle += (Math.random() - 0.5) * 0.7;
-
-      angle -= (angle - targetAngle) * 0.08; // keep it going in a general direction
 
       ctx.lineTo(nextX, nextY);
 
       startX = nextX;
       startY = nextY;
+      state.x = startX;
 
       if (Math.random() < 0.018) { // reduce width
 
@@ -287,14 +372,24 @@ const IC_TILE_MARGIN = 0.035;
 
 /* Stroke widths in artwork pixels, for a 256 px wide tile.
  *
- * Never below one: see the note above. One artwork pixel is about 0.4 screen
- * pixels at the default camera (a flash of 2400 m is a hundred pixels across
- * while the tile is 256), so a trunk is a little over a screen pixel, an arm
- * three quarters of one, and a hair is sub-pixel - a hair strand. */
-const IC_WIDTH = { trunk : 2.2, arm : 1.6, hair : 1.1, wisp : 1.0 };
+ * One artwork pixel is about 0.4 screen pixels at the default camera (a flash of
+ * 2400 m is a hundred pixels across while the tile is 256), so every tier here is
+ * sub-pixel on screen: a trunk is half a screen pixel, an arm a third of one, and
+ * a hair a fifth. That is deliberate. A discharge is not a tube - a trunk carries
+ * more current than a hair, but neither is a band, and a channel drawn a whole
+ * screen pixel wide (it used to be 2.2 artwork pixels, a little over one screen
+ * pixel, for the trunk alone) reads as a white wire laid over the cloud instead of
+ * as a filament inside it. What makes the trunk the trunk is not its width any
+ * more: it is its tone and its hot centreline (IC_CORE_*), which is the part that
+ * survives the mip chain when the sprite is minified. */
+const IC_WIDTH = { trunk : 1.3, arm : 1.0, hair : 0.75, wisp : 0.6 };
 
-/* Tone per tier. This - not the width - is what makes a hair a hair. */
-const IC_TONE = { trunk : 0.92, arm : 0.60, hair : 0.35, wisp : 0.20 };
+/* Tone per tier. This - not the width - is what makes a hair a hair.
+ *
+ * The tones went up when the widths came down: a sub-pixel line loses ink to
+ * coverage, and the hierarchy has to survive that, so the tiers below the trunk
+ * are drawn brighter than they were rather than fading out with their width. */
+const IC_TONE = { trunk : 1.0, arm : 0.70, hair : 0.44, wisp : 0.28 };
 
 /* How much of its light a channel still carries at its far tip, as a fraction of
  * what it leaves the parent with.
@@ -511,7 +606,7 @@ function generateIntraCloudBolt(width, height, seed, variant)
     ctx.lineWidth = w;
     ctx.strokeStyle = grey(tone);
     ctx.stroke();
-    if (w >= 1.6) { // wide enough to hold a hot centreline
+    if (w >= 1.05) { // wide enough to hold a hot centreline
       ctx.lineWidth = w * IC_CORE_WIDTH;
       ctx.strokeStyle = grey(tone * IC_CORE_GAIN);
       ctx.stroke();
@@ -601,7 +696,11 @@ function generateIntraCloudBolt(width, height, seed, variant)
                       state.travelled > stepLen * 5;
       if (canFork && rand() < params.branchRate) {
         spent[tierIndex]++;
-        if (tierIndex <= 1 && w >= 1.4)
+        // A fork is hot whatever the channel's width is now: the spark is the
+        // junction, not a decoration on a wide stroke, and gating it on a width a
+        // hair-thin trunk no longer reaches left most forks as two lines that
+        // simply touch.
+        if (tierIndex <= 1)
           junction(x, y, w, tone * (1 - (1 - IC_TIP_TONE) * Math.min(1, state.travelled / Math.max(lengthPx, stepLen))));
         queue.push({
           x : x, y : y,
@@ -718,6 +817,8 @@ function generateIntraCloudBolt(width, height, seed, variant)
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     makeRng : makeRng,
+    generateLightningBolt : generateLightningBolt,
+    CG_SHAPE : CG_SHAPE,
     makeNoise1D : makeNoise1D,
     icStepHeading : icStepHeading,
     drawICParams : drawICParams,

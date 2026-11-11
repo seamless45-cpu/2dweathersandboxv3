@@ -219,7 +219,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
 
   float pixVal = texture(lightningTex, lightningTexCoord).r;
 
-  const float mainBoltBrightness = 100000.; // 100000.
+  const float mainBoltBrightness = 200000.; // 200000.
 
   // The whole channel, at once.
   //
@@ -278,16 +278,18 @@ const float icTileCount = 8.0;
 const float icTileWidthPx = 256.0;
 
 // The light a channel carries per unit of artwork luminance. The artwork's own
-// tone already separates a trunk (1.0) from an arm (0.60) from a hair (0.35);
+// tone already separates a trunk (1.0) from an arm (0.70) from a hair (0.44);
 // this constant only sets what one unit of that tone is worth in HDR light.
 //
 // It is small on purpose. The knee in computeICLight() is fed
 // channel * icBrightness * icPower * icEnergy * cloudGain, which at the default
 // camera is about 10x the artwork tone (icEnergy 2.56 x cloud gain 3), so the
 // constant has to be well below one for the tiers to land apart instead of all
-// arriving as the same pure white: at 0.5 a trunk reaches 0.95 of the knee, an
-// arm 0.75 and a hair 0.5, which is a hierarchy the eye can see.
-const float icBrightness = 0.58;
+// arriving as the same pure white. It went up from 0.58 when the strokes became
+// sub-pixel (IC_WIDTH in lightningGenerator.js): a line thinner than the pixel it
+// is drawn in loses ink to coverage, and a flash of hair-thin channels that is
+// dimmer than it was is not what "thinner" is supposed to cost.
+const float icBrightness = 0.74;
 
 // ---------------------------------------------------------------- the halo ---
 //
@@ -528,8 +530,8 @@ vec3 computeICLight()
   // so that a storm-core stroke covers the frame instead of blowing it out to a
   // value the post-processing has to guess about.
   const vec3 icScreenFlashCol = vec3(0.55, 0.62, 1.0);
-  const float icScreenFlashGain = 0.020;
-  const float icScreenFlashCeiling = 1.60;
+  const float icScreenFlashGain = 0.040;
+  const float icScreenFlashCeiling = 4.20;
   vec3 screenLight = icScreenFlashCol * (icScreenFlashCeiling *
                      (1.0 - exp(-cgFlash * icScreenFlashGain / icScreenFlashCeiling)));
 
@@ -681,8 +683,8 @@ vec4 getAirColor(vec2 fragCoordIn)
   vec3 color = (smokeOrFireCol * smokeOpacity / opacity) + (cloudCol * cloudOpacity * (1. - smokeOpacity) / opacity); // color blending
 
 
-#define lightningOnLightBrightness 0.004  // 0.002
-#define lightningSkyLightBrightness 0.0022 // the wide lobe of the same flash
+#define lightningOnLightBrightness 0.0075  // 0.002
+#define lightningSkyLightBrightness 0.0042 // the wide lobe of the same flash
 // How much of the frame a cloud-to-ground stroke lights.
 //
 // A bolt drawn on its own, with a halo around it, reads as a spark in a dark room.
@@ -692,7 +694,7 @@ vec4 getAirColor(vec2 fragCoordIn)
 // by the flash. That is this number. It is driven by the strike's own intensity
 // curve, so a weak stroke lifts the frame a little and a storm-core stroke covers
 // it, and it only ever *adds* light.
-#define lightningScreenFlashBrightness 0.010
+#define lightningScreenFlashBrightness 0.020
 
   // Every strike in the slot array is drawn until its own animation is over.
   // Slots are independent, so a new strike never truncates a running one.
