@@ -17,6 +17,14 @@
  *   worker.postMessage({kind: 'network', width, height})  -> intra-cloud network
  * The worker posts back {width, height, data} with data a Uint8Array of one byte
  * per texel, transferred - not an ImageBitmap. See readRedChannel below for why.
+ *
+ * What crosses is built here, field by field, and it is *only* data: a number, a
+ * number, a typed array. Anything else the generator hangs off its return value -
+ * the counters the test harness counts segments with, a method, whatever gets added
+ * next - stays in the worker. Posting such an object directly throws
+ * `DataCloneError` inside the worker, the artwork never arrives, and the display
+ * has nothing to draw with: no lightning at all, of either kind, with a single line
+ * in the console to say so.
  */
 onmessage = (event) => {
   const msg = event.data || {};
@@ -25,7 +33,8 @@ onmessage = (event) => {
   const width = Math.max(32, Math.round(msg.width || fallback.width));
   const height = Math.max(32, Math.round(msg.height || fallback.height));
   const artwork = network ? generateLightningNetwork(width, height) : generateLightningBolt(width, height);
-  postMessage(artwork, [artwork.data.buffer]);
+  postMessage({width : artwork.width, height : artwork.height, data : artwork.data},
+              [artwork.data.buffer]);
 };
 
 
@@ -42,6 +51,10 @@ onmessage = (event) => {
  *
  * The counters are the stub canvas's (see tests/ic-canvas-stub.js), which is how
  * the harness counts segments; in a browser they are simply undefined.
+ *
+ * This object is *not* what the worker posts - see the protocol above. It carries
+ * the counters, and a method used to live here too, which is exactly what cannot be
+ * sent through postMessage.
  */
 function readRedChannel(ctx, width, height)
 {
@@ -56,8 +69,7 @@ function readRedChannel(ctx, width, height)
     data : data,
     strokeCount : ctx.strokeCount,
     segmentCount : ctx.segmentCount,
-    fillCount : ctx.fillCount,
-    close() {}
+    fillCount : ctx.fillCount
   };
 }
 
