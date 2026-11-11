@@ -229,10 +229,31 @@ check('and the trunk stays inside the sprite',
     /performance\.now\(\) - lightningTextureLastStart < 1000/.test(workerBlock) &&
     !/startLightningTextureWorker\(\);\s*\}\);/.test(workerBlock),
     'the old code chained the next worker straight out of onmessage');
-  check('the artwork is capped at four tiles',
-    /const numLightningTextures = 4;/.test(app) &&
+  check('the artwork is capped at two tiles, and at one after a context loss',
+    /const numLightningTextures = readLightningTileBudget\(\);/.test(app) &&
+    /if \(Number\.isFinite\(stored\) && stored >= 1 && stored <= 2\)\s*\n\s*return stored;/.test(app) &&
+    /return 2;/.test(app) &&
     /if \(lightningTexturesReady < numLightningTextures\)/.test(workerBlock),
-    '12.5 MB a tile: ten of them is 125 MB of texture');
+    '12.5 MB a tile: two is a quarter of the renderer, ten was all of it and more');
+  check('the artwork crosses to the main thread as one byte per texel',
+    /postMessage\(artwork, \[artwork\.data\.buffer\]\);/.test(source) &&
+    /const rgba = ctx\.getImageData\(0, 0, width, height\)\.data;/.test(source) &&
+    !/transferToImageBitmap\(\)/.test(source.split('function readRedChannel')[1] || ''),
+    'a canvas is RGBA whatever is drawn on it: 50 MB handed over to become 12.5 MB');
+  check('the upload asks the driver for exactly the bytes it has',
+    /gl\.texImage2D\(gl\.TEXTURE_2D, 0, gl\.R8, artwork\.width, artwork\.height, 0, gl\.RED, gl\.UNSIGNED_BYTE, artwork\.data\)/
+      .test(app) && !/bitmap\.close\(\)/.test(app),
+    'no RGBA bitmap in the upload path, so no RGBA temporary on the GPU');
+  check('a lost context leaves a lighter next load behind',
+    /localStorage\.setItem\('lightningTileBudget', '1'\)/.test(app) &&
+    /if \(graphicsContextLost\)\s*\/\/ nothing can be uploaded/.test(workerBlock),
+    'the browser does not say how much memory it wanted; it says no');
+  check('the bolt tiles carry no mip chain, because nothing samples one',
+    !/gl\.generateMipmap\(gl\.TEXTURE_2D\);\s*\n\s*gl\.texParameteri\(gl\.TEXTURE_2D, gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR\);/
+      .test(app.split('function generateLightningTexture')[1].split('function generateLightningNetworkTexture')[0]) &&
+    /textureLod\(lightningTex, lightningTexCoord, 0\.0\)/
+      .test(fs.readFileSync(path.join(ROOT, 'shaders/fragment/realisticDisplayShader.frag'), 'utf8')),
+    '33% of 12.5 MB a tile, plus a generateMipmap over four megatexels, for nothing');
   check('the flash network is one small tile, asked for after the first bolt',
     /kind : 'network'/.test(workerBlock) &&
     /kind : 'network', width : 1024, height : 256/.test(workerBlock) &&

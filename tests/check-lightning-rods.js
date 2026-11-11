@@ -92,10 +92,11 @@ check('a stroke still takes the shipped level-0 fetch of the bolt tile',
   /float pixVal = textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.r;/.test(displayShader) &&
   !/mipped/.test(displayShader) && !/flash \? texture/.test(displayShader),
   'the stroke path must stay the code the app shipped with');
-check('the bolt tiles have a mip chain for the flash to read',
+check('the network tile has a mip chain, and the bolt tiles do not need one',
   /gl\.generateMipmap\(gl\.TEXTURE_2D\);/.test(appSource) &&
-  /gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR/.test(appSource),
-  'the threshold is applied to the averaged level, which is what makes the channel continuous');
+  /gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR/.test(appSource) &&
+  /textureLod\(lightningTex, lightningTexCoord, 0\.0\)/.test(displayShader),
+  'a flash reads the network averaged; a stroke reads level 0 of the bolt, so its chain was 33% of 12.5 MB for nothing');
 
 /*
  * One artwork.
