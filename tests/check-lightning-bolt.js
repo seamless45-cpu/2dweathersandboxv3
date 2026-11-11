@@ -1,27 +1,28 @@
 // Cloud-to-ground channel shape harness.
 //
-// The bolt is the oldest artwork in the repo and for a long time it was also the
-// straightest: one heading, kicked by its own noise every pixel and pulled back
-// toward vertical every step, so every kick was cancelled by the next one and the
-// channel came out as a vertical wire with a buzz on it. A real return stroke is
-// crooked - it takes a long arc one way, a longer one back, steps sideways, and
-// only then breaks - and that needs two scales: a slow aim that bends the channel
-// and a fast jag that makes it electric.
+// The bolt is the oldest artwork in the repo. Its shape is one heading, kicked by
+// its own noise every artwork pixel and pulled back toward straight down - a
+// channel that buzzes down the picture. A two-scale heading (a slow aim for arcs,
+// a fast jag for the buzz) was tried once and taken back out: it bent the channel,
+// but it also thinned the bolt into a wandering line, and a return stroke reads as
+// a *crack* - straight down, hard, and thick. What this file holds in place is
+// therefore the original shape on purpose, the width of the channel, and the fact
+// that the bolt is drawn at all.
 //
 // What it checks:
 //
-//   1. The model. The two scales exist, they are separately tunable, both the
-//      trunk and the forks use them, and the trunk is confined to the sprite
-//      while a fork is not (a fork is allowed to run off the tile; a trunk that
-//      does leaves half a bolt on screen).
-//   2. The bend, measured. The real heading arithmetic is ported out of
-//      lightningGenerator.js and run for forty seeded bolts, against a port of the
-//      one-scale model it replaced: that the channel now sweeps sideways over a
-//      substantial part of the tile, that it does it in arcs rather than in a
-//      zigzag, and that the old model measured the same way does neither.
-//   3. The artwork, drawn. The real generator runs against the stubbed canvas:
-//      the bolt is there, it forks, it spans the picture, and no part of the
-//      channel is drawn off the edge of the sprite.
+//   1. The model. One heading, the original two numbers, the same walk for the
+//      forks, and no leftover of the two-scale version.
+//   2. The channel's weight. A return stroke is a thick channel: measured on the
+//      artwork next to an intra-cloud hair (which is sub-pixel), and asserted on
+//      the constant so it cannot quietly become a hair too.
+//   3. The buzz, measured. The real heading arithmetic is ported out of
+//      lightningGenerator.js and run for forty seeded bolts: the heading moves a
+//      third of a radian per pixel and reverses direction many times over the
+//      height - a saw, which is what the original was and what it is again - and
+//      the trunk stays inside the sprite while it does it.
+//   4. The artwork, drawn. The real generator runs against the stubbed canvas: the
+//      bolt is there, it forks, and it spans the picture.
 //
 // Usage: node tests/check-lightning-bolt.js
 
@@ -53,145 +54,123 @@ const CG = gen.CG_SHAPE;
 const TILE_W = 1250;
 const TILE_H = 2500;
 
-/* ------------------------------------------ 1. the model */
+/* ---------------------------------------------- 1. the model */
 
-check('the channel has two scales: a slow aim and a fast jag',
-  Number.isFinite(CG.bend) && Number.isFinite(CG.jag) &&
-  CG.bend > 0 && CG.jag > 0 && CG.bendPull !== CG.jagPull,
-  'bend ' + CG.bend + ' / ' + CG.bendPull + ', jag ' + CG.jag + ' / ' + CG.jagPull);
-check('the aim is the slow one and the jag is the fast one',
-  CG.bendPull < CG.jagPull / 10,
-  'the aim relaxes over ' + Math.round(1 / CG.bendPull) + ' steps, the jag over ' +
-    Math.round(1 / CG.jagPull));
-check('the aim is released slowly enough to hold an arc',
-  1 / CG.bendPull > TILE_H * 0.15,
-  'aim time constant ' + Math.round(1 / CG.bendPull) + ' steps of a ' + TILE_H + ' px channel');
-check('the trunk is confined to the sprite and a fork is not',
-  /confined : true/.test(source) && /confined : false/.test(source),
-  'a fork may run off the tile; the trunk may not');
-check('both the trunk and the forks step their heading the same way',
-  (source.match(/stepHeading\(state\);/g) || []).length === 2,
-  'one heading model, two callers');
-check('a fork keeps its own aim instead of being pulled back to vertical',
-  /aimTarget : targetAngle/.test(source) && /state\.aim - state\.aimTarget/.test(source),
-  'a fork pulled toward straight down walks back into its parent');
-check('the one-scale model is gone',
-  !/angle \+= \(Math\.random\(\) - 0\.5\) \* 1\.4/.test(source),
-  'a 40-degree kick with an 8% pull is a buzz, not a bend');
+check('the heading is the original jittered walk',
+  CG.jitter === 1.4 && CG.straighten === 0.08 &&
+  Math.abs(CG.startAngle - Math.PI / 6) < 1e-9 && CG.branchJitter === 0.7,
+  'jitter ' + CG.jitter + ' rad, pull ' + CG.straighten + ', fork jitter ' + CG.branchJitter);
+check('the two-scale heading is gone',
+  !/state\.jag/.test(source) && !/aimTarget/.test(source) && !/CG_SHAPE\.bend/.test(source),
+  'a slow aim plus a fast jag bent the channel, and thinned the bolt doing it');
+check('the original step is what runs: next position, then the kick',
+  /const nextX = startX \+ Math\.sin\(angle\);\s*\n\s*const nextY = startY \+ Math\.cos\(angle\);\s*\n\s*\n\s*angle \+= \(Math\.random\(\) - 0\.5\) \* CG_SHAPE\.jitter;/
+    .test(source),
+  'the order of the step and the kick is part of the shape');
 
-/* ------------------------------------------ 2. the bend, measured */
+/* ---------------------------------------------- 2. the channel's weight */
+
+check('a return stroke is drawn as a thick channel',
+  CG.lineWidth >= 6.0 && CG.lineWidth <= 9.0,
+  'lineWidth ' + CG.lineWidth + ' artwork px, up from 4.5');
+check('its forks are thinner than it is, but not hairlines',
+  CG.branchWidthRatio > 0.2 && CG.branchWidthRatio < 0.5,
+  'a fork leaves at up to ' + CG.branchWidthRatio + ' of the trunk');
+check('and the bolt is many times the width of an intra-cloud channel',
+  CG.lineWidth / gen.IC_WIDTH.trunk >= 4,
+  'trunk ' + CG.lineWidth + ' artwork px against an IC trunk of ' + gen.IC_WIDTH.trunk);
+
+/* ---------------------------------------------- 3. the buzz, measured */
 
 /*
- * lightningGenerator.js: one step of the trunk's heading (stepHeading, called with
- * a confined state whose aim is pulled toward straight down).
+ * lightningGenerator.js: the trunk's step. `state.angle` is the heading, `state.x`
+ * the chicken scratch this harness walks, which is the channel's own x.
  */
 function stepTrunk(s, rand) {
-  s.aim += (rand() - 0.5) * CG.bend;
-  s.aim -= s.aim * CG.bendPull;
-  const lo = TILE_W * CG.margin;
-  const hi = TILE_W * (1.0 - CG.margin);
-  if (s.x < lo || s.x > hi) {
-    const inward = s.x < lo ? 1.0 : -1.0;
-    s.aim += (inward * 1.1 - s.aim) * CG.confine;
-  }
-  s.jag += (rand() - 0.5) * CG.jag;
-  s.jag -= s.jag * CG.jagPull;
-  let angle = s.aim + s.jag;
-  if (rand() < CG.stepKinkChance)
-    angle += (rand() < 0.5 ? -1 : 1) * CG.stepKinkAngle;
-  return angle;
+  const nextX = s.x + Math.sin(s.angle);
+  s.angle += (rand() - 0.5) * CG.jitter;
+  s.angle -= (s.angle - 0) * CG.straighten;
+  s.x = nextX;
+  return nextX;
 }
 
-// the model this replaced: one heading, kicked hard, pulled back to vertical
-function stepOneScale(s, rand) {
-  s.aim += (rand() - 0.5) * 1.4;
-  s.aim -= s.aim * 0.08;
-  return s.aim;
-}
-
-function walk(step, seed) {
+function walk(seed) {
   const rand = gen.makeRng(seed);
-  const s = { x : TILE_W / 2, aim : Math.PI / 6, jag : 0 };
+  const s = { x : TILE_W / 2, angle : CG.startAngle };
   let x = s.x, y = 0, minX = x, maxX = x;
-  let meanTurn = 0, previousAngle = null;
+  let turnSum = 0, previous = null;
   const track = [];
   while (y < TILE_H) {
-    const angle = step(s, rand);
-    if (previousAngle !== null)
-      meanTurn += Math.abs(angle - previousAngle);
-    previousAngle = angle;
-    x += Math.sin(angle);
-    y += Math.cos(angle);
-    s.x = x;
+    const before = s.angle;
+    x = stepTrunk(s, rand);
+    y += Math.cos(before);
     track.push(x);
+    if (s.angle !== previous) {
+      if (previous !== null)
+        turnSum += Math.abs(s.angle - previous);
+      previous = s.angle;
+    }
     if (x < minX) minX = x;
     if (x > maxX) maxX = x;
   }
-  // how many times the channel changes which way it is going, counted over
-  // 100 px windows: an arc turns a handful of times, a zigzag turns constantly
-  let turns = 0, previous = 0;
+  // how many times the channel changes which way it is going, over 100 px windows
+  let turns = 0, sign = 0;
   for (let i = 100; i < track.length; i += 100) {
-    const sign = Math.sign(Math.round(track[i] - track[i - 100]));
-    if (sign && previous && sign !== previous)
+    const here = Math.sign(Math.round(track[i] - track[i - 100]));
+    if (here && sign && here !== sign)
       turns++;
-    if (sign)
-      previous = sign;
+    if (here)
+      sign = here;
   }
-  return { span : maxX - minX, minX, maxX, turns, end : x, meanTurn : meanTurn / track.length, path : track };
+  return { span : maxX - minX, minX, maxX, turns, meanTurn : turnSum / track.length };
 }
 
-const seeds = Array.from({ length : 40 }, (_, i) => 1013 + i * 7919);
-const bent = seeds.map((seed) => walk(stepTrunk, seed));
-const straight = seeds.map((seed) => walk(stepOneScale, seed));
+const bolts = Array.from({ length : 40 }, (_, i) => walk(1013 + i * 7919));
 const median = (values) => [ ...values ].sort((a, b) => a - b)[Math.floor((values.length - 1) / 2)];
 
-const bendSpan = median(bent.map((b) => b.span));
-const oldSpan = median(straight.map((b) => b.span));
-check('the channel sweeps sideways over a substantial part of the tile',
-  bendSpan > TILE_W * 0.15,
-  'median lateral span ' + Math.round(bendSpan) + ' artwork px of ' + TILE_W +
-    ' (' + (bendSpan / TILE_W * 100).toFixed(0) + '%)');
-check('... and it does it by bending, not by buzzing',
-  median(bent.map((b) => b.turns)) * 3 < median(straight.map((b) => b.turns)) &&
-  median(bent.map((b) => b.meanTurn)) < median(straight.map((b) => b.meanTurn)) * 0.6,
-  'the same walk with the old one-scale heading turns ' + median(straight.map((b) => b.turns)) +
-    ' times and changes heading by ' + median(straight.map((b) => b.meanTurn)).toFixed(2) +
-    ' rad a step; this one turns ' + median(bent.map((b) => b.turns)) + ' times by ' +
-    median(bent.map((b) => b.meanTurn)).toFixed(2) + ' rad a step');
-check('and it keeps the sweep inside the sprite',
-  bent.every((b) => b.minX > 0 && b.maxX < TILE_W),
-  'widest excursion ' + Math.round(Math.min(...bent.map((b) => b.minX))) + ' .. ' +
-    Math.round(Math.max(...bent.map((b) => b.maxX))) + ' of 0 .. ' + TILE_W);
-check('the channel bends in arcs instead of zigzagging',
-  median(bent.map((b) => b.turns)) <= 12,
-  'median ' + median(bent.map((b) => b.turns)) + ' direction changes over ' + TILE_H +
-    ' px, before ' + median(straight.map((b) => b.turns)));
-check('the jag alone would not have bent it',
-  bendSpan > TILE_W * 0.15 && CG.jag > CG.bend * 5,
-  'the fast term is ' + (CG.jag / CG.bend).toFixed(0) + 'x the slow one but relaxes ' +
-    (CG.jagPull / CG.bendPull).toFixed(0) + 'x faster');
+check('the channel buzzes: it changes heading by about a third of a radian a pixel',
+  median(bolts.map((b) => b.meanTurn)) > 0.25,
+  'median ' + median(bolts.map((b) => b.meanTurn)).toFixed(2) + ' rad per artwork pixel');
+check('... and reverses direction many times over the height of the picture',
+  median(bolts.map((b) => b.turns)) >= 10,
+  'median ' + median(bolts.map((b) => b.turns)) + ' changes of direction over ' + TILE_H + ' px');
+check('the wire it runs down is straight enough to be a wire',
+  median(bolts.map((b) => b.span)) < TILE_W * 0.45,
+  'median lateral span ' + Math.round(median(bolts.map((b) => b.span))) + ' of ' + TILE_W +
+    ' artwork px');
+check('and the trunk stays inside the sprite',
+  bolts.every((b) => b.minX > 0 && b.maxX < TILE_W),
+  'widest excursion ' + Math.round(Math.min(...bolts.map((b) => b.minX))) + ' .. ' +
+    Math.round(Math.max(...bolts.map((b) => b.maxX))) + ' of 0 .. ' + TILE_W);
 
-/* ------------------------------------------ 3. the artwork, drawn */
+/* ---------------------------------------------- 4. the artwork, drawn */
 
 {
-  // deterministic artwork: the bolt is drawn with Math.random
   const realRandom = Math.random;
   Math.random = gen.makeRng(20260101);
   const bolt = gen.generateLightningBolt(TILE_W, TILE_H);
   Math.random = realRandom;
 
-  let lit = 0, minX = TILE_W, maxX = 0, minY = TILE_H, maxY = 0, peak = 0;
-  for (let y = 0; y < TILE_H; y++)
+  let lit = 0, minY = TILE_H, maxY = 0, peak = 0;
+  let widestRow = 0, trunkRows = 0;
+  for (let y = 0; y < TILE_H; y++) {
+    let run = 0, longest = 0;
     for (let x = 0; x < TILE_W; x++) {
       const value = bolt.data[y * TILE_W + x];
       if (value > peak) peak = value;
-      if (value <= 32) continue;
+      if (value <= 32) {
+        run = 0;
+        continue;
+      }
       lit++;
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
+      run++;
+      if (run > longest) longest = run;
       if (y < minY) minY = y;
       if (y > maxY) maxY = y;
     }
+    if (longest > 0) trunkRows++;
+    if (longest > widestRow) widestRow = longest;
+  }
 
   check('the bolt is drawn, and it is bright',
     lit > TILE_W * 2 && peak > 240,
@@ -199,18 +178,15 @@ check('the jag alone would not have bent it',
   check('the channel runs the whole height of the tile',
     minY <= 2 && maxY >= TILE_H - 3,
     'drawn from y ' + minY + ' to ' + maxY + ' of ' + TILE_H);
-  check('it starts at the middle of the tile, where the strike is',
-    Math.abs(minX + maxX - TILE_W) / 2 < TILE_W * 0.45,
-    'lit pixels span x ' + minX + ' .. ' + maxX);
+  check('the drawn channel is thick on the artwork too',
+    widestRow >= CG.lineWidth - 1,
+    'widest run of lit pixels in a row ' + widestRow + ' px for a lineWidth of ' + CG.lineWidth);
   check('it forks',
     bolt.segmentCount > 1000,
     bolt.segmentCount + ' segments in one bolt');
-  check('nothing is drawn off the edge of the sprite',
-    minX >= 0 && maxX <= TILE_W - 1 && minY >= 0 && maxY <= TILE_H - 1,
-    'bounds ' + minX + ',' + minY + ' .. ' + maxX + ',' + maxY);
-  check('the artwork is not one straight line',
-    maxX - minX > TILE_W * 0.15,
-    'the drawn bolt covers ' + Math.round(maxX - minX) + ' artwork px across');
+  check('it is not one straight line',
+    trunkRows > TILE_H * 0.9 && bolts[0].span > TILE_W * 0.05,
+    trunkRows + ' rows carry the channel, and it wanders as it goes');
 }
 
 restoreCanvas();

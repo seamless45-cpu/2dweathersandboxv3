@@ -236,7 +236,9 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   // The brightness is the share of the strike's peak light, compressed so that
   // the last of it lands where it can be seen; see cgChannelFalloff above.
   float curveShare = clamp(currentLightningIntensity / max(lightningCurvePeak * pow(strikeIntensity, 2.0), 1e-6), 0.0, 1.0);
-  float channelBrightness = mainBoltBrightness * pow(curveShare, cgChannelFalloff);
+  // pow(0, n) is 0 on paper and has been NaN on real drivers, so the base is
+  // floored: at the end of a stroke this is 5e-5 HDR units, which is black.
+  float channelBrightness = mainBoltBrightness * pow(max(curveShare, 1e-6), cgChannelFalloff);
 
   float brightnessThreshold = 0.95;
   pixVal -= brightnessThreshold;
@@ -245,9 +247,20 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
 
   pixVal *= channelBrightness;
 
-  const vec3 lightningCol = vec3(0.70, 0.57, 1.0); // 0.584, 0.576, 1.0
+  // The colour of a return stroke, and of the channel as it cools.
+  //
+  // A stroke is white-blue and blinding while the current is in it. It is a
+  // violet line only when it is *dim*, and a saturated violet at low brightness
+  // is not something to draw: the eye reads it as a fault, and against a night
+  // sky it left a purple ghost of the channel behind every fade. So the channel
+  // is a cold white (0.90 red, 0.93 green against a full blue) rather than a
+  // violet, and it *warms* as the current leaves it - a cooling channel radiates
+  // redder, so the last of a stroke is an ember, not a bruise.
+  const vec3 lightningCol = vec3(0.90, 0.93, 1.0);
+  const vec3 lightningCoolingCol = vec3(1.00, 0.66, 0.36);
+  vec3 lightningTone = mix(lightningCoolingCol, lightningCol, smoothstep(0.0, 0.30, curveShare));
 
-  vec3 outputColor = max(pixVal * lightningCol, vec3(0));
+  vec3 outputColor = max(pixVal * lightningTone, vec3(0));
 
   return outputColor;
 }
@@ -529,9 +542,9 @@ vec3 computeICLight()
   // part of the sky the scene pass never touches. It is bounded by its own ceiling
   // so that a storm-core stroke covers the frame instead of blowing it out to a
   // value the post-processing has to guess about.
-  const vec3 icScreenFlashCol = vec3(0.55, 0.62, 1.0);
-  const float icScreenFlashGain = 0.040;
-  const float icScreenFlashCeiling = 4.20;
+  const vec3 icScreenFlashCol = vec3(0.66, 0.74, 1.0);
+  const float icScreenFlashGain = 0.050;
+  const float icScreenFlashCeiling = 5.50;
   vec3 screenLight = icScreenFlashCol * (icScreenFlashCeiling *
                      (1.0 - exp(-cgFlash * icScreenFlashGain / icScreenFlashCeiling)));
 
@@ -683,8 +696,8 @@ vec4 getAirColor(vec2 fragCoordIn)
   vec3 color = (smokeOrFireCol * smokeOpacity / opacity) + (cloudCol * cloudOpacity * (1. - smokeOpacity) / opacity); // color blending
 
 
-#define lightningOnLightBrightness 0.0075  // 0.002
-#define lightningSkyLightBrightness 0.0042 // the wide lobe of the same flash
+#define lightningOnLightBrightness 0.0095  // 0.002
+#define lightningSkyLightBrightness 0.0055 // the wide lobe of the same flash
 // How much of the frame a cloud-to-ground stroke lights.
 //
 // A bolt drawn on its own, with a halo around it, reads as a spark in a dark room.
@@ -694,7 +707,7 @@ vec4 getAirColor(vec2 fragCoordIn)
 // by the flash. That is this number. It is driven by the strike's own intensity
 // curve, so a weak stroke lifts the frame a little and a storm-core stroke covers
 // it, and it only ever *adds* light.
-#define lightningScreenFlashBrightness 0.020
+#define lightningScreenFlashBrightness 0.030
 
   // Every strike in the slot array is drawn until its own animation is over.
   // Slots are independent, so a new strike never truncates a running one.
@@ -751,7 +764,7 @@ vec4 getAirColor(vec2 fragCoordIn)
   // is there (cloud, terrain, smoke) instead of painting a flat white over it, and
   // the structure of the cloudscape survives the flash.
   if (screenFlash > 0.0)
-    onLight += vec3(0.50, 0.58, 1.0) * (screenFlash * lightningScreenFlashBrightness);
+    onLight += vec3(0.70, 0.78, 1.0) * (screenFlash * lightningScreenFlashBrightness);
 
   emittedLight += lightningBoltLight / (1. + cloudDensity * 100.0);
 
@@ -1195,10 +1208,26 @@ void main()
    */
   opacity = clamp(opacity + length(emittedLight), 0.0, 1.0);
 
+  // The emitted light is written premultiplied.
+  //
+  // This fragment is composited as `colour * opacity + what is behind it`, so
+  // light added to `color` and then multiplied by an opacity of 0.2 arrived at a
+  // fifth of its strength. Over a cloud that never showed, because opacity is 1
+  // there - but a channel against the clear sky dimmed *with its own fade*, and
+  // since the alpha is raised by the same emitted light, the two fell together:
+  // the last iterations of a fade went out quadratically, and what was left of
+  // them arrived as a violet smear over the place the sky used to be. Dividing
+  // the emission by the opacity it is about to be multiplied by hands the blend
+  // exactly the light the stroke emitted, whatever the sky behind it is doing.
+  // The divisor is floored so a nearly empty fragment cannot produce a huge
+  // colour, and `opacity` is at least the length of the emission by the line
+  // above, so what comes out is bounded.
+  vec3 emitted = emittedLight / max(opacity, 1e-3);
+
   // The intra-cloud flash is not in this fragment: it is added afterwards, by
   // the additive light pass (see computeICLight), so it can never trade a cloud
   // for itself or dim what it is drawn over.
-  fragmentColor = vec4(softHdrClamp(max(color * finalLight, 0.) + emittedLight), opacity);
+  fragmentColor = vec4(softHdrClamp(max(color * finalLight, 0.) + emitted), opacity);
 
   drawCursor(cursor, view); // over everything else
 }
