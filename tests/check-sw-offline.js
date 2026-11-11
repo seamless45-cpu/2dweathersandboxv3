@@ -296,8 +296,8 @@ const PRECACHE = (() => {
   check('shaders are served from cache offline', !!shaderResponse);
   const shaderBody = shaderResponse ? await shaderResponse.text() : '';
   check(
-    'the cached shader is the current one (CG hdrCeiling present)',
-    shaderBody.includes('hdrCeiling'),
+    'the cached shader is the current one (CG HDR ceiling present)',
+    shaderBody.includes('softHdrClamp') && shaderBody.includes('lightningSkyLightBrightness'),
     shaderBody.length + ' chars'
   );
 

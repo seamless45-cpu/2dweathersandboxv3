@@ -121,7 +121,15 @@ check('the artwork carries no painted glow layer',
   !/drawHalo/.test(generatorSource) &&
   (() => {
     const fn = (generatorSource.match(/function stroke\(pts, w, tone\)[\s\S]*?\n  \}/) || [''])[0];
-    return (fn.match(/ctx\.stroke\(\)/g) || []).length === 1;
+    if (!fn || /shadowBlur|filter\s*=/.test(fn))
+      return false;
+    // Every stroke is either the channel itself or a *narrower* core inside it. A
+    // painted halo would be a wider, dimmer stroke behind the channel, so that is
+    // exactly what this rules out.
+    const widths = fn.match(/ctx\.lineWidth = [^;]+;/g) || [];
+    return widths.length >= 2 &&
+           widths[0] === 'ctx.lineWidth = w;' &&
+           widths.every((line) => line === 'ctx.lineWidth = w;' || /ctx\.lineWidth = w \* IC_CORE_WIDTH;/.test(line));
   })());
 // The halo lives in the display shader, out of the artwork's own mip chain.
 // These are the four things that make it a halo rather than a flood fill: it is a
@@ -172,11 +180,11 @@ check('IC strokes only ever brighten the artwork',
 // the finished scene - the reason a flash is visible inside a cloud at all.
 check('the light pass returns only the flash light',
   /uniform float icLightPass/.test(displayShader) &&
-  /if \(icLightPass > 0\.5\) \{[\s\S]{0,200}?fragmentColor = vec4\(computeICLight\(\), 0\.0\);[\s\S]{0,80}?return;/.test(displayShader) &&
+  /if \(icLightPass > 0\.5\) \{[\s\S]{0,400}?fragmentColor = vec4\(softHdrClamp\(computeICLight\(\)\), 0\.0\);[\s\S]{0,80}?return;/.test(displayShader) &&
   /vec3 computeICLight\(\)/.test(displayShader) &&
   /icLight \+= displayICLightning\(/.test(displayShader));
 check('the scene pass carries no IC light any more',
-  /fragmentColor = vec4\(min\(max\(color \* finalLight, 0\.\) \+ emittedLight/.test(displayShader) &&
+  /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emittedLight\), opacity\)/.test(displayShader) &&
   !/icAlpha/.test(displayShader) &&
   !/icEmission/.test(displayShader));
 {
@@ -237,27 +245,97 @@ const toneMap = (c) => {
 }
 
 // A CG return stroke is 100000 by design and the scene is rendered into an
-// RGBA16F buffer (largest finite value 65504). Uncapped, the light overflowed to
-// infinity and the pumped alpha (~100000 as well) made the blend multiply the
-// destination by a large negative number; both come out of the tonemap as NaN,
-// which the bloom and the AA passes then smear across the frame.
+// RGBA16F buffer (largest finite value 65504). Written raw, that light overflowed
+// to infinity, and the pumped alpha (~100000 as well) made the blend multiply the
+// destination by a large negative number; both come back out of the tonemap as
+// NaN, which the bloom and the AA passes then smear across the frame.
+//
+// The fix is not a clamp. A clamp at the ceiling throws away the difference
+// between a bolt written at 100000 and one written at a million, and that
+// difference is the whole of "brighter than white": the tonemap flattens every
+// value over ~3 to the same white, so a stroke's surplus energy can only arrive
+// on screen as the halo it scatters. softHdrClamp() (common.glsl) compresses the
+// top of the range instead of cutting it off, and it is the guard: an infinity
+// maps to the ceiling and a NaN to zero.
+const HDR_CEILING = defineValue(common, 'HDR_CEILING');
+const softHdrClamp = (value) => {
+  if (Number.isNaN(value)) return 0;
+  const ceiling = HDR_CEILING;
+  return ceiling * (1 - Math.exp(-Math.max(value, 0) / ceiling));
+};
 {
-  const ceilingMatch = displayShader.match(/const float hdrCeiling = ([\d\.]+);/);
-  const ceiling = ceilingMatch ? Number(ceilingMatch[1]) : NaN;
   const boltBrightness = Number((displayShader.match(/const float mainBoltBrightness = ([\d\.]+);/) || [])[1]);
-  check('the scene light is capped below the 16-bit float limit',
-    ceiling > 1000 && ceiling < 65504 && boltBrightness > ceiling,
-    'ceiling ' + ceiling + ', CG stroke ' + boltBrightness + ', 16F limit 65504');
-  check('the fragment is written through that cap',
-    /fragmentColor = vec4\(min\(max\(color \* finalLight, 0\.\) \+ emittedLight, vec3\(hdrCeiling\)\), opacity\)/
-      .test(displayShader));
+  check('the HDR ceiling is declared and stays inside what a 16-bit float holds',
+    Number.isFinite(HDR_CEILING) && HDR_CEILING > 1000 && HDR_CEILING < 65504,
+    'ceiling ' + HDR_CEILING + ', 16F limit 65504');
+  check('a cloud-to-ground stroke is still written far past the ceiling',
+    boltBrightness > HDR_CEILING * 1.5,
+    'stroke ' + boltBrightness + ', ceiling ' + HDR_CEILING);
+  check('the scene fragment is written through that compression, not a clamp',
+    /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emittedLight\), opacity\);/
+      .test(displayShader) && !/const float hdrCeiling/.test(displayShader));
+  check('the intra-cloud pass is written through it too',
+    /fragmentColor = vec4\(softHdrClamp\(computeICLight\(\), 0\.0\);|fragmentColor = vec4\(softHdrClamp\(computeICLight\(\)\), 0\.0\);/
+      .test(displayShader) || /softHdrClamp\(computeICLight\(\)\)/.test(displayShader));
   check('the emission alpha cannot run past opaque',
     /opacity = clamp\(opacity \+ length\(emittedLight\), 0\.0, 1\.0\)/.test(displayShader));
-  const capped = toneMap(ceiling);
-  check('a CG strike at the cap is still white, and finite',
-    Number.isFinite(capped) && capped >= 254,
-    'tonemapped to ' + capped.toFixed(1) + '/255');
+
+  // the compression itself
+  let monotonic = true, previous = -1;
+  for (let v = 0; v <= 2e6; v = v < 10 ? v + 0.05 : v * 1.08) {
+    const c = softHdrClamp(v);
+    if (!(c >= previous)) monotonic = false;
+    previous = c;
+  }
+  check('the compression never runs backwards', monotonic);
+  check('it is the identity where clouds, sky and intra-cloud light live',
+    Math.abs(softHdrClamp(1.0) - 1.0) < 0.001 && Math.abs(softHdrClamp(120) - 120) < 0.15,
+    'softHdrClamp(1) = ' + softHdrClamp(1).toFixed(5) + ', softHdrClamp(120) = ' + softHdrClamp(120).toFixed(3));
+  check('an infinity lands on the ceiling instead of propagating',
+    softHdrClamp(Infinity) === HDR_CEILING && softHdrClamp(Number.NaN) === 0,
+    'inf -> ' + softHdrClamp(Infinity) + ', NaN -> ' + softHdrClamp(Number.NaN));
+  check('a stroke written a hundred times over the ceiling is still finite',
+    Number.isFinite(softHdrClamp(boltBrightness * 100)) && softHdrClamp(boltBrightness * 100) <= HDR_CEILING,
+    'softHdrClamp(' + boltBrightness * 100 + ') = ' + softHdrClamp(boltBrightness * 100).toFixed(1));
+  // ... and it keeps the ordering that a clamp destroys
+  const weak = softHdrClamp(60000), strong = softHdrClamp(600000), huge = softHdrClamp(6e6);
+  check('brighter strokes still come out brighter than weaker ones',
+    weak < strong && strong < huge,
+    weak.toFixed(0) + ' < ' + strong.toFixed(0) + ' < ' + huge.toFixed(0));
+  check('a stroke past the ceiling is still white after the tonemap, and finite',
+    Number.isFinite(toneMap(strong)) && toneMap(strong) >= 250,
+    'tonemapped to ' + toneMap(strong).toFixed(1) + '/255');
 }
+
+// The bloom is where "brighter than white" is actually visible, and it is built
+// from a separate set of 16-bit float buffers, so it needs its own bound.
+{
+  const brightParts = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'isolateBrightPartsShader.frag'), 'utf8');
+  const post = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'postProcessingShader.frag'), 'utf8');
+  const num = (source, name) => Number((source.match(new RegExp('const float ' + name + ' = ([\\d.]+);')) || [])[1]);
+  const ambientGain = num(brightParts, 'ambientGain');
+  const brightKnee = num(brightParts, 'brightKnee');
+  const brightGain = num(brightParts, 'brightGain');
+  const brightCeiling = num(brightParts, 'brightCeiling');
+
+  check('the bright pass keeps the ambient veil the scene always had',
+    Math.abs(ambientGain - 0.02) < 1e-6, 'ambientGain ' + ambientGain);
+  check('its knee sits above every cloud and below every bolt',
+    brightKnee > 8 && brightKnee < 1000, 'knee ' + brightKnee);
+  check('the bright pass scatters far more light than the ambient veil',
+    brightGain > ambientGain * 10, 'brightGain ' + brightGain + ' vs ambientGain ' + ambientGain);
+  check('one level of the bloom pyramid cannot overflow a 16-bit float',
+    brightCeiling > 1000 && brightCeiling * 12 < 65504,
+    'ceiling ' + brightCeiling + ' x 12 levels = ' + brightCeiling * 12);
+  check('the bright pass is bounded and cannot go infinite',
+    brightParts.includes('over = brightCeiling * (1.0 - exp(-over / brightCeiling));'));
+  check('the tonemap reads both buffers through a NaN and infinity guard',
+    /vec3 safeSample\(vec3 value\)/.test(post) &&
+    /color \+= safeSample\(texture\(bloomTex, uv\)\.rgb\) \* 0\.990;/.test(post) &&
+    /color = safeSample\(texture\(hdrTex, uv\)\.rgb\);/.test(post),
+    'postProcessingShader.frag has to guard what it reads');
+}
+
 check('IC flashes stay cloud-scale, not storm-scale',
   /const icFlashWidthMeters = (\d+)/.test(appSource) &&
   Number(appSource.match(/const icFlashWidthMeters = (\d+)/)[1]) <= 8000 &&

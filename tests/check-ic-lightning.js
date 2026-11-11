@@ -301,6 +301,25 @@ check('the artwork has a visible brightness hierarchy',
     shares.every((s) => s.share < 0.50),
     shares.map((s) => (s.share * 100).toFixed(0) + '% at the top tier').join(' '));
 }
+/* The channel itself, as opposed to the network it makes: a stroke that fades
+ * toward its tip, a hot centreline inside it, and a spark where a branch leaves. */
+{
+  const source = fs.readFileSync(path.join(ROOT, 'lightningGenerator.js'), 'utf8');
+  check('a channel fades toward its tip instead of glowing evenly',
+    Number.isFinite(gen.IC_TIP_TONE) && gen.IC_TIP_TONE > 0.25 && gen.IC_TIP_TONE < 0.9 &&
+    /tone \* \(1 - \(1 - IC_TIP_TONE\) \* along\)/.test(source),
+    'IC_TIP_TONE ' + gen.IC_TIP_TONE);
+  check('a channel is drawn again as a hot centreline inside its sheath',
+    /const IC_CORE_WIDTH = 0\.\d+;/.test(source) &&
+    /const IC_CORE_GAIN = 1\.\d+;/.test(source) &&
+    /ctx\.lineWidth = w \* IC_CORE_WIDTH;/.test(source),
+    'the core has to be narrower and brighter than the stroke it sits in');
+  check('every fork is a hot junction, not two lines that touch',
+    /function junction\(x, y, w, tone\)/.test(source) &&
+    tiles.every((t) => t.fillCount >= 6),
+    'junction sparks per tile: ' + tiles.map((t) => t.fillCount).join(' '));
+}
+
 check('the strokes are hair-thin',
   tiles.every((t) => t.lineWidths === undefined || true) &&
   gen.IC_WIDTH.trunk <= 4.5 && gen.IC_WIDTH.hair <= 1.5,

@@ -291,17 +291,32 @@ const IC_TILE_MARGIN = 0.035;
  * pixels at the default camera (a flash of 2400 m is a hundred pixels across
  * while the tile is 256), so a trunk is a little over a screen pixel, an arm
  * three quarters of one, and a hair is sub-pixel - a hair strand. */
-const IC_WIDTH = { trunk : 2.6, arm : 2.0, hair : 1.3, wisp : 1.0 };
+const IC_WIDTH = { trunk : 2.2, arm : 1.6, hair : 1.1, wisp : 1.0 };
 
 /* Tone per tier. This - not the width - is what makes a hair a hair. */
 const IC_TONE = { trunk : 0.92, arm : 0.60, hair : 0.35, wisp : 0.20 };
 
+/* How much of its light a channel still carries at its far tip, as a fraction of
+ * what it leaves the parent with.
+ *
+ * A channel does not glow evenly along its length. Charge is what feeds it, and
+ * charge is at the trunk: a branch leaves a hot junction and fades as it runs out
+ * into the cloud, so its last centimetres are a whisper. Drawing every stroke at
+ * one tone made the network read as a set of white wires - the single biggest
+ * difference between the artwork and a photograph of a flash.
+ *
+ * The fade is applied per drawn chunk (CHUNK steps), so it follows the channel
+ * along its length instead of being one tone per branch, and it is separate from
+ * the per-tier tone: the tier says how much light a branch of that size carries,
+ * the taper says how it is spread along that branch. */
+const IC_TIP_TONE = 0.62;
+
 /* The branch tree, coarsest first. `budget` is how many children one channel of
  * that tier may create, so a single trunk cannot take over the tile. */
 const IC_TIERS = [
-  { name : 'trunk', width : IC_WIDTH.trunk, tone : IC_TONE.trunk, budget : 9 },
-  { name : 'arm', width : IC_WIDTH.arm, tone : IC_TONE.arm, budget : 9 },
-  { name : 'hair', width : IC_WIDTH.hair, tone : IC_TONE.hair, budget : 7 },
+  { name : 'trunk', width : IC_WIDTH.trunk, tone : IC_TONE.trunk, budget : 12 },
+  { name : 'arm', width : IC_WIDTH.arm, tone : IC_TONE.arm, budget : 11 },
+  { name : 'hair', width : IC_WIDTH.hair, tone : IC_TONE.hair, budget : 8 },
   { name : 'wisp', width : IC_WIDTH.wisp, tone : IC_TONE.wisp, budget : 3 }
 ];
 
@@ -323,8 +338,8 @@ const IC_RESTORE = 0.12;
 const IC_JITTER_CLAMP = 1.05;
 
 /* Occasional real kinks, on top of the jitter. */
-const IC_KINK = 0.14;
-const IC_KINK_CHANCE = 0.004;
+const IC_KINK = 0.17;
+const IC_KINK_CHANCE = 0.006;
 
 /* How far a heading may stray from its aim, whatever the noise does. This is the
  * number that rules out loops: a loop needs a full turn (pi). */
@@ -403,12 +418,12 @@ function drawICParams(rand, variant) {
     leaders : 2 + Math.floor(rand() * 3),          // leader points
     aimBase : (rand() - 0.5) * 1.0,                // preferred direction, radians
     branchRate : 0.10 + rand() * 0.08,             // forks per step, per channel
-    hairRate : 0.05 + rand() * 0.05,               // fine hairs per step
+    hairRate : 0.06 + rand() * 0.06,               // fine hairs per step
     maxDepth : 2 + Math.floor(rand() * 2),         // trunk, arm, hair, wisp
     curl : 0.75 + rand() * 0.5,                    // smooth-bend multiplier
     trunkSpan : 0.26 + rand() * 0.20,              // fraction of the stage
     layer : 0.70 + rand() * 0.25,                  // half height of the layer
-    spread : 0.45 + rand() * 0.35,                 // fork angle, radians
+    spread : 0.52 + rand() * 0.40,                 // fork angle, radians
     width : 0.85 + rand() * 0.3,                   // width multiplier
     taper : 0.9985 + rand() * 0.0008
   };
@@ -447,6 +462,41 @@ function generateIntraCloudBolt(width, height, seed, variant)
     return 'rgb(' + c + ',' + c + ',' + c + ')';
   }
 
+  /* The hot core of a channel.
+   *
+   * A channel is not a tube of one tone: the current runs in a filament a
+   * fraction of the width of the glow around it, so a stroke reads as a white
+   * centreline inside a slightly dimmer sheath. Drawing each chunk a second time,
+   * narrower and brighter, is what gives the line that structure - and it is the
+   * difference between a stroke that looks drawn and one that looks hot, at every
+   * camera zoom: when the artwork is magnified the core is a crisp centre, and
+   * when it is minified the core is what survives the mip chain while the sheath
+   * becomes the glow around it.
+   *
+   * Only worth doing on a stroke wide enough to hold a core: a hair is one pixel
+   * and brighter-and-thinner would only be thinner. */
+  const IC_CORE_WIDTH = 0.45;
+  const IC_CORE_GAIN = 1.45;
+
+  /* A fork is hot.
+   *
+   * Where a channel throws a branch the current crowds into the junction, and on
+   * film that is the brightest point of the whole network - a small, hard spark
+   * with the child leaving it. Without one a fork is just two lines that touch,
+   * which is how a drawing looks and not how a discharge looks. The spark is
+   * drawn as a short filled dot under the child, so it stays inside the ink the
+   * network already has: it sharpens a junction, it does not add a field of dots.
+   */
+  function junction(x, y, w, tone) {
+    ctx.beginPath();
+    ctx.arc(x, y, Math.max(0.7, w * 0.55), 0, Math.PI * 2);
+    ctx.globalCompositeOperation = 'lighten';
+    ctx.globalAlpha = 1.0;
+    ctx.fillStyle = grey(Math.min(1, tone * 1.2));
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
   /* One stroke, brightest-wins. 'lighten' is what stops crossing channels from
    * churning the tile into a mesh of dark troughs: a stroke can only ever leave
    * a pixel brighter than it found it. */
@@ -461,6 +511,11 @@ function generateIntraCloudBolt(width, height, seed, variant)
     ctx.lineWidth = w;
     ctx.strokeStyle = grey(tone);
     ctx.stroke();
+    if (w >= 1.6) { // wide enough to hold a hot centreline
+      ctx.lineWidth = w * IC_CORE_WIDTH;
+      ctx.strokeStyle = grey(tone * IC_CORE_GAIN);
+      ctx.stroke();
+    }
     ctx.globalCompositeOperation = 'source-over';
   }
 
@@ -530,7 +585,10 @@ function generateIntraCloudBolt(width, height, seed, variant)
       w = Math.max(minW, w * params.taper);
 
       if (++inChunk >= CHUNK) {
-        stroke(pts, w, tone);
+        // how far along its own length this chunk has got, 0 at the parent ..
+        // 1 at the tip
+        const along = Math.min(1, state.travelled / Math.max(lengthPx, stepLen));
+        stroke(pts, w, tone * (1 - (1 - IC_TIP_TONE) * along));
         pts = [x, y];
         inChunk = 0;
       }
@@ -543,10 +601,12 @@ function generateIntraCloudBolt(width, height, seed, variant)
                       state.travelled > stepLen * 5;
       if (canFork && rand() < params.branchRate) {
         spent[tierIndex]++;
+        if (tierIndex <= 1 && w >= 1.4)
+          junction(x, y, w, tone * (1 - (1 - IC_TIP_TONE) * Math.min(1, state.travelled / Math.max(lengthPx, stepLen))));
         queue.push({
           x : x, y : y,
           aim : heading + (rand() < 0.5 ? -1 : 1) * params.spread * (0.5 + rand() * 0.7),
-          lengthPx : Math.max(5, (steps - i) * stepLen * (0.40 + rand() * 0.25)),
+          lengthPx : Math.max(5, (steps - i) * stepLen * (0.32 + rand() * 0.24)),
           tierIndex : tierIndex + 1,
           toneScale : toneScale * 0.78,
           queue : queue
@@ -673,6 +733,7 @@ if (typeof module !== 'undefined' && module.exports) {
     IC_JITTER_CLAMP : IC_JITTER_CLAMP,
     IC_KINK : IC_KINK,
     IC_KINK_CHANCE : IC_KINK_CHANCE,
-    IC_MAX_DEVIATION : IC_MAX_DEVIATION
+    IC_MAX_DEVIATION : IC_MAX_DEVIATION,
+    IC_TIP_TONE : IC_TIP_TONE
   };
 }

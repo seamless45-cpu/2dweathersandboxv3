@@ -34,11 +34,31 @@ float luminance(vec3 color)
   return dot(color, vec3(0.299, 0.587, 0.114));
 }
 
+/*
+ * Nothing that reaches the tonemap may be infinite or NaN.
+ *
+ * The tonemap below divides a value by a polynomial of itself, so an infinity
+ * comes out as NaN, and one NaN pixel is enough: FXAA samples it into its
+ * neighbours, temporal AA writes it into the history and it spreads over the
+ * frame from there. Both inputs are 16-bit float buffers written through
+ * softHdrClamp() and a bounded bright pass, so in practice this is a backstop;
+ * it costs two comparisons and it means no future change to what is written into
+ * the HDR buffer can put a dead pixel on screen.
+ */
+const float hdrReadCeiling = 65504.0; // the largest finite value of a 16F texel
+vec3 safeSample(vec3 value)
+{
+  if (isnan(value.r) || isnan(value.g) || isnan(value.b))
+    return vec3(0.0);
+  return clamp(value, vec3(0.0), vec3(hdrReadCeiling));
+}
+
 vec3 mappedColor(vec2 uv)
 {
-  vec3 color = texture(hdrTex, uv).rgb;
+  vec3 color = safeSample(texture(hdrTex, uv).rgb);
   if (bloomEnabled)
-    color += texture(bloomTex, uv).rgb * 0.990;
+    color += safeSample(texture(bloomTex, uv).rgb) * 0.990;
+  color = min(color, vec3(hdrReadCeiling));
 
   color *= exposure;
   if (toneMappingEnabled) {
