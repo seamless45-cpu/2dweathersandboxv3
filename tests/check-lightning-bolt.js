@@ -217,7 +217,7 @@ check('and the trunk stays inside the sprite',
  */
 {
   const app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
-  const workerBlock = app.slice(app.indexOf('function startLightningTextureWorker'),
+  const workerBlock = app.slice(app.indexOf('let lightningTexturesReady'),
                                 app.indexOf('const emptyLightningTexturePixel'));
 
   check('no artwork is generated while the loading screen is up',
@@ -231,8 +231,13 @@ check('and the trunk stays inside the sprite',
     'the old code chained the next worker straight out of onmessage');
   check('the artwork is capped at four tiles',
     /const numLightningTextures = 4;/.test(app) &&
-    /lightningTexturesReady >= numLightningTextures/.test(workerBlock),
+    /if \(lightningTexturesReady < numLightningTextures\)/.test(workerBlock),
     '12.5 MB a tile: ten of them is 125 MB of texture');
+  check('the flash network is one small tile, asked for after the first bolt',
+    /kind : 'network'/.test(workerBlock) &&
+    /kind : 'network', width : 2048, height : 512/.test(workerBlock) &&
+    /if \(lightningTexturesReady < 1\)\s*\n\s*return \{kind : 'bolt', index : 0\};\s*\n\s*if \(!lightningNetworkReady\)/.test(workerBlock),
+    'both kinds need a picture early, and the network is a megabyte, not twelve');
   check('the display never samples a tile that has not been drawn yet',
     /const lightningTexNum = Math\.min\(wantedLightningTexNum, Math\.max\(lightningTexturesReady - 1, 0\)\);/.test(app),
     'a missing tile must not mean an invisible bolt');

@@ -18,9 +18,11 @@
  */
 onmessage = (event) => {
   const msg = event.data || {};
-  const width = Math.max(32, Math.round(msg.width || ARTWORK_SIZE.width));
-  const height = Math.max(32, Math.round(msg.height || ARTWORK_SIZE.height));
-  const bitmap = generateLightningBolt(width, height);
+  const network = msg.kind === 'network';
+  const fallback = network ? IC_ARTWORK_SIZE : ARTWORK_SIZE;
+  const width = Math.max(32, Math.round(msg.width || fallback.width));
+  const height = Math.max(32, Math.round(msg.height || fallback.height));
+  const bitmap = network ? generateLightningNetwork(width, height) : generateLightningBolt(width, height);
   postMessage(bitmap, [bitmap]);
 };
 
@@ -205,11 +207,152 @@ function generateLightningBolt(width, height)
 }
 
 
+/* ===================== intra-cloud network ============================== */
+
+/*
+ * The shape of an intra-cloud channel network, which is a different animal from a
+ * cloud-to-ground bolt and always was.
+ *
+ * A stroke is one channel going one way: down. A flash is a *network*: leaders
+ * that leave the strike point and run outward through the charge layer, forking
+ * into finer and finer channels until what is left is a haze of tendrils. The
+ * channels are thin - a few artwork pixels, against nine for the bolt trunk -
+ * there are hundreds of them, they spread over a wide, flat volume rather than a
+ * line, and none of them goes anywhere near the ground.
+ *
+ * So this is not the bolt generator with different numbers. It is a set of leaders
+ * fanning out from one origin, each with its own heading, each forking as it goes,
+ * drawn with the same antialiased strokes and the same square-of-width radiance as
+ * the bolt so the two read as the same phenomenon.
+ *
+ * The tile is wide and short (2048 x 512, four to one) because the volume a flash
+ * occupies is wide and short: the display maps it onto 0.45 of the simulation's
+ * width and 0.225 of its height, which is about ten kilometres by three, and at
+ * that mapping one artwork pixel is about one screen pixel.
+ *
+ * Brightness is a ladder rather than a taper: pow(width, 2) would put a tendril at
+ * 1.2 pixels under the display's 0.15 threshold and it would simply not be drawn,
+ * and a flash whose tendrils are invisible is a bolt again.
+ */
+const IC_ARTWORK_SIZE = { width : 2048, height : 512 };
+
+const IC_SHAPE = {
+  leaders      : 10,     // strands fanning out from the strike point
+  trunkWidth   : 3.4,    // artwork pixels - the brightest channel
+  trunkRatio   : 0.94,   // every leader starts at this share of the trunk width
+  branchRatio  : 0.64,   // ... and a fork at this share of its parent's
+  minWidth     : 1.0,
+  stepLength   : 1.6,    // artwork pixels per step
+  jitter       : 0.5,    // heading noise per step, rad - the buzz of a channel
+  straighten   : 0.05,   // pull back toward the strand's own heading
+  forkChance   : 0.009,  // per step, per strand
+  maxLevel     : 3,
+  fanSpread    : 0.26    // rad - how far the leaders leave the horizontal
+};
+
+const IC_LEVELS = [1.0, 0.76, 0.56, 0.42]; // channel radiance by fork depth, 0..1
+
+
+function generateLightningNetwork(width, height)
+{
+  const lightningCanvas = new OffscreenCanvas(width, height);
+  const ctx = lightningCanvas.getContext('2d');
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.globalCompositeOperation = 'lighten'; // strands cross; the brighter one wins
+
+  const clamp = (v, lo, hi) => (v < lo ? lo : (v > hi ? hi : v));
+
+  function genNetworkColor(level)
+  {
+    const v = Math.round(255 * IC_LEVELS[Math.min(level, IC_LEVELS.length - 1)]);
+    return `rgb(${v}, ${v}, ${v})`;
+  }
+
+  const startX = 2.0;
+  const startY = height * 0.5;
+
+  /*
+   * One strand: a heading that buzzes, pulled back toward its own target, forking
+   * as it goes. A fork is drawn first and the parent resumes from the same point,
+   * so the network stays connected whatever order the browser rasterises it in.
+   */
+  function drawStrand(startX, startY, heading, target, steps, lineWidth, level)
+  {
+    let x = startX, y = startY, angle = heading;
+
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.strokeStyle = genNetworkColor(level);
+    ctx.lineWidth = lineWidth;
+
+    for (let i = 0; i < steps; i++) {
+      angle += (Math.random() - 0.5) * IC_SHAPE.jitter;
+      angle -= (angle - target) * IC_SHAPE.straighten;
+
+      const nextX = x + Math.cos(angle) * IC_SHAPE.stepLength;
+      const nextY = y + Math.sin(angle) * IC_SHAPE.stepLength;
+
+      if (nextX < 1. || nextX > width - 1. || nextY < 1. || nextY > height - 1.) {
+        ctx.lineTo(clamp(nextX, 1., width - 1.), clamp(nextY, 1., height - 1.));
+        break;
+      }
+
+      x = nextX;
+      y = nextY;
+      ctx.lineTo(x, y);
+
+      if (level < IC_SHAPE.maxLevel && i > 6 && Math.random() < IC_SHAPE.forkChance) {
+        ctx.stroke(); // commit the parent so far
+
+        const side = Math.random() < 0.5 ? -1. : 1.;
+        const childTarget = clamp(target + side * (0.30 + Math.random() * 0.55), -1.15, 1.15);
+        drawStrand(x, y, childTarget + (Math.random() - 0.5) * 0.5, childTarget,
+                   Math.max(8, Math.round(steps * (0.30 + Math.random() * 0.45))),
+                   Math.max(IC_SHAPE.minWidth, lineWidth * IC_SHAPE.branchRatio), level + 1);
+
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.strokeStyle = genNetworkColor(level);
+        ctx.lineWidth = lineWidth;
+      }
+    }
+    ctx.stroke();
+  }
+
+  // The trunk: one long, nearly horizontal channel, the spine of the network.
+  drawStrand(startX, startY, 0., 0., Math.round(width / IC_SHAPE.stepLength),
+             IC_SHAPE.trunkWidth, 0);
+
+  // The leaders: a fan that leaves the strike point and fills the tile above and
+  // below it. Half of them are long enough to cross the whole tile, half die out
+  // partway, which is what stops the network looking like a comb.
+  for (let i = 0; i < IC_SHAPE.leaders; i++) {
+    const fraction = (i + 0.5) / IC_SHAPE.leaders;                       // 0..1 across the fan
+    const side = i % 2 === 0 ? -1. : 1.;
+    const target = side * IC_SHAPE.fanSpread * (0.25 + Math.random() * 0.75);
+    const reach = fraction < 0.5 ? (0.35 + Math.random() * 0.35) : (0.7 + Math.random() * 0.3);
+    const steps = Math.round(width * reach / IC_SHAPE.stepLength);
+
+    drawStrand(startX + Math.random() * 4., startY + (Math.random() - 0.5) * 24.,
+               target * (0.4 + Math.random() * 0.6), target, steps,
+               IC_SHAPE.trunkWidth * IC_SHAPE.trunkRatio * (0.75 + Math.random() * 0.25), 1);
+  }
+
+  return lightningCanvas.transferToImageBitmap();
+}
+
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     makeRng : makeRng,
     generateLightningBolt : generateLightningBolt,
+    generateLightningNetwork : generateLightningNetwork,
     CG_SHAPE : CG_SHAPE,
-    ARTWORK_SIZE : ARTWORK_SIZE
+    IC_SHAPE : IC_SHAPE,
+    ARTWORK_SIZE : ARTWORK_SIZE,
+    IC_ARTWORK_SIZE : IC_ARTWORK_SIZE
   };
 }

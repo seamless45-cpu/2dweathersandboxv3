@@ -21,7 +21,8 @@ uniform sampler2D lightTex;
 uniform sampler2D noiseTex;
 uniform sampler2D surfaceTextureMap;
 uniform sampler2D curlTex;
-uniform sampler2D lightningTex;
+uniform sampler2D lightningTex;        // the bolt: one channel, for a stroke
+uniform sampler2D lightningNetworkTex; // the network: for an intra-cloud flash
 uniform sampler2D lightningDataTex;
 
 uniform sampler2D ambientLightTex;
@@ -130,8 +131,8 @@ float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
 {
   float T0 = Tin - 1.;
 
-  float repeatPeriod = map_range(random2d(lightningPos), 0., 1., 1.5, 3.0);                                            // 2.5
-  float numFlashes = floor(map_range(random2d(lightningPos * 2.737250), 0., 1., 1.0, max(intensity - 0.5, 0.) * 2.0)); // 0.4
+  float repeatPeriod = map_range(random2d(lightningPos), 0., 1., 1.5, 3.0); // 2.5
+  float numFlashes = lightningFlickers(vec4(lightningPos, 0., intensity));  // 0.4
 
   float minT = max(T0 - (repeatPeriod * numFlashes), 0.);
 
@@ -149,46 +150,29 @@ float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
 // percent of the frame as it always did. There is no easing of the tail and no
 // second, wide lobe: a stroke goes from white to gone as fast as the curve does,
 // which is what it did before any of this was touched.
-vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity,
-                      bool flash, float coreThreshold)
+vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity)
 {
   vec2 lightningTexCoord = texCoord;
 
+  lightningTexCoord.x -= mod(pos.x, 1.);
+
+  lightningTexCoord.y -= pos.y;
+
   float scaleMult = 1. / pos.y; // 1.0 means lightning is as tall as the simheight
 
-  if (flash) {
-    // An intra-cloud channel runs *across* the cloud. That is the one thing that
-    // tells the two kinds apart at a glance, and it is the thing this was still
-    // missing: a flash drawn down the same axis as a stroke is a stroke, however
-    // it is lit and however high it stops. So for a flash the artwork's length
-    // lies along x - as long as 0.45 of the simulation's width, a hundred-odd
-    // kilometres of cloud at the scales this sim runs at, jumping left or right
-    // per strike - and its width lies along y, at the same scale the stroke uses,
-    // so the channel is as wide on screen as a stroke's and no wider.
-    float flashDir = random2d(vec2(pos.y * 3.77, 1.23)) < 0.5 ? -1. : 1.;
-    lightningTexCoord.y = flashDir * (texCoord.x - mod(pos.x, 1.)) / 0.45;
-    lightningTexCoord.x = 0.5 + (texCoord.y - pos.y) * scaleMult * aspectRatios[0] / lightningTexAspect;
-  } else {
-    lightningTexCoord.x -= mod(pos.x, 1.);
+  lightningTexCoord.x *= scaleMult * aspectRatios[0] / lightningTexAspect;
+  lightningTexCoord.y *= -scaleMult;
 
-    lightningTexCoord.y -= pos.y;
-
-    lightningTexCoord.x *= scaleMult * aspectRatios[0] / lightningTexAspect;
-    lightningTexCoord.y *= -scaleMult;
-
-    lightningTexCoord.x += 0.5;                                                                                             // center lightning bolt
-  }
+  lightningTexCoord.x += 0.5;                                                                                               // center lightning bolt
 
   if (lightningTexCoord.x < 0.01 || lightningTexCoord.x > 1.01 || lightningTexCoord.y < 0.01 || lightningTexCoord.y > 1.01) // prevent edge effect when mipmapping
     return vec3(0);
 
-  // A cloud-to-ground stroke reads the tile the way it always has: level 0, one
-  // bilinear fetch, no mip. A flash lets the sampler choose the level (see the
-  // call site) - its channel is about a screen pixel wide, and a level-0 fetch of
-  // a 9-texel line that a pixel covers ten times over hits it or misses it row by
-  // row, which over a bright cloud reads as nothing at all.
-  float pixVal = flash ? texture(lightningTex, lightningTexCoord).r
-                       : textureLod(lightningTex, lightningTexCoord, 0.0).r;
+  // Level 0 of the tile, one bilinear fetch: the shipped read. It lands on the
+  // channel or beside it from one screen row to the next, which is why a bolt has
+  // always been a slightly dashed line - and it is fine, because a stroke is drawn
+  // over dark ground.
+  float pixVal = textureLod(lightningTex, lightningTexCoord, 0.0).r;
 
   const float branchShowFactor = 2.5;       // 1.5
   const float leaderBrightness = 50000.;    // 200.0
@@ -200,7 +184,83 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   brightnessThreshold = clamp(brightnessThreshold, 0., 1.);
 
   if (lightningTime > 1.0) { // main bolt
-    brightnessThreshold = coreThreshold;
+    brightnessThreshold = 0.95;
+    currentLightningIntensity *= mainBoltBrightness;
+  } else {
+    currentLightningIntensity = leaderBrightness;
+  }
+
+  pixVal -= brightnessThreshold;
+
+  pixVal = max(pixVal, 0.0);
+
+  pixVal *= currentLightningIntensity;
+
+  const vec3 lightningCol = vec3(0.70, 0.57, 1.0); // 0.584, 0.576, 1.0
+
+  vec3 outputColor = max(pixVal * lightningCol, vec3(0));
+
+  return outputColor;
+}
+
+/*
+ * The intra-cloud channel, and it is a different picture from the bolt because it
+ * is a different thing.
+ *
+ * A stroke is one channel going one way; a flash is a network of leaders spreading
+ * through a charge layer, forking down to fine tendrils, filling a wide flat
+ * volume. Drawn with the bolt artwork it could only ever be one channel - the
+ * earlier rounds settled that the hard way: down the picture it was a stroke that
+ * stopped early, and across the picture it was a bolt lying on its side. So a
+ * flash reads its own artwork now, generated once at load by the same generator,
+ * on a 2048 x 512 tile (see generateLightningNetwork in lightningGenerator.js).
+ *
+ * Where it goes: 0.45 of the simulation's width and 0.225 of its height, which at
+ * the scales this sim runs at is a slab about ten kilometres across and three
+ * deep - the volume a real flash occupies - with one artwork pixel landing on
+ * about one screen pixel. It is mirrored per strike in both axes off the strike's
+ * own position, so two flashes never draw the same network the same way round, and
+ * it always starts at the strike itself, because the network artwork starts at its
+ * own left edge.
+ *
+ * How it plays out: the same way the bolt does. The threshold starts at one and
+ * falls at branchShowFactor a unit of lightningTime, so over the leader stage the
+ * network is revealed from the strike out to its own edge - the leaders running
+ * outward - and then the strokes light all of it at once and the curve fades it.
+ *
+ * The threshold is 0.15 rather than the stroke's 0.95 because the network's
+ * channels are a ladder of brightnesses (1.0 trunk, 0.76, 0.56, 0.42 for the
+ * tendrils) and the point of a network is that the fine channels are *there*; 0.95
+ * would leave the trunk alone and the flash would be a bolt again. The tile is
+ * read mip-filtered, so at any zoom the tendrils come back as an average rather
+ * than as dashes.
+ */
+vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity)
+{
+  const vec2 flashSpan = vec2(0.45, 0.225);      // of the simulation's width and height
+  const float branchShowFactor = 2.5;            // the leader's outward speed
+  const float leaderBrightness = 50000.;         // 200.0
+  const float mainBoltBrightness = 100000.;      // 100000.
+  const float flashThreshold = 0.15;             // the whole network, not just the trunk
+
+  float flashDir = random2d(vec2(pos.y * 3.77, 1.23)) < 0.5 ? -1. : 1.;
+  float flashFlip = random2d(vec2(pos.x * 5.11, 7.77)) < 0.5 ? -1. : 1.;
+
+  vec2 flashCoord = vec2(flashDir * (texCoord.x - mod(pos.x, 1.)) / flashSpan.x,
+                         0.5 + flashFlip * (texCoord.y - pos.y) / flashSpan.y);
+
+  if (flashCoord.x < 0.004 || flashCoord.x > 1. || flashCoord.y < 0. || flashCoord.y > 1.)
+    return vec3(0);
+
+  float pixVal = texture(lightningNetworkTex, flashCoord).r; // mip-filtered: a network of fine channels
+
+  float brightnessThreshold = 1. - lightningTime * branchShowFactor;
+  brightnessThreshold += flashCoord.x * branchShowFactor; // the leaders run outward from the strike
+
+  brightnessThreshold = clamp(brightnessThreshold, 0., 1.);
+
+  if (lightningTime > 1.0) { // a stroke of the flash
+    brightnessThreshold = flashThreshold;
     currentLightningIntensity *= mainBoltBrightness;
   } else {
     currentLightningIntensity = leaderBrightness;
@@ -351,52 +411,38 @@ vec4 getAirColor(vec2 fragCoordIn)
     if (currentLightningIntensity <= 0.0)
       continue;
 
-    // Every strike is drawn as a bolt now, cloud-to-ground and intra-cloud alike:
-    // the one channel artwork, at the one brightness (see displayLightning). The
-    // two differences are both about a stroke's channel being sub-pixel:
+    // The two kinds, two channels: a stroke is one channel down the picture, a
+    // flash is a network spreading across the cloud (see displayLightning and
+    // displayFlash). The kind is a fact about the strike - its intensity - and it
+    // is also what a lightning rod snaps to.
     //
-    //   * a stroke is drawn level 0 and only where the artwork is solid white
-    //     (0.95), exactly as it shipped - it lives below the cloud, over dark
-    //     ground, so a line that lands on some rows and misses others still reads;
-    //   * a flash is inside a cloud that is already bright, so "misses" are
-    //     invisible. It reads the tile mip-filtered, which recovers the channel's
-    //     average instead of point-sampling it, and takes nearly the whole channel
-    //     rather than only its core (0.15 against 0.95). Without those, a flash at
-    //     any normal zoom was a handful of dashes on a white cloud, which is what
-    //     "the intra-cloud lightning is gone" was.
-    //
-    // Measured on the real artwork, a flash in a cloud at 300 pixels of sim
-    // height: 36 of the 84 cloud rows the flash crosses carry light as a stroke.
-    // A flash with the mip chain and 0.15 carries 82 of 84, at a peak of 221 HDR
-    // inside the cloud - the same order as the 162 a stroke puts into the same
-    // cloud - where taking the whole channel (a threshold of 0) whitewashes eight
-    // pixels of the cloud around the channel instead of three.
+    // A flash is then confined to the cloud it was born in: its own volume is 0.225
+    // of the simulation's height, and the deck it lives in is usually thinner than
+    // that, so the part of the network outside cloud is not drawn. A stroke is not
+    // touched by any of this - it runs to the ground, which is the point of it.
     bool isFlash = lightningData[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY;
-    vec3 strikeLight = displayLightning(lightningPos, lightningTime, currentLightningIntensity,
-                                        isFlash, isFlash ? 0.15 : 0.95);
+    vec3 strikeLight = isFlash ? displayFlash(lightningPos, lightningTime, currentLightningIntensity)
+                               : displayLightning(lightningPos, lightningTime, currentLightningIntensity);
 
-    // The other difference is where the channel is. The artwork is a channel from
-    // the storm down to the ground, and a stroke runs to the bottom of the
-    // simulation because that is what a stroke does - reaching the ground is the
-    // point of it. A flash never leaves its cloud: it is born inside the deck and
-    // dies inside the deck. Drawn from the same artwork all the way down, a flash
-    // is a full-length bolt to the ground with the wrong name on it, which is
-    // what it looked like the moment it became visible again.
-    //
-    // So a flash's channel only exists where the column has cloud in it, and it
-    // stops at the cloud base: no channel below the deck, none in the rain shaft
-    // under it, none on the ground. `cloudDensity` is cloudwater * 13.6, so this
-    // ramp is full at cloudwater 0.22 - the first density at which the cloud is
-    // more than half opaque up there. A stroke is untouched by it.
     if (isFlash)
       strikeLight *= smoothstep(0.0, 3.0, cloudDensity);
     lightningBoltLight += strikeLight;
 
-    // The light a strike throws on the clouds around it: the one lobe the app
-    // shipped with, scaled by the strike's own intensity.
-    vec2 dist = vec2(lightningPos.x - texCoord.x, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1), 0.));
-    dist.x *= aspectRatios[0];
-    float lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03);
+    // The light a strike throws on the clouds around it.
+    float lightningOnLight;
+    if (isFlash) {
+      // A flash lights the whole slab it lives in, not a point below itself: its
+      // lobe is centred on the strike, reaches twice as far and is twice as bright,
+      // because what a player sees of an intra-cloud flash from outside the cloud is
+      // mostly this - the deck glowing from the inside - with the network on top.
+      vec2 flashDist = vec2((lightningPos.x - texCoord.x) * aspectRatios[0], texCoord.y - lightningPos.y);
+      lightningOnLight = lightningOnLightBrightness * 2.0 / (pow(length(flashDist) * 0.5, 2.) + 0.03);
+    } else {
+      // The one lobe the app shipped with, scaled by the strike's own intensity.
+      vec2 dist = vec2(lightningPos.x - texCoord.x, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1), 0.));
+      dist.x *= aspectRatios[0];
+      lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03);
+    }
     lightningOnLight *= currentLightningIntensity;
     onLight += vec3(lightningOnLight);
   }

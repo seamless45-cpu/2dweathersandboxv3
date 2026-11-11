@@ -339,7 +339,7 @@ check('the slot count agrees between app.js, common.glsl and this test',
   // the wiring: the call site passes exactly what the shipped shader took, and the
   // gain is the curve, not an envelope built out of it
   check('the slot loop hands the channel its position, time and curve',
-    /vec3 strikeLight = displayLightning\(lightningPos, lightningTime, currentLightningIntensity,/.test(displayShader) &&
+    /vec3 strikeLight = isFlash \? displayFlash\(lightningPos, /.test(displayShader) &&
     /lightningBoltLight \+= strikeLight;/.test(displayShader) &&
     !/displayLightning\([^)]*mainBoltBrightness/.test(displayShader),
     'the shipped arguments; the two after them only choose how the tile is sampled');
@@ -465,10 +465,15 @@ check('the display pass draws a strike while it has light, and not for a fixed t
   displayShader.includes('iterNum >= strikeAnimEnd(strikeData)'),
   'expected the strike slot loop plus the rod tip glow to use strikeAnimEnd');
 check('strikeAnimEnd reads the same curve the display does',
-  /strike\.xy \* 2\.737250/.test(common) && /2\.737250/.test(displayShader) &&
+  /strike\.xy \* 2\.737250/.test(common) &&
   /map_range\(random2d\(strike\.xy\), 0\., 1\., 1\.5, 3\.0\)/.test(common) &&
-  /1\.5, 3\.0/.test(displayShader),
-  'the flicker period and count have to come from the same two hashes of the strike position');
+  /float numFlashes = lightningFlickers\(strike\);/.test(common) &&
+  /float numFlashes = lightningFlickers\(vec4\(lightningPos, 0\., intensity\)\);/.test(displayShader),
+  'the flicker period and count have to come from the same two hashes of the strike position, through one function');
+check('a flash re-fires two to four times and a stroke keeps the shipped formula',
+  /if \(strike\[INTENSITY\] <= LIGHTNING_IC_MAX_INTENSITY\)\s*\n\s*return floor\(map_range\(r, 0\., 1\., 2\.0, 5\.0\)\);/.test(common) &&
+  /return floor\(map_range\(r, 0\., 1\., 1\.0, max\(strike\[INTENSITY\] - 0\.5, 0\.\) \* 2\.0\)\);/.test(common),
+  'real intra-cloud lightning re-fires over the same network; the shipped formula gave it the fewest strokes of anything');
 check('a strike is dropped only when every slot is busy',
   /if \(!lightningSlotFree\)/.test(precipitationVert) ||
   /lightningSlotFree &&/.test(precipitationVert),
