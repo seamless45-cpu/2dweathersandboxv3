@@ -20,7 +20,7 @@
     <script type="text/javascript" src="libraries/chart.js"></script>
     <script type="text/javascript" src="libraries/chartjs-adapter-date-fns.js"></script>
     <script type="text/javascript" src="ecosystem.js"></script>
-    <script type="text/javascript" src="app.js?v=2026-12-06.14"></script>
+    <script type="text/javascript" src="app.js?v=2026-12-06.15"></script>
     <script type="text/javascript" src="pwa.js"></script>
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico">
     <style>
@@ -1752,6 +1752,7 @@
                 <div class="performance-estimate" id="performanceEstimate" data-level="good" aria-live="polite">
                     <span class="performance-estimate-label" data-performance-estimate-label>Checking estimated performance…</span>
                     <span class="performance-estimate-details" data-performance-estimate-details></span>
+                    <span class="performance-estimate-details" data-performance-estimate-memory></span>
                     <span class="performance-estimate-note">Rough estimate from resolution and browser-reported device specs; actual performance depends on your GPU and browser.</span>
                 </div>
             </section>
@@ -1784,13 +1785,18 @@
             <div class="resolution-warning">
                 <p>Choose a resolution - Higher resolutions provide more detail but significantly impact performance
                 </p>
+                <p id="lowGraphicsMemoryNote" style="display:none; color:rgb(255, 196, 92);">
+                    The last session lost its graphics context, which is what running out of graphics memory looks
+                    like. The default resolution below has been halved for this session; the line under the
+                    estimate says what a resolution costs, so raise it again by as much as this machine can hold.
+                </p>
             </div>
 
             <table>
                 <tr>
                     <td><b>Horizontal resolution</b></td>
                     <td style="width: 30%">
-                        <input type="range" min="100" max="16000" value="3000" step="100" id="simResSelX" />
+                        <input type="range" min="100" max="16000" value="2000" step="100" id="simResSelX" />
                         <output id="simResShowX"></output>
                     </td>
                     <td id="simWorldProperties" style="color:rgb(255, 255, 255); width: 50%"> Cellheight: 40m Sim

@@ -72,7 +72,73 @@ function updatePerformanceEstimate(simResX, simResY)
   estimate.querySelector('[data-performance-estimate-details]').textContent =
     `${cellCount.toLocaleString()} simulation cells` +
     (deviceDetails.length ? ` · browser reports ${deviceDetails.join(' and ')}` : ' · device details unavailable');
+
+  const memory = estimate.querySelector('[data-performance-estimate-memory]');
+  if (memory)
+    memory.textContent = `· about ${simulationGraphicsMemoryMB(cellCount).toFixed(0)} MB of graphics memory for the simulation`;
 }
+
+/*
+ * What a simulation of this size asks the GPU for, before the display has drawn a
+ * single frame.
+ *
+ * The simulation keeps its state in float textures, and almost all of them are four
+ * 32-bit channels per cell: velocity, pressure and temperature in `base`, the four
+ * water fields in `water`, and the light field - two ping-ponged textures each,
+ * plus the precipitation feedback buffer. That is 7 x 16 = 112 bytes a cell. On top
+ * of that: the wall texture pair at 4 bytes each, curl 4, vorticity 8, deposition 8,
+ * rain accumulation 4, the half-float emitted-light map 8, and its half-float blur
+ * chain about 10.7 - **163 bytes a cell**.
+ *
+ * At the default 2000 x 300 that is 93 MB, which is still more than everything else in
+ * the app put together (the surface map is 10.5 MB, the bolt artwork 25 MB, and the
+ * HDR and bloom targets about 10 MB at a 1600 x 900 window). At 3000 x 300 - what
+ * this app used to ask for before anybody counted - it is 140 MB, and that request
+ * on top of everything else is what took the graphics context down at load. It is
+ * the number that decides whether a machine can hold a given resolution, so the
+ * setup screen shows it next to the resolution sliders.
+ */
+function simulationGraphicsMemoryMB(cellCount)
+{
+  const BYTES_PER_CELL = 163;
+  return cellCount * BYTES_PER_CELL / (1024 * 1024);
+}
+
+/*
+ * A machine that has already lost a graphics context to memory gets a lighter
+ * starting point next time instead of the same request that took it down.
+ *
+ * The resolution is the only lever big enough to matter (see the memory table above:
+ * halving it halves the simulation's 93 MB into 47), and it is left at the tuned
+ * vertical resolution - the horizontal one is halved, which costs horizontal detail
+ * rather than the vertical resolution the physics is tuned for. The sliders stay live, and
+ * the note on the setup screen says what happened and how to undo it.
+ */
+function applyLowGraphicsMemoryDefault()
+{
+  let flagged = false;
+  try {
+    flagged = localStorage.getItem('lowGraphicsMemory') === '1';
+  } catch (error) { /* storage disabled: nothing to apply */ }
+
+  if (!flagged || typeof simResSelX === 'undefined' || !simResSelX)
+    return;
+
+  const note = document.getElementById('lowGraphicsMemoryNote');
+  if (note)
+    note.style.display = 'block';
+
+  const horizontal = parseInt(simResSelX.value, 10);
+  if (Number.isFinite(horizontal))
+    simResSelX.value = String(Math.max(100, Math.round(horizontal / 2 / 100) * 100));
+
+  updateSetupSliders();
+}
+
+if (document.readyState === 'loading')
+  document.addEventListener('DOMContentLoaded', applyLowGraphicsMemoryDefault);
+else
+  applyLowGraphicsMemoryDefault();
 
 function showNewSimulationSetup()
 {
@@ -4572,6 +4638,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     // tile instead of two (see numLightningTextures in app.js).
     try {
       localStorage.setItem('lightningTileBudget', '1');
+      // ... and that the next session should start light: a smaller default
+      // simulation resolution, which is the only allocation large enough to matter
+      // (see the memory table in the README).
+      localStorage.setItem('lowGraphicsMemory', '1');
     } catch (error) { /* storage disabled: the default stands */ }
     const note = document.createElement('div');
     note.id = 'graphicsContextLost';
@@ -6654,8 +6724,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.14'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.14')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.15'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.15')
   ]);
 
   const [
@@ -7368,7 +7438,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   }
 
   // Load images together so one request does not delay the rest.
-  const [
+  let [
     noiseImage,
     airplaneImage,
     airplaneReversedImage,
@@ -7423,8 +7493,39 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);            // CLAMP_TO_EDGE
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);            // REPEAT
 
+  /*
+   * The surface texture map is uploaded at half its authored size.
+   *
+   * The file is 4096 x 2560 - five ground surfaces stacked vertically, 4096 x 512
+   * each - which as RGBA8 is **42 MB of texture**: four times a bolt tile, and the
+   * second largest allocation in the app after the simulation's own float textures.
+   * It is a tiling detail map, so its finest features are fractions of a metre
+   * across on a 40 m simulation cell, and the texture is sampled by `surfaceTexture()`
+   * as ground colour rather than as resolved geometry: the top octave of it lands on
+   * less than a screen pixel at any camera the app allows. Uploading it at
+   * 2048 x 1280 costs 10.5 MB and paints the same surfaces.
+   */
+  function uploadSurfaceTextureMap(image)
+  {
+    const targetWidth = 2048;
+    const scale = Math.min(1, targetWidth / image.width);
+    const width = Math.max(1, Math.round(image.width * scale));
+    const height = Math.max(1, Math.round(image.height * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) { // no 2d context: fall back to the full-size upload rather than nothing
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+      return;
+    }
+    context.drawImage(image, 0, 0, width, height);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+  }
+
   gl.bindTexture(gl.TEXTURE_2D, surfaceTextureMap);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, surfaceTextureImage.width, surfaceTextureImage.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, surfaceTextureImage);
+  uploadSurfaceTextureMap(surfaceTextureImage);
   // gl.generateMipmap(gl.TEXTURE_2D);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -7439,6 +7540,16 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); // horizontal
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); // vertical
+
+  /*
+   * Every picture above has been uploaded, and none of them is read again - so the
+   * decodes are dropped now rather than whenever the collector gets round to them.
+   * The surface map alone is 4096 x 2560 RGBA, 42 MB of decoded image held by the
+   * page for the rest of the session; on a machine whose graphics memory is shared
+   * with system RAM, that is the kind of thing that decides whether the tab survives
+   * the load.
+   */
+  noiseImage = airplaneImage = airplaneReversedImage = airplaneGearImage = surfaceTextureImage = colorScalesImage = null;
 
 
   function generateLightningTexture(i, artwork)
@@ -7536,7 +7647,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.14');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.15');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9429,7 +9540,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.14');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.15');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
