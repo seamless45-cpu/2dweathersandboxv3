@@ -226,6 +226,31 @@ float random2d(vec2 s)
   return mod(r2, 1.0);
 }
 
+// How many times a strike re-fires, from the strike's own slot data.
+//
+// A cloud-to-ground stroke is one return stroke plus whatever flicker its
+// intensity buys it, which is the formula the app shipped with:
+// map_range(hash, 1, max(intensity - 0.5, 0) * 2) - a weak stroke gets 1, a violent
+// one up to 5.
+//
+// A flash is not one stroke. Real intra-cloud lightning re-fires three to five
+// times over the same channel network in a fraction of a second, which is what
+// makes it read as a flickering sheet of light rather than as a single bolt - and
+// the shipped formula gave a flash (intensity at or below 1) the *fewest* strokes
+// of anything: for intensity 0.85 it works out to 1.0..0.7, floors to zero, and the
+// flash fires exactly once. A flash now gets 2 to 4 strokes. Both numbers come from
+// the same hash of the strike's position, so the slot manager (strikeAnimEnd) and
+// the display pass (lightningIntensityOverTime) still agree to the iteration.
+float lightningFlickers(vec4 strike)
+{
+  float r = random2d(strike.xy * 2.737250);
+
+  if (strike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY)
+    return floor(map_range(r, 0., 1., 2.0, 5.0)); // 2, 3 or 4 strokes
+
+  return floor(map_range(r, 0., 1., 1.0, max(strike[INTENSITY] - 0.5, 0.) * 2.0));
+}
+
 // When a strike's animation ends, in simulation iterations, worked out from the
 // strike's own slot data.
 //
@@ -255,7 +280,7 @@ float strikeAnimEnd(vec4 strike)
     return 0.0; // an empty slot
 
   float repeatPeriod = map_range(random2d(strike.xy), 0., 1., 1.5, 3.0);
-  float numFlashes = floor(map_range(random2d(strike.xy * 2.737250), 0., 1., 1.0, max(strike[INTENSITY] - 0.5, 0.) * 2.0));
+  float numFlashes = lightningFlickers(strike);
 
   // Every strike has the leader stage: the display shader samples its curve from
   // the iteration it is booked, so its light is over one unit later than the

@@ -67,24 +67,31 @@ check('app.js numLightningSlots matches LIGHTNING_SLOTS',
 check('both lightning programs declare the rod uniforms',
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(locationShader) &&
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(displayShader));
-check('every strike is drawn with the same bolt, with no dispatch on kind',
-  /vec3 strikeLight = displayLightning\(lightningPos, lightningTime, currentLightningIntensity,\s*\n?\s*isFlash, isFlash \? 0\.15 : 0\.95\);/
+check('a stroke draws the bolt and a flash draws the network',
+  /vec3 strikeLight = isFlash \? displayFlash\(lightningPos, lightningTime, currentLightningIntensity\)\s*\n\s*: displayLightning\(lightningPos, lightningTime, currentLightningIntensity\);/
     .test(displayShader) &&
   /bool isFlash = lightningData\[INTENSITY\] <= LIGHTNING_IC_MAX_INTENSITY;/.test(displayShader) &&
   !/lightningGroundHeight/.test(displayShader),
-  'one call and one artwork; the kind only chooses how the tile is sampled, never which picture it is');
+  'one channel down the picture for a stroke, one network across it for a flash');
 check('a flash channel stops at the cloud base and a stroke runs to the ground',
   /if \(isFlash\)\s*\n\s*strikeLight \*= smoothstep\(0\.0, 3\.0, cloudDensity\);/.test(displayShader) &&
   !/if \(!isFlash\)\s*\n\s*strikeLight/.test(displayShader),
-  'a flash drawn all the way down is a stroke with the wrong name on it');
-check('a flash reads the tile mip-filtered and a stroke does not',
-  /float pixVal = flash \? texture\(lightningTex, lightningTexCoord\)\.r\s*\n\s*: textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.r;/
-    .test(displayShader),
-  'a sub-pixel channel point-sampled row by row is a dashed line, and dashes vanish over a bright cloud');
-check('a flash runs across the cloud and a stroke runs down it',
-  /lightningTexCoord\.y = flashDir \* \(texCoord\.x - mod\(pos\.x, 1\.\)\) \/ 0\.45;/.test(displayShader) &&
-  /lightningTexCoord\.x = 0\.5 \+ \(texCoord\.y - pos\.y\) \* scaleMult \* aspectRatios\[0\] \/ lightningTexAspect;/.test(displayShader),
-  'a flash drawn down the same axis as a stroke is a stroke, however it is lit and however high it stops');
+  'a network outside its cloud is a network in clear air');
+check('a flash reads its own artwork, mip-filtered, over a slab of the sky',
+  /float pixVal = texture\(lightningNetworkTex, flashCoord\)\.r;/.test(displayShader) &&
+  /const vec2 flashSpan = vec2\(0\.45, 0\.225\);/.test(displayShader) &&
+  /texCoord\.x - mod\(pos\.x, 1\.\)\) \/ flashSpan\.x/.test(displayShader) &&
+  /0\.5 \+ flashFlip \* \(texCoord\.y - pos\.y\) \/ flashSpan\.y/.test(displayShader),
+  'the network artwork is wide and short because the volume is');
+check('a flash lights the slab it lives in and a stroke lights the cloud under it',
+  /if \(isFlash\) \{\s*\n\s*\/\/ A flash lights the whole slab/.test(displayShader) &&
+  /vec2 flashDist = vec2\(\(lightningPos\.x - texCoord\.x\) \* aspectRatios\[0\], texCoord\.y - lightningPos\.y\);/.test(displayShader) &&
+  /vec2 dist = vec2\(lightningPos\.x - texCoord\.x, max\(\(abs\(lightningPos\.y \/ 2\. - texCoord\.y\) - 0\.1\), 0\.\)\);/.test(displayShader),
+  'the shipped lobe is a point below the strike; a network is a slab');
+check('a stroke still takes the shipped level-0 fetch of the bolt tile',
+  /float pixVal = textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.r;/.test(displayShader) &&
+  !/mipped/.test(displayShader) && !/flash \? texture/.test(displayShader),
+  'the stroke path must stay the code the app shipped with');
 check('the bolt tiles have a mip chain for the flash to read',
   /gl\.generateMipmap\(gl\.TEXTURE_2D\);/.test(appSource) &&
   /gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR/.test(appSource),
@@ -101,10 +108,16 @@ check('the bolt tiles have a mip chain for the flash to read',
  */
 const generatorSource = fs.readFileSync(path.join(ROOT, 'lightningGenerator.js'), 'utf8');
 
-check('the generator draws one kind of artwork',
+check('the generator draws the two kinds of channel',
   !/mode === 'IC'/.test(generatorSource) && !/generateIntraCloudBolt/.test(generatorSource) &&
-  /function generateLightningBolt\(/.test(generatorSource),
-  'the filament artwork and its eight variants are gone');
+  /function generateLightningBolt\(/.test(generatorSource) &&
+  /function generateLightningNetwork\(/.test(generatorSource) &&
+  /const IC_ARTWORK_SIZE = \{ width : 2048, height : 512 \};/.test(generatorSource),
+  'the old filament mode stays gone; the network is the new one, on a wide short tile');
+check('the network forks, fans out from one strike point and never tapers to nothing',
+  /leaders /  .test(generatorSource) && /forkChance/.test(generatorSource) &&
+  /maxLevel/.test(generatorSource) && /IC_LEVELS = \[1\.0, 0\.76, 0\.56, 0\.42\]/.test(generatorSource),
+  'a ladder of brightness, not pow(width, 2), or the tendrils fall under the threshold');
 check('the display shader has no intra-cloud pass left',
   !/computeICLight/.test(displayShader) && !/displayICLightning/.test(displayShader) &&
   !/icLightPass/.test(displayShader) && !/icLightningTex/.test(displayShader),
@@ -263,7 +276,7 @@ const softHdrClamp = (value) => {
 
   check('a cloud-to-ground stroke lights the clouds around it',
     onLift === 0.004 &&
-    /float lightningOnLight = lightningOnLightBrightness \/ \(pow\(length\(dist\), 2\.\) \+ 0\.03\);/.test(displayShader) &&
+    /lightningOnLight = lightningOnLightBrightness \/ \(pow\(length\(dist\), 2\.\) \+ 0\.03\);/.test(displayShader) &&
     /onLight \+= vec3\(lightningOnLight\)/.test(displayShader),
     'the tight lobe has to sit on the channel it came from');
   check('there is no second, wide lobe any more',

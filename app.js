@@ -6649,8 +6649,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.11'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.11')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.12'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.12')
   ]);
 
   const [
@@ -7435,6 +7435,23 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   }
 
 
+  function generateLightningNetworkTexture(bitmap)
+  {
+    gl.bindTexture(gl.TEXTURE_2D, lightningNetworkTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, gl.RED, gl.UNSIGNED_BYTE, bitmap);
+    bitmap.close();
+    // The network's channels are two to three artwork pixels wide on a tile that
+    // lands about one texel per screen pixel, so it needs a mip chain for the same
+    // reason the bolt does: at any zoom out, a level-0 fetch of a fine channel is a
+    // dash, and a flash made of dashes is not a network.
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  }
+
+
   /*
    * Lightning artwork, generated one tile at a time and only when it is needed.
    *
@@ -7452,13 +7469,31 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
    * the artwork is still catching up.
    */
   let lightningTexturesReady = 0;        // tiles 0 .. ready-1 are filled
+  let lightningNetworkReady = false;     // the intra-cloud network tile is up
   let lightningTextureWorkerBusy = false;
   let lightningTextureLastStart = 0;
   let lightningTextureFailures = 0;
 
+  /*
+   * Which piece of artwork to ask for next. The order matters: the first bolt tile
+   * and then the flash network, so that both kinds of strike have a picture before
+   * the rest of the bolt variants exist. Anything else would leave one kind
+   * invisible for the first few seconds of a storm.
+   */
+  function nextLightningJob()
+  {
+    if (lightningTexturesReady < 1)
+      return {kind : 'bolt', index : 0};
+    if (!lightningNetworkReady)
+      return {kind : 'network'};
+    if (lightningTexturesReady < numLightningTextures)
+      return {kind : 'bolt', index : lightningTexturesReady};
+    return null;
+  }
+
   function startLightningTextureWorker()
   {
-    if (lightningTextureWorkerBusy || lightningTexturesReady >= numLightningTextures)
+    if (lightningTextureWorkerBusy)
       return;
     if (lightningTextureFailures >= 4)  // the worker is not coming back; stop asking
       return;
@@ -7467,18 +7502,26 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     if (performance.now() - lightningTextureLastStart < 1000)
       return;                          // one tile a second: this is not what loading is for
 
-    const textureIndex = lightningTexturesReady;
+    const job = nextLightningJob();
+    if (!job)
+      return;
+
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.11');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.12');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
     };
     lightningGeneratorWorker.onmessage = event => {
-      generateLightningTexture(textureIndex, event.data);
-      lightningTexturesReady = textureIndex + 1;
+      if (job.kind === 'network') {
+        generateLightningNetworkTexture(event.data);
+        lightningNetworkReady = true;
+      } else {
+        generateLightningTexture(job.index, event.data);
+        lightningTexturesReady = job.index + 1;
+      }
       stop();
     };
     lightningGeneratorWorker.onerror = event => {
@@ -7487,11 +7530,19 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       lightningTextureLastStart = performance.now() + 6000; // back off; do not spin
       stop();
     };
-    // The original tile: 2500 x 5000 at a 9 pixel channel. The fork this repo
-    // started from halved both and doubled the brightness gain (1250 x 2500 at
-    // 4.5 px); that keeps the relative width but loses half the texels, so the
-    // channel is softer and breaks up sooner when the camera pulls back.
-    lightningGeneratorWorker.postMessage({width : 2500, height : 5000}); // 10000 5000
+
+    if (job.kind === 'network') {
+      // The intra-cloud channel network: 2048 x 512, a megabyte, one of them. The
+      // display maps it onto 0.45 by 0.225 of the simulation, which puts one
+      // artwork pixel on about one screen pixel.
+      lightningGeneratorWorker.postMessage({kind : 'network', width : 2048, height : 512});
+    } else {
+      // The original tile: 2500 x 5000 at a 9 pixel channel. The fork this repo
+      // started from halved both and doubled the brightness gain (1250 x 2500 at
+      // 4.5 px); that keeps the relative width but loses half the texels, so the
+      // channel is softer and breaks up sooner when the camera pulls back.
+      lightningGeneratorWorker.postMessage({width : 2500, height : 5000}); // 10000 5000
+    }
   }
 
   const emptyLightningTexturePixel = new Uint8Array([0]);
@@ -7504,6 +7555,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   }
+  // The intra-cloud network, one tile. Same storage as a bolt tile (R8, mip-mapped
+  // once it is uploaded), a fifth of the size.
+  const emptyLightningNetworkPixel = new Uint8Array([0]);
+  const lightningNetworkTexture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, lightningNetworkTexture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, emptyLightningNetworkPixel);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+
   // Nothing is generated while the loading screen is up: the first tile is asked
   // for once the simulation is running (see the draw loop), and the rest after it
   // as the strike windows come round.
@@ -7713,6 +7775,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'surfaceTextureMap'), 5);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'curlTex'), 6);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningTex'), 7);
+  gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningNetworkTex'), 10);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningDataTex'), 8);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'ambientLightTex'), 9);
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'dryLapse'), dryLapse);
@@ -8512,6 +8575,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       gl.activeTexture(gl.TEXTURE7);
       gl.bindTexture(gl.TEXTURE_2D, lightningTextures[lightningTexNum]);
+      gl.activeTexture(gl.TEXTURE10);
+      gl.bindTexture(gl.TEXTURE_2D, lightningNetworkTexture);
       gl.activeTexture(gl.TEXTURE8);
       gl.bindTexture(gl.TEXTURE_2D, lightningDataTextures[lightningDataSrc]);
 
@@ -9337,7 +9402,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.11');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.12');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
