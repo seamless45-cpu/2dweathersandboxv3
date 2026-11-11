@@ -236,10 +236,40 @@ check('and the trunk stays inside the sprite',
     /if \(lightningTexturesReady < numLightningTextures\)/.test(workerBlock),
     '12.5 MB a tile: two is a quarter of the renderer, ten was all of it and more');
   check('the artwork crosses to the main thread as one byte per texel',
-    /postMessage\(artwork, \[artwork\.data\.buffer\]\);/.test(source) &&
+    /postMessage\(\{width : artwork\.width, height : artwork\.height, data : artwork\.data\},/.test(source) &&
     /const rgba = ctx\.getImageData\(0, 0, width, height\)\.data;/.test(source) &&
     !/transferToImageBitmap\(\)/.test(source.split('function readRedChannel')[1] || ''),
     'a canvas is RGBA whatever is drawn on it: 50 MB handed over to become 12.5 MB');
+
+  /* The artwork is posted, not returned: it has to survive the structured clone
+   * that postMessage performs. Anything hung off it that is not data - a method, a
+   * getter on a class instance - throws DataCloneError *inside the worker*, the
+   * artwork never arrives, and the display has no lightning channel at all, of
+   * either kind. That is what happened when a `close()` method on the returned
+   * object outlived the ImageBitmap it was written for. */
+  check('the artwork survives being posted out of the worker',
+    (() => {
+      for (const artwork of [gen.generateLightningBolt(400, 700), gen.generateLightningNetwork(320, 80)]) {
+        let clone;
+        try {
+          clone = structuredClone(artwork, {transfer : [artwork.data.buffer]});
+        } catch (error) {
+          return 'postMessage would throw: ' + error.name + ': ' + error.message;
+        }
+        if (!(clone.data instanceof Uint8Array) || clone.data.length !== artwork.width * artwork.height)
+          return 'the clone did not carry the picture';
+        if (!clone.data.some((value) => value > 0))
+          return 'the clone carried an empty picture';
+      }
+      return true;
+    })(),
+    'this is the whole lightning channel: if it cannot be sent, nothing is drawn');
+
+  check('the worker says what it is sending, field by field',
+    /data : artwork\.data\}/.test(source) &&
+    /\[artwork\.data\.buffer\]\);/.test(source) &&
+    !/close\(\)\s*\{\s*\}/.test(source),
+    'the payload is built here, so nothing added to the generator can break the wire');
   check('the upload asks the driver for exactly the bytes it has',
     /gl\.texImage2D\(gl\.TEXTURE_2D, 0, gl\.R8, artwork\.width, artwork\.height, 0, gl\.RED, gl\.UNSIGNED_BYTE, artwork\.data\)/
       .test(app) && !/bitmap\.close\(\)/.test(app),
@@ -265,13 +295,51 @@ check('and the trunk stays inside the sprite',
   check('a failed worker backs off instead of retrying every frame',
     /lightningTextureFailures\+\+/.test(workerBlock) &&
     /lightningTextureFailures >= 4/.test(workerBlock),
-    'four attempts, six seconds apart, then it gives up quietly');
+    'four attempts, six seconds apart, then it gives up');
+
+  /* A worker that dies takes every channel with it and there is no fallback, so a
+   * failure has to arrive in the console with enough detail to find it: the file and
+   * line the worker threw on, and a second line when the retries are exhausted. The
+   * bug that made both kinds of lightning invisible was a `DataCloneError` inside
+   * the worker and a single generic console line on this side. */
+  check('a worker that dies says so, with the file and line, and again when it gives up',
+    /onerror = event =>/.test(workerBlock) &&
+    /event\.filename/.test(workerBlock) && /event\.lineno/.test(workerBlock) &&
+    /onmessageerror/.test(workerBlock) &&
+    /could not be transferred out of the worker/.test(workerBlock) &&
+    /no lightning channel will be drawn/.test(workerBlock),
+    'silence here is indistinguishable from "lightning does not work"');
   check('a lost graphics context is reported instead of leaving a black tab',
     /addEventListener\('webglcontextlost'/.test(app) &&
     /event\.preventDefault\(\);/.test(app) &&
     /graphicsContextLost\)\s*\/\/ nothing left to draw with/.test(app),
     'the overlay offers a reload; draw() stops instead of writing into a dead context');
 }
+
+/* The artwork has to be bright enough for the display to draw it at all.
+ *
+ * `displayLightning` subtracts a threshold from the tile's red channel and
+ * multiplies what is left by a hundred thousand; on the main stroke that threshold
+ * is 0.95, so a texel below 243/255 contributes nothing and a trunk drawn dimmer
+ * than that would be a bolt that is not there. The trunk is written at
+ * `12 * lineWidth^2` on a 9 pixel channel, which saturates, and this is the check
+ * that it still does after anything touches the generator. */
+const boltArtwork = gen.generateLightningBolt(TILE_W, TILE_H);
+const trunkPeaks = [0.2, 0.5, 0.8].map((yFraction) => {
+  const row = Math.floor(boltArtwork.height * yFraction);
+  let peak = 0;
+  for (let x = 0; x < boltArtwork.width; x++)
+    peak = Math.max(peak, boltArtwork.data[row * boltArtwork.width + x]);
+  return peak;
+});
+check('the trunk is bright enough to survive the display threshold',
+  trunkPeaks.every((peak) => peak >= 245),
+  'peaks ' + trunkPeaks.join(', ') + ' out of 255; the display subtracts 0.95 before it draws anything');
+
+const networkArtwork = gen.generateLightningNetwork(1024, 256);
+check('the flash network carries light too',
+  networkArtwork.data.some((value) => value >= 245),
+  'the network is drawn at a 0.15 threshold, but a tile with no bright texel is not a channel');
 
 restoreCanvas();
 

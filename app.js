@@ -6724,8 +6724,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.15'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.15')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.16'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.16')
   ]);
 
   const [
@@ -7647,7 +7647,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.15');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.16');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -7662,10 +7662,26 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       }
       stop();
     };
+    // A worker that dies takes every lightning channel with it - there is nothing
+    // else to draw a strike with - so say exactly what happened and where, and say
+    // it again when the retries run out. A silent failure here looks like "no
+    // lightning", which is a bug report about the wrong file.
     lightningGeneratorWorker.onerror = event => {
-      console.error('Lightning texture generation failed.', event.message);
       lightningTextureFailures++;
       lightningTextureLastStart = performance.now() + 6000; // back off; do not spin
+      console.error('Lightning texture generation failed' +
+                    (event.filename ? ` in ${event.filename}:${event.lineno}` : '') + ': ' +
+                    (event.message || 'no message'));
+      if (lightningTextureFailures >= 4)
+        console.error('Lightning artwork could not be generated, so no lightning channel will be drawn.');
+      stop();
+    };
+    // A message the worker could not even decode (a structured-clone failure on the
+    // way back, for instance) arrives here rather than in onerror.
+    lightningGeneratorWorker.onmessageerror = () => {
+      lightningTextureFailures++;
+      lightningTextureLastStart = performance.now() + 6000;
+      console.error('Lightning artwork could not be transferred out of the worker.');
       stop();
     };
 
@@ -9540,7 +9556,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.15');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.16');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
