@@ -109,18 +109,17 @@ precision highp isampler2D;
 // A strike is not held for this long: strikeAnimEnd() below works out how long
 // that particular strike lasts, and a slot is released the moment its own light
 // is over. lightningTime advances 5 iterations per unit (calcLightningTime), the
-// leader stage is one unit, the flicker period is < 3 units, the flicker count is
-// floor(< 2 * intensity - 1) <= 7 for the maximum intensity of 4.5, and the
-// brightness reaches zero at T = 2.924 (lightningIntensityOverTime). So the
-// longest flash is 5 * (3 * 7 + 2.924 + 1) = 124.6 iterations; 126 keeps a
-// margin.
+// flicker period is < 3 units, the flicker count is floor(< 2 * intensity - 1) <=
+// 7 for the maximum intensity of 4.5, and the brightness reaches zero at
+// T = 2.924 (lightningIntensityOverTime). So the longest flash is
+// 5 * (3 * 7 + 2.924) = 119.6 iterations; 126 keeps a margin.
 #define LIGHTNING_ANIM_ITERS 126.0
 
 // Strikes at or below this intensity are intra-cloud (IC) flashes: they stay
 // inside the cloud, are drawn with the IC artwork from lightningGenerator.js
 // and never reach the ground. Above it the strike is a cloud-to-ground (CG)
 // return stroke drawn with the tall bolt artwork.
-#define LIGHTNING_IC_MAX_INTENSITY 1.0
+#define LIGHTNING_IC_MAX_INTENSITY 0.9
 
 // Lightning rods. A rod is placed with the Lightning Rod tool; it is a mast
 // standing on the terrain that pulls nearby CG strikes onto itself. Keep in
@@ -241,8 +240,8 @@ float random2d(vec2 s)
 // display pass call this, so a strike is held for exactly as long as it can
 // still be seen - no cut-off, and no dead time.
 //
-// Layout of the arithmetic: lightningTime = (iterNum - start) / 5 and the leader
-// stage is lightningTime < 1, so iteration = start + 5 * (1 + T0). The last
+// Layout of the arithmetic: lightningTime = (iterNum - start) / 5, and the display
+// samples the curve at lightningTime + 1, so iteration = start + 5 * T0. The last
 // flicker ends when T0 = period * flickers + 2.924 (the T where the intensity
 // curve reaches zero), which is the same expression lightningIntensityOverTime()
 // uses for minT.
@@ -255,12 +254,10 @@ float strikeAnimEnd(vec4 strike)
   float repeatPeriod = map_range(random2d(strike.xy), 0., 1., 1.5, 3.0);
   float numFlashes = floor(map_range(random2d(strike.xy * 2.737250), 0., 1., 1.0, max(strike[INTENSITY] - 0.5, 0.) * 2.0));
 
-  // An IC flash has no leader stage: the display shader starts its intensity
-  // curve one unit in (realisticDisplayShader.frag), so its light is over one
-  // unit earlier than a CG stroke's of the same length.
-  float leader = strike[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY ? 1.0 : 0.0;
-
-  return start + 5.0 * (leader + repeatPeriod * numFlashes + 2.924);
+  // No leader stage: the display shader starts the intensity curve one unit in for
+  // both kinds of strike (realisticDisplayShader.frag), so the light is over at
+  // T0 = period * flickers + 2.924 and not one iteration later.
+  return start + 5.0 * (repeatPeriod * numFlashes + 2.924);
 }
 
 float rand2d(vec2 co)

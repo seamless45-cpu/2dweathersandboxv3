@@ -84,6 +84,17 @@ const IC_GLOW_COL = (() => {
   const m = shaderSource.match(/const vec3 icGlowCol = vec3\(([\d.]+), ([\d.]+), ([\d.]+)\);/);
   return m ? [ Number(m[1]), Number(m[2]), Number(m[3]) ] : null;
 })();
+// the glare on the channels (see displayICLightning / computeICLight)
+const IC_FLARE_BOOST = shaderNumber('icFlareBoost');
+const IC_FLARE_CEILING = shaderNumber('icFlareCeiling');
+const IC_FLARE_COL = (() => {
+  const m = shaderSource.match(/const vec3 icFlareCol = vec3\(([\d.]+), ([\d.]+), ([\d.]+)\);/);
+  return m ? [ Number(m[1]), Number(m[2]), Number(m[3]) ] : null;
+})();
+// the bloom's bright pass, which is what a glare has to cross to be a glow
+const BLOOM_KNEE = Number((fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'isolateBrightPartsShader.frag'), 'utf8')
+  .match(/const float brightKnee = ([\d.]+);/) || [])[1]);
+
 // how far past the sprite the halo is allowed to reach, in sprite halves, and
 // the fade that gets it there - both read from the shader, not copied
 const IC_HALO_REACH = Number((shaderSource.match(/if \(reach > ([\d.]+)\)/) || [])[1]);
@@ -475,7 +486,7 @@ function strikeLook(tileSeed) {
 function icPixel(layer, look, lx, ly, time, intensity, artPerPixel, opts) {
   opts = opts || {};
   const reach = Math.max(Math.abs(lx), Math.abs(ly));
-  if (reach > IC_HALO_REACH) return { core : 0, glow : 0 };
+  if (reach > IC_HALO_REACH) return { core : 0, glow : 0, glare : 0 };
   const ax = (look % 2 === 0) ? lx : -lx;
   const ay = (look < 2) ? ly : -ly;
   const artLod = Math.log2(Math.max(1e-4, artPerPixel));
@@ -485,7 +496,7 @@ function icPixel(layer, look, lx, ly, time, intensity, artPerPixel, opts) {
   const spread = clamp01(time * 2.4);
   const reveal = clamp01((spread - radial * 0.9) / 0.3);
   const haloReveal = clamp01((spread * 1.30 - radial * 0.55) / 0.45);
-  if (reveal <= 0 && haloReveal <= 0) return { core : 0, glow : 0 };
+  if (reveal <= 0 && haloReveal <= 0) return { core : 0, glow : 0, glare : 0 };
 
   const edgeX = Math.abs(lx) * 2, edgeY = Math.abs(ly) * 2;
   const window_ = (1 - smoothstep(0.80, 0.99, edgeX)) * (1 - smoothstep(0.80, 0.99, edgeY));
@@ -498,16 +509,22 @@ function icPixel(layer, look, lx, ly, time, intensity, artPerPixel, opts) {
   const core = channel * reveal * window_ * scale;
 
   let glow = 0;
+  let glare = 0;
   if (opts.glow !== false && haloReveal > 0) {
     const wide = sampleTile(layer, ax + 0.5, 0.5 - ay, IC_GLOW_WIDE_LOD);
     glow = wide * IC_GLOW_WIDE;
     if (wide > 0 || channel > 0) {
-      glow += sampleTile(layer, ax + 0.5, 0.5 - ay, IC_GLOW_MID_LOD) * IC_GLOW_MID;
-      glow += sampleTile(layer, ax + 0.5, 0.5 - ay, artLod + IC_GLOW_TIGHT_BIAS) * IC_GLOW_TIGHT;
+      const mid = sampleTile(layer, ax + 0.5, 0.5 - ay, IC_GLOW_MID_LOD);
+      const tight = sampleTile(layer, ax + 0.5, 0.5 - ay, artLod + IC_GLOW_TIGHT_BIAS);
+      glow += mid * IC_GLOW_MID;
+      glow += tight * IC_GLOW_TIGHT;
+      // the glare: the two rings that hug a channel, the part allowed past white
+      glare = tight * IC_GLOW_TIGHT + mid * IC_GLOW_MID * 0.55;
     }
     glow *= haloReveal * glowWindow * scale;
+    glare *= haloReveal * glowWindow * scale;
   }
-  return { core : core, glow : glow };
+  return { core : core, glow : glow, glare : glare };
 }
 
 const knee = (x) => 1 - Math.exp(-x);
@@ -536,11 +553,13 @@ function renderFlash(options) {
   const light = new Float32Array(width * height);
   const display = new Float32Array(width * height);
   const glowOnly = new Float32Array(width * height);
+  const glareOnly = new Float32Array(width * height);
   const localX = (px) => (px + 0.5) / width * 2 * FRAME_HALF - FRAME_HALF;
   const localY = (py) => FRAME_HALF - (py + 0.5) / height * 2 * FRAME_HALF;
 
   let peak = 0, lit = 0, inside = 0, sum = 0, nan = 0;
   let glowPeak = 0;
+  let glarePeak = 0, glareAboveKnee = 0;
 
   for (let py = 0; py < height; py++) {
     for (let px = 0; px < width; px++) {
@@ -550,6 +569,12 @@ function renderFlash(options) {
       if (!Number.isFinite(raw)) nan++;
       light[py * width + px] = raw;
       glowOnly[py * width + px] = pixel.glow * glowLuma * cloudGain;
+      // The glare is written against its own ceiling (computeICLight), so this is
+      // the value that reaches the bloom's bright pass.
+      const glareValue = IC_FLARE_CEILING * (1 - Math.exp(-Math.max(0, pixel.glare * (IC_FLARE_COL ? (IC_FLARE_COL[0] + IC_FLARE_COL[1] + IC_FLARE_COL[2]) / 3 : 1) * IC_FLARE_BOOST * cloudGain) / IC_FLARE_CEILING));
+      glareOnly[py * width + px] = glareValue;
+      glarePeak = Math.max(glarePeak, glareValue);
+      if (glareValue > BLOOM_KNEE) glareAboveKnee++;
       display[py * width + px] = Math.pow(clamp01(knee(Math.max(0, raw)) + (options.backdrop || 0)), 1 / 2.2);
       if (Math.abs(lx) <= 0.5 && Math.abs(ly) <= 0.5) {
         inside++;
@@ -564,7 +589,9 @@ function renderFlash(options) {
     width : width, height : height, light : light, display : display, glowOnly : glowOnly,
     localX : localX, localY : localY,
     peak : peak, coverage : lit / Math.max(1, inside), mean : sum / Math.max(1, inside),
-    glowPeak : glowPeak, nan : nan, artPerPixel : artPerPixel, cloudGain : cloudGain,
+    glowPeak : glowPeak, glareOnly : glareOnly, glarePeak : glarePeak,
+    glareAboveKnee : glareAboveKnee / Math.max(1, width * height),
+    nan : nan, artPerPixel : artPerPixel, cloudGain : cloudGain,
     layer : layer, look : look, spritePx : spritePx,
     // the light anywhere near the flash, including the part outside the sprite
     maxLight : (() => { let m = 0; for (let i = 0; i < light.length; i++) m = Math.max(m, light[i]); return m; })(),
@@ -769,7 +796,36 @@ check('only the halo is tinted - the channel itself stays white',
       }
     return r;
   };
-  check('the halo runs ahead of the channels as the flash spreads',
+  /*
+ * The glare on the channels.
+ *
+ * A cloud-to-ground bolt gets its halo from the bloom's bright pass, which only
+ * sees light above its knee (32 HDR units). An intra-cloud flash used to be
+ * squeezed under 1.0 by its own soft knee, so it could never bloom at all. The two
+ * rings that hug a channel now go through a second, much higher ceiling instead,
+ * so a channel carries a glow the way a bolt does - without lifting the wide ring,
+ * the cloud glow or the tiers of the network, which is what would turn the flash
+ * into a slab.
+ */
+{
+  const frame = renderFlash({ spritePx : DEFAULT_SPRITE, time : 1.0, intensity : 20, cloud : true, tileSeed : 3.7 });
+  check('an intra-cloud channel carries a glare that reaches the bloom pass',
+    Number.isFinite(IC_FLARE_BOOST) && Number.isFinite(BLOOM_KNEE) &&
+    frame.glarePeak > BLOOM_KNEE + 2,
+    'glare peak ' + frame.glarePeak.toFixed(1) + ' vs bloom knee ' + BLOOM_KNEE +
+    ' (boost ' + IC_FLARE_BOOST + ', ceiling ' + IC_FLARE_CEILING + ')');
+  check('the glare hangs on the channels instead of flooding the sprite',
+    frame.glareAboveKnee > 0.0 && frame.glareAboveKnee < 0.10,
+    (frame.glareAboveKnee * 100).toFixed(1) + '% of the frame is above the bloom knee');
+  check('the glare is whiter than the halo it sits in',
+    IC_FLARE_COL && IC_GLOW_COL &&
+    IC_FLARE_COL[0] / IC_FLARE_COL[2] > IC_GLOW_COL[0] / IC_GLOW_COL[2],
+    'flare ' + JSON.stringify(IC_FLARE_COL) + ' vs halo ' + JSON.stringify(IC_GLOW_COL));
+  check('a flash with no intensity has no glare either',
+    renderFlash({ spritePx : DEFAULT_SPRITE, time : 1.0, intensity : 0, cloud : true, tileSeed : 3.7 }).glarePeak === 0);
+}
+
+check('the halo runs ahead of the channels as the flash spreads',
     radiusOf(mid, 'glow') > radiusOf(mid, 'core') * 1.05,
     'halo reaches ' + radiusOf(mid, 'glow').toFixed(3) + ', channels ' + radiusOf(mid, 'core').toFixed(3) + ' (sprite halves)');
   check('the halo grows with the flash instead of appearing whole',

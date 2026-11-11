@@ -53,7 +53,12 @@ const appNumSlots = Number((appSource.match(/const\s+numLightningSlots\s*=\s*(\d
 const appICtiles = (appSource.match(/const\s+numICLightningTiles\s*=\s*([^;]+);/) || [])[1];
 
 check('common.glsl declares MAX_LIGHTNING_RODS', Number.isInteger(MAX_LIGHTNING_RODS) && MAX_LIGHTNING_RODS > 0);
-check('common.glsl declares LIGHTNING_IC_MAX_INTENSITY', LIGHTNING_IC_MAX_INTENSITY === 1.0, 'got ' + LIGHTNING_IC_MAX_INTENSITY);
+// The threshold between an intra-cloud flash and a cloud-to-ground stroke. It
+// came down from 1.0 to 0.9 this round: a strike a tenth of an intensity unit
+// below the old line now reaches the ground, which is what makes CG lightning more
+// common in a storm without touching how the strikes themselves are drawn.
+check('common.glsl declares the intra-cloud / cloud-to-ground threshold',
+  LIGHTNING_IC_MAX_INTENSITY === 0.9, 'got ' + LIGHTNING_IC_MAX_INTENSITY);
 check('app.js MAX_LIGHTNING_RODS matches common.glsl',
   appMaxRods === MAX_LIGHTNING_RODS,
   'app.js ' + appMaxRods + ' vs common.glsl ' + MAX_LIGHTNING_RODS);
@@ -161,12 +166,37 @@ check('the display shader draws the halo out of the mip chain',
 // A halo that could exceed the knee would clip to white and erase the channels
 // under it, so it goes through the same compression as the channels do.
 check('the halo is compressed by the same knee as the channels',
-  displayShader.indexOf('icGlowCol * glow') < displayShader.indexOf('return light * icPower * icBrightness * icEnergy;') &&
-  displayShader.indexOf('return light * icPower * icBrightness * icEnergy;') <
+  displayShader.indexOf('icGlowCol * glow') < displayShader.indexOf('return vec4(light * icPower * icBrightness * icEnergy,') &&
+  displayShader.indexOf('return vec4(light * icPower * icBrightness * icEnergy,') <
   displayShader.indexOf('vec3 gained = max(icLight, vec3(0.0))') &&
   displayShader.indexOf('vec3 gained = max(icLight, vec3(0.0))') <
-  displayShader.indexOf('return vec3(1.0) - exp(-gained);'),
+  displayShader.indexOf('vec3 flashLight = vec3(1.0) - exp(-gained);'),
   'the halo has to be multiplied into the light before the cloud gain and the knee');
+
+// The glare on a channel is the one part of an intra-cloud flash that is allowed
+// past white, so that a channel blooms the way a cloud-to-ground bolt does. It has
+// to go through its own ceiling - a ceiling high enough to reach the bloom's bright
+// pass - and the wide ring must stay out of it.
+{
+  const num = (source, name) => Number((source.match(new RegExp('const (?:float|vec3) ' + name + ' = (?:vec3\\()?([\\d.]+)')) || [])[1]);
+  const boost = num(displayShader, 'icFlareBoost');
+  const ceiling = num(displayShader, 'icFlareCeiling');
+  check('an intra-cloud channel carries a glare that is brighter than white',
+    boost > 1 && ceiling > 100,
+    'icFlareBoost ' + boost + ', icFlareCeiling ' + ceiling);
+  check('the glare reaches past the bloom knee, so it actually blooms',
+    /const float icFlareBoost = ([\d.]+);/.test(displayShader) &&
+    Number((displayShader.match(/const float icFlareBoost = ([\d.]+);/) || [])[1]) * 0.02 > 0 &&
+    /vec3 glareLight = vec3\(icFlareCeiling\) \* \(1\.0 - exp\(-max\(glare, vec3\(0\.0\)\) \/ icFlareCeiling\)\);/.test(displayShader),
+    'the glare has to bypass the 1.0 knee that squeezes the rest of the flash');
+  check('the wide ring and the network itself are not boosted',
+    /glare = tight \* icGlowTight \+ mid \* icGlowMid \* 0\.55;/.test(displayShader) &&
+    !/glare = wide/.test(displayShader),
+    'a boosted wide ring is the white slab this pass exists to avoid');
+  check('the flash itself is still compressed under 1.0',
+    /vec3 flashLight = vec3\(1\.0\) - exp\(-gained\);/.test(displayShader) &&
+    /return flashLight \+ glareLight;/.test(displayShader));
+}
 
 // Strokes must not erase what is under them (source-over) nor pile up into a
 // saturated slab ('lighter'): 'lighten' takes the brighter of stroke and
@@ -182,7 +212,9 @@ check('the light pass returns only the flash light',
   /uniform float icLightPass/.test(displayShader) &&
   /if \(icLightPass > 0\.5\) \{[\s\S]{0,400}?fragmentColor = vec4\(softHdrClamp\(computeICLight\(\)\), 0\.0\);[\s\S]{0,80}?return;/.test(displayShader) &&
   /vec3 computeICLight\(\)/.test(displayShader) &&
-  /icLight \+= displayICLightning\(/.test(displayShader));
+  /vec4 ic = displayICLightning\(/.test(displayShader) &&
+  /icLight \+= ic\.rgb;/.test(displayShader) &&
+  /icGlare \+= ic\.a;/.test(displayShader));
 check('the scene pass carries no IC light any more',
   /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emittedLight\), opacity\)/.test(displayShader) &&
   !/icAlpha/.test(displayShader) &&
@@ -218,7 +250,7 @@ check('IC light is not dimmed by the cloud it is in',
 // HDR is clipped: every tier of channel would arrive as the same white. The soft
 // knee is what keeps a trunk, an arm and a hair apart on screen.
 check('the IC light is compressed by a soft knee before it reaches the frame',
-  /return vec3\(1\.0\) - exp\(-gained\);/.test(displayShader) &&
+  /vec3 flashLight = vec3\(1\.0\) - exp\(-gained\);/.test(displayShader) &&
   /vec3 gained = max\(icLight, vec3\(0\.0\)\) \* \(1\.0 \+ icCloudScatter \* cloudOpacity\);/.test(displayShader));
 
 // Additive light can only add: over the whole plausible range - a flash fading
