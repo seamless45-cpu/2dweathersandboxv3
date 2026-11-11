@@ -420,9 +420,8 @@ vec3 computeICLight()
     float lightningStartIterNum = lightningData[START_ITERNUM];
     if (lightningStartIterNum <= 0.0)
       continue; // never used / released
-    float lightningAge = iterNum - lightningStartIterNum;
-    if (lightningAge < 0.0 || lightningAge > LIGHTNING_ANIM_ITERS)
-      continue; // animation already finished
+    if (iterNum < lightningStartIterNum || iterNum >= strikeAnimEnd(lightningData))
+      continue; // not started yet, or its own animation is over
     if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY)
       continue; // cloud-to-ground stroke, drawn by the scene pass
 
@@ -580,9 +579,10 @@ vec4 getAirColor(vec2 fragCoordIn)
     float lightningStartIterNum = lightningData[START_ITERNUM];
     if (lightningStartIterNum <= 0.0)
       continue;                                              // never used / released
-    float lightningAge = iterNum - lightningStartIterNum;
-    if (lightningAge < 0.0 || lightningAge > LIGHTNING_ANIM_ITERS)
-      continue;                                              // animation already finished
+    // its own animation, not the longest one there can be: a flash is drawn for
+    // exactly as long as it has light (see strikeAnimEnd in common.glsl)
+    if (iterNum < lightningStartIterNum || iterNum >= strikeAnimEnd(lightningData))
+      continue;
 
     vec2 lightningPos = lightningData.xy;
     float lightningTime = calcLightningTime(lightningStartIterNum);
@@ -961,9 +961,8 @@ void main()
       vec4 strikeData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
       if (strikeData[START_ITERNUM] <= 0.0 || abs(strikeData.x - rod.x) > 1e-6)
         continue;
-      float strikeAge = iterNum - strikeData[START_ITERNUM];
-      if (strikeAge < 0.0 || strikeAge > LIGHTNING_ANIM_ITERS)
-        continue;
+      if (iterNum < strikeData[START_ITERNUM] || iterNum >= strikeAnimEnd(strikeData))
+        continue; // this strike is not running
       strikeGlow = max(strikeGlow, lightningIntensityOverTime(calcLightningTime(strikeData[START_ITERNUM]), strikeData.xy, strikeData[INTENSITY]));
     }
     emittedLight += tipGlow * (vec3(0.10, 0.13, 0.30) + vec3(0.55, 0.68, 1.0) * strikeGlow * 60000.0);
