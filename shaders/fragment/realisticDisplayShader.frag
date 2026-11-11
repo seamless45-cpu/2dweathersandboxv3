@@ -446,6 +446,7 @@ vec3 computeICLight()
 {
   vec3 icLight = vec3(0.0);
   float icGlare = 0.0; // light past white, on the channels themselves
+  float cgFlash = 0.0; // the frame-wide light of a cloud-to-ground stroke
 
   // How many artwork pixels one screen pixel covers, worked out once, outside
   // the slot loop: screen-space derivatives inside a loop with `continue` are
@@ -458,11 +459,18 @@ vec3 computeICLight()
       continue; // never used / released
     if (iterNum < lightningStartIterNum || iterNum >= strikeAnimEnd(lightningData))
       continue; // not started yet, or its own animation is over
-    if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY)
-      continue; // cloud-to-ground stroke, drawn by the scene pass
-
     vec2 lightningPos = lightningData.xy;
     float lightningTime = calcLightningTime(lightningStartIterNum);
+
+    if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY) {
+      // A cloud-to-ground stroke draws its own bolt in the scene pass, but the
+      // light it throws over the *frame* has to be added here: this pass runs over
+      // the finished picture, so it reaches the sky above the cloud deck as well,
+      // which the scene pass (clouds and terrain only) cannot.
+      float cgIntensity = lightningIntensityOverTime(lightningTime + 1.0, lightningPos, lightningData[INTENSITY]);
+      cgFlash = max(cgFlash, cgIntensity);
+      continue;
+    }
 
     // The curve starts one unit in: no strike has a leader stage to climb out of,
     // so a flash is at its peak brightness in the iteration it is booked and the
@@ -478,8 +486,18 @@ vec3 computeICLight()
     icGlare += ic.a;
   }
 
-  if (dot(icLight, vec3(1.0)) <= 0.0 && icGlare <= 0.0)
-    return icLight; // nothing running: no cloud sample needed
+  if (dot(icLight, vec3(1.0)) <= 0.0 && icGlare <= 0.0 && cgFlash <= 0.0)
+    return vec3(0.0); // nothing running: no cloud sample needed
+
+  // The light a cloud-to-ground stroke throws over the whole frame, including the
+  // part of the sky the scene pass never touches. It is bounded by its own ceiling
+  // so that a storm-core stroke covers the frame instead of blowing it out to a
+  // value the post-processing has to guess about.
+  const vec3 icScreenFlashCol = vec3(0.55, 0.62, 1.0);
+  const float icScreenFlashGain = 0.020;
+  const float icScreenFlashCeiling = 1.60;
+  vec3 screenLight = icScreenFlashCol * (icScreenFlashCeiling *
+                     (1.0 - exp(-cgFlash * icScreenFlashGain / icScreenFlashCeiling)));
 
   // Seen through the cloud it is in. A channel has to stay readable against the
   // cloud around it, and a sunlit cloud is ~1.0 in HDR units - about 230/255 on
@@ -523,7 +541,7 @@ vec3 computeICLight()
   vec3 glare = icFlareCol * icGlare * icFlareBoost * (1.0 + icCloudScatter * cloudOpacity);
   vec3 glareLight = vec3(icFlareCeiling) * (1.0 - exp(-max(glare, vec3(0.0)) / icFlareCeiling));
 
-  return flashLight + glareLight;
+  return flashLight + glareLight + screenLight;
 }
 
 
@@ -630,11 +648,22 @@ vec4 getAirColor(vec2 fragCoordIn)
 
 
 #define lightningOnLightBrightness 0.004  // 0.002
-#define lightningSkyLightBrightness 0.0011 // the wide lobe of the same flash
+#define lightningSkyLightBrightness 0.0022 // the wide lobe of the same flash
+// How much of the frame a cloud-to-ground stroke lights.
+//
+// A bolt drawn on its own, with a halo around it, reads as a spark in a dark room.
+// A return stroke is a current of tens of kiloamps over a channel some kilometres
+// long, and what a player recognises as lightning is the whole sky going up with
+// it: the cloudscape jumps several stops and every shadow in the scene is redrawn
+// by the flash. That is this number. It is driven by the strike's own intensity
+// curve, so a weak stroke lifts the frame a little and a storm-core stroke covers
+// it, and it only ever *adds* light.
+#define lightningScreenFlashBrightness 0.010
 
   // Every strike in the slot array is drawn until its own animation is over.
   // Slots are independent, so a new strike never truncates a running one.
   vec3 lightningBoltLight = vec3(0.0); // cloud-to-ground strokes
+  float screenFlash = 0.0;             // the frame-wide light of the strongest stroke
   for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
     vec4 lightningData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
     float lightningStartIterNum = lightningData[START_ITERNUM];
@@ -656,8 +685,13 @@ vec4 getAirColor(vec2 fragCoordIn)
 
     // Cloud-to-ground strokes light the scene here; intra-cloud flashes are the
     // additive pass, so they only contribute their light-on-objects term below.
-    if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY)
+    // The strongest running stroke also sets how much of the frame is lit: `max`
+    // rather than a sum, because six strikes at once must not light the sky six
+    // times over.
+    if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY) {
       lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight(lightningPos));
+      screenFlash = max(screenFlash, currentLightningIntensity);
+    }
 
     // The light a strike throws on the clouds around it: one tight lobe that
     // blows out the cloud right next to the channel, and one wide lobe that lifts
@@ -674,6 +708,13 @@ vec4 getAirColor(vec2 fragCoordIn)
     lightningOnLight *= currentLightningIntensity;
     onLight += vec3(lightningOnLight);
   }
+
+  // ... and the light that is no longer local to one strike. This is added to
+  // `onLight`, which multiplies the scene's own colour, so a flash brightens what
+  // is there (cloud, terrain, smoke) instead of painting a flat white over it, and
+  // the structure of the cloudscape survives the flash.
+  if (screenFlash > 0.0)
+    onLight += vec3(0.50, 0.58, 1.0) * (screenFlash * lightningScreenFlashBrightness);
 
   emittedLight += lightningBoltLight / (1. + cloudDensity * 100.0);
 
