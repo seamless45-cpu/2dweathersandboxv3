@@ -223,9 +223,9 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
 //
 // The artwork comes from lightningGenerator.js ('IC' mode): a network of
 // hair-thin channels spreading through a charge layer and never reaching the
-// ground. The generator draws eight different networks into a 4x2 atlas, and
-// every strike picks one of them - and a mirroring of it - from its own start
-// iteration and position, so two flashes rarely look alike.
+// ground. The generator draws eight different networks, one per layer of a 2D
+// array texture, and every strike picks one of them - and a mirroring of it -
+// from its own start iteration and position, so two flashes rarely look alike.
 //
 // One atlas tile is the whole flash: the tile is drawn at the size a flash
 // covers on screen, so the artwork is sampled at roughly one artwork pixel per
@@ -255,6 +255,46 @@ const float icTileWidthPx = 256.0;
 // arm 0.75 and a hair 0.5, which is a hierarchy the eye can see.
 const float icBrightness = 0.5;
 
+// ---------------------------------------------------------------- the halo ---
+//
+// A cloud-to-ground bolt gets its glow for free. It is written at a hundred
+// thousand HDR units, so the two percent of the frame that the bloom pyramid
+// keeps is still blinding, and that smeared-out brightness is what the eye reads
+// as the bolt's halo. An intra-cloud flash cannot be written that way: its pass
+// is added over a finished, sunlit cloud, where anything past 1.0 is clipped and
+// a flash of clipped white is a slab with no channels left in it.
+//
+// So the halo is drawn here, out of the same artwork, and built the way the bloom
+// pyramid builds one: by averaging the tile over larger and larger areas, which
+// is exactly what the hardware mip chain already holds. That average is not a
+// stand-in for the light, it *is* the light - it is the share of the flash's ink
+// that falls in that area - so a trunk glows hard, a hair barely, and the halo
+// follows the shape of the network instead of hanging around it as a blob.
+//
+// Three radii, because one radius never looks like light: a flare of a couple of
+// screen pixels right on a channel (a lens effect, so it is measured in screen
+// pixels), the light a channel scatters into the cloud it is in, and a bed of
+// light over half a kilometre of cloud that the whole network sits in - the part
+// that reads as a cloud lit from the inside.
+//
+// The weights are counterweights to the averaging: a ring four times wider has a
+// mean about four times smaller, so it needs a bigger weight just to sit at the
+// same brightness. And all three together are deliberately kept far below the
+// channels they surround - the halo is light *around* the network, and a halo as
+// bright as a channel would fill the gaps between channels and turn the flash
+// into the bright slab this whole pass exists to avoid.
+const float icGlowTightBias = 1.5; // extra LOD on top of the sampling LOD
+const float icGlowMidLod = 4.0;
+const float icGlowWideLod = 6.5;
+const float icGlowTight = 0.25;
+const float icGlowMid = 0.25;
+const float icGlowWide = 0.30;
+// Scattered light is colder than the channel it came from - the cloud absorbs and
+// re-emits it, and it is the diffuse part that reaches the eye. It is the same
+// family of colour as the CG bolt's lightningCol, only bluer: intra-cloud light
+// arrives through the cloud, which takes the violet out of it.
+const vec3 icGlowCol = vec3(0.64, 0.70, 1.0);
+
 vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningIntensity,
                         float tileSeed, float artPerPixel)
 {
@@ -266,27 +306,45 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   // position inside the flash, -0.5 .. 0.5
   vec2 local = vec2((texCoord.x - mod(pos.x, 1.)) / max(icSpriteSize.x, 1e-5),
                     (texCoord.y - pos.y) / max(icSpriteSize.y, 1e-5));
-  if (abs(local.x) > 0.5 || abs(local.y) > 0.5)
+
+  // The halo reaches a little past the sprite, so this is wider than the artwork
+  // rectangle: the light has faded out to nothing by 0.62 anyway.
+  float reach = max(abs(local.x), abs(local.y));
+  if (reach > 0.62)
     return vec3(0.0);
 
   // Which of the eight networks this strike uses, and which way round it is
   // mirrored. The hash runs on the strike's own start iteration and position, so
   // it is fixed for the whole flash and different for the next one. Eight tiles
-  // times four mirrorings is thirty-two looks out of an atlas of eight.
+  // times four mirrorings is thirty-two looks out of a texture of eight.
   float tileHash = fract(sin(tileSeed * 12.9898 + dot(pos, vec2(41.7, 91.3))) * 43758.5453);
   float layer = min(floor(tileHash * icTileCount), icTileCount - 1.0);
   float look = floor(fract(tileHash * 17.31) * 4.0);
   vec2 artCoord = vec2(mod(look, 2.0) < 0.5 ? local.x : -local.x,
                        look < 2.0 ? local.y : -local.y);
   vec2 uv = vec2(artCoord.x + 0.5, 0.5 - artCoord.y);
-  float channel = max(texture(icLightningTex, vec3(uv, layer)).r, 0.0);
+
+  // The level the artwork is sampled at is the one the screen can resolve, worked
+  // out from artPerPixel rather than from fwidth() inside this loop: a screen
+  // pixel covers artPerPixel artwork pixels, so one texel of level log2() of it
+  // is a screen pixel. Every fetch below is an explicit LOD for the same reason -
+  // derivatives are undefined inside a loop that skips slots.
+  float artLod = log2(max(artPerPixel, 1e-4));
+  float channel = max(textureLod(icLightningTex, vec3(uv, layer), artLod).r, 0.0);
 
   // The flash spreads outwards from the origin: channels appear at the centre
   // first and the outer branches light up as lightningTime grows.
-  float radial = max(abs(local.x), abs(local.y)) * 2.0; // 0 centre .. 1 edge
+  float radial = reach * 2.0; // 0 centre .. 1 at the sprite edge
   float spread = clamp(lightningTime * revealSpeed, 0.0, 1.0);
   float reveal = clamp((spread - radial * 0.9) / 0.3, 0.0, 1.0);
-  if (reveal <= 0.0)
+
+  // The halo of a flash runs ahead of its channels and outlives them: the cloud
+  // around a channel starts to glow a little before the channel itself arrives,
+  // and the light it has scattered lingers as the flash decays. Slightly wider
+  // and slightly earlier than the reveal above, so the flash is a growing ball of
+  // light with channels in it instead of a hard-edged rectangle of artwork.
+  float haloReveal = clamp((spread * 1.30 - radial * 0.55) / 0.45, 0.0, 1.0);
+  if (reveal <= 0.0 && haloReveal <= 0.0)
     return vec3(0.0);
 
   // Fade the outer part of the sprite out, so a branch never ends in a hard cut
@@ -294,6 +352,10 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   // has to soften the last few percent.
   vec2 edge = abs(local) * 2.0; // 0 at the centre, 1 at the sprite border
   float window = (1.0 - smoothstep(0.80, 0.99, edge.x)) * (1.0 - smoothstep(0.80, 0.99, edge.y));
+
+  // The halo is allowed its margin outside the sprite, and is only cut where the
+  // light has already run out - a hard edge here would be a visible box.
+  float glowWindow = 1.0 - smoothstep(1.00, 1.24, max(edge.x, edge.y));
 
   // A channel loses light to filtering as the sprite shrinks, so the artwork is
   // scaled by how many artwork pixels one screen pixel covers. The clamp is
@@ -308,7 +370,28 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   // the range a thin channel can carry.
   float icPower = currentLightningIntensity / (1.0 + currentLightningIntensity * 0.85);
 
-  return vec3(channel * reveal * window * icPower * icBrightness * icEnergy);
+  float core = channel * reveal * window;
+
+  // The halo. The widest ring is fetched first and on its own: most of the screen
+  // is nowhere near a flash, and for those pixels it is the only fetch paid.
+  float glow = 0.0;
+  if (haloReveal > 0.0) {
+    float wide = textureLod(icLightningTex, vec3(uv, layer), icGlowWideLod).r;
+    glow = wide * icGlowWide;
+    if (wide > 0.0 || channel > 0.0) {
+      glow += textureLod(icLightningTex, vec3(uv, layer), icGlowMidLod).r * icGlowMid;
+      // the flare is measured in screen pixels, so it keeps the artwork's own
+      // sampling LOD and only adds a couple of levels to it
+      glow += textureLod(icLightningTex, vec3(uv, layer), artLod + icGlowTightBias).r * icGlowTight;
+    }
+    glow *= haloReveal * glowWindow;
+  }
+
+  // The channel is white and the light around it is cold. Adding them keeps the
+  // channel readable inside its own halo, which is the whole difference between
+  // a flash and a bright smear.
+  vec3 light = vec3(core) + icGlowCol * glow;
+  return light * icPower * icBrightness * icEnergy;
 }
 
 
