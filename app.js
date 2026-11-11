@@ -6615,8 +6615,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-04.1'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-04.1')
+    loadSourceFile('shaders/common.glsl?v=2026-12-05.1'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-05.1')
   ]);
 
   const [
@@ -7429,7 +7429,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     const tileIndex = nextICLightningTextureIndex++;
-    const icLightningWorker = new Worker('./lightningGenerator.js?v=2026-12-04.1');
+    const icLightningWorker = new Worker('./lightningGenerator.js?v=2026-12-05.1');
     icLightningWorker.onmessage = event => {
       generateICLightningTexture(tileIndex, event.data);
       icLightningWorker.terminate();
@@ -7465,7 +7465,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     const textureIndex = nextLightningTextureIndex++;
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-04.1');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-05.1');
     lightningGeneratorWorker.onmessage = event => {
       generateLightningTexture(textureIndex, event.data);
       lightningGeneratorWorker.terminate();
@@ -9338,7 +9338,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-04.1');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-05.1');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

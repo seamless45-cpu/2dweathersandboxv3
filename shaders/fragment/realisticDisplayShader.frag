@@ -156,6 +156,13 @@ float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
   return max((1. / (0.05 + pow(T * 2.0, 3.))) - 0.005, 0.) * pow(intensity, 2.0); // fading out curve
 }
 
+// The peak of lightningIntensityOverTime(): the curve at T = 0, i.e. 1 / 0.05 -
+// 0.005. Dividing a strike's curve by intensity^2 * this gives the share of that
+// strike's own peak light, which is what the channel's fade is shaped by (see
+// cgChannelFalloff). The share does not depend on how strong the stroke is, so a
+// weak stroke and a storm-core stroke fade over the same part of their lives.
+const float lightningCurvePeak = 19.995;
+
 // Height of whatever the bolt is landing on. A strike that was captured by a
 // lightning rod ends on the rod's tip instead of on the ground plane.
 float lightningGroundHeight(vec2 pos)
@@ -169,7 +176,30 @@ float lightningGroundHeight(vec2 pos)
   return 0.0;
 }
 
-vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity, float groundY)
+// How much of a stroke's tail is spent fading, instead of switching off.
+//
+// A return stroke's channel is written at mainBoltBrightness - a hundred thousand
+// HDR units, four decades over the point where the tonemap runs out of range. Fed
+// the intensity curve straight, as curve * mainBoltBrightness, the channel is
+// therefore pure white for the whole strike and then gone in the iteration the
+// curve reaches zero: the stroke's last lit iteration still carries 355 HDR units
+// (a storm core; the tonemap is white from 6.3 up), and the iteration after it
+// carries nothing at all. There is no frame in between. That is a switch, not a
+// fade - which is exactly what it looked like: the halo around the channel faded
+// while the channel itself vanished.
+//
+// So the channel's range is compressed, the way softHdrClamp() compresses the top
+// of the scene's: the share of the strike's peak light is raised to
+// cgChannelFalloff before it is multiplied by mainBoltBrightness, which pulls the
+// curve's last decades down into the band the display can actually show. At 1.6 a
+// stroke spends eight iterations - about 130 ms at 60 iterations per second -
+// coming down from white, and its last lit iteration is worth 29/255: the channel
+// has arrived at black before it goes instead of leaving from white. The peak of
+// every flicker is still exactly 1.0, i.e. the full 100000, so a stroke is as
+// over-bright as it ever was; only the way it lets go has changed.
+const float cgChannelFalloff = 1.6;
+
+vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity, float groundY, float strikeIntensity)
 {
   float boltHeight = max(pos.y - groundY, 0.02); // cloud base down to the ground / rod tip
   vec2 lightningTexCoord = texCoord;
@@ -202,14 +232,18 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   // was announcing had even started. A return stroke is a few tens of
   // microseconds of light: it should be there, whole, in the iteration it is
   // booked, and then flicker with the curve like every other strike.
-  float brightnessThreshold = 0.95;
-  currentLightningIntensity *= mainBoltBrightness;
+  //
+  // The brightness is the share of the strike's peak light, compressed so that
+  // the last of it lands where it can be seen; see cgChannelFalloff above.
+  float curveShare = clamp(currentLightningIntensity / max(lightningCurvePeak * pow(strikeIntensity, 2.0), 1e-6), 0.0, 1.0);
+  float channelBrightness = mainBoltBrightness * pow(curveShare, cgChannelFalloff);
 
+  float brightnessThreshold = 0.95;
   pixVal -= brightnessThreshold;
 
   pixVal = max(pixVal, 0.0);
 
-  pixVal *= currentLightningIntensity;
+  pixVal *= channelBrightness;
 
   const vec3 lightningCol = vec3(0.70, 0.57, 1.0); // 0.584, 0.576, 1.0
 
@@ -689,7 +723,8 @@ vec4 getAirColor(vec2 fragCoordIn)
     // rather than a sum, because six strikes at once must not light the sky six
     // times over.
     if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY) {
-      lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight(lightningPos));
+      lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight(lightningPos),
+                                             lightningData[INTENSITY]);
       screenFlash = max(screenFlash, currentLightningIntensity);
     }
 
