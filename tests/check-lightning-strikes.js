@@ -104,18 +104,16 @@ function strikeAnimEnd(strike) {
   const repeatPeriod = mapRange(random2d(strike.x, strike.y), 0, 1, 1.5, 3.0);
   const numFlashes = Math.floor(mapRange(random2d(f32(strike.x * 2.737250), f32(strike.y * 2.737250)), 0, 1, 1.0,
                                          Math.max(strike.intensity - 0.5, 0) * 2.0));
-  // An intra-cloud flash has no leader stage, so its curve starts one unit in and
-  // its light is over one unit earlier (see the IC pass in the display shader).
-  const leader = strike.intensity > LIGHTNING_IC_MAX_INTENSITY ? 1.0 : 0.0;
-  return start + 5.0 * (leader + repeatPeriod * numFlashes + 2.924);
+  // No leader stage: the display shader starts the intensity curve one unit in for
+  // every strike, so the light is over at T0 = period * flickers + 2.924.
+  return start + 5.0 * (repeatPeriod * numFlashes + 2.924);
 }
 
-// The light a strike puts out in a given iteration, exactly as the display
-// shader samples the curve: an IC flash skips the leader unit.
+// The light a strike puts out in a given iteration, exactly as the display shader
+// samples the curve - one unit in, for both kinds of strike.
 function lightOf(strike, iter) {
-  const time = calcLightningTime(strike.start, iter) +
-               (strike.intensity > LIGHTNING_IC_MAX_INTENSITY ? 0.0 : 1.0);
-  return lightningIntensityOverTime(time, [ strike.x, strike.y ], strike.intensity);
+  return lightningIntensityOverTime(calcLightningTime(strike.start, iter) + 1.0,
+                                    [ strike.x, strike.y ], strike.intensity);
 }
 
 /* ------------------------------------------------------- 1. the timing model */
@@ -199,36 +197,47 @@ check('the slot count agrees between app.js, common.glsl and this test',
   // of near-dark output on every single flash.
   const sample = [];
   for (let i = 0; i < 400; i++)
-    sample.push({ x : (i * 0.137) % 1, y : (i * 0.311) % 1, start : 100, intensity : 0.9 });
+    sample.push({
+      x : (i * 0.137) % 1, y : (i * 0.311) % 1, start : 100,
+      intensity : 0.75 + (i % 40) * 0.09 // the whole range the spawner can produce
+    });
 
   const peakOf = (strike) => {
     let peak = 0;
-    for (let iter = strike.start; iter <= strike.start + 40; iter++)
+    for (let iter = strike.start; iter <= strike.start + 130; iter++)
       peak = Math.max(peak, lightOf(strike, iter));
     return peak;
   };
 
+  // Every strike, cloud-to-ground included, is at its peak the moment it is
+  // booked. The leader stage used to be five iterations of a bolt held at one
+  // fixed brightness - it could not follow the curve, because the curve is still
+  // near zero while a leader would be crawling - and that fixed glow was the
+  // "frozen" flash: a static bright shape before the strike it was announcing.
   let worstFirstFraction = 1;
+  let cgChecked = 0;
   for (const strike of sample) {
-    const peak = strikeAnimEnd(strike) && peakOf(strike);
-    worstFirstFraction = Math.min(worstFirstFraction, peak > 0 ? lightOf(strike, strike.start) / peak : 1);
+    const peak = peakOf(strike);
+    if (peak <= 0) continue;
+    if (strike.intensity > LIGHTNING_IC_MAX_INTENSITY) cgChecked++;
+    worstFirstFraction = Math.min(worstFirstFraction, lightOf(strike, strike.start) / peak);
   }
-  check('an intra-cloud flash is at full brightness in the iteration it is booked',
+  check('a strike is at full brightness in the iteration it is booked',
     worstFirstFraction > 0.99,
-    'the dimmest first iteration of ' + sample.length + ' flashes is ' +
-    (worstFirstFraction * 100).toFixed(1) + '% of that flash\'s peak');
+    'the dimmest first iteration of ' + sample.length + ' strikes is ' +
+    (worstFirstFraction * 100).toFixed(1) + '% of that strike\'s peak');
+  check('the sample covers both kinds of strike', cgChecked > 40,
+    cgChecked + ' cloud-to-ground strikes in ' + sample.length);
 
-  // ... and the cloud-to-ground leader, which is wanted, is over in one iteration
-  // instead of five.
-  const speed = Number((displayShader.match(/leaderRevealSpeed\s*=\s*([\d.]+)/) || [])[1]);
-  check('a cloud-to-ground leader runs down its whole channel within one iteration',
-    speed >= 5.0 && 1.0 / speed <= 0.2,
-    'leaderRevealSpeed ' + speed + ' -> the channel is complete at lightningTime ' +
-    (1.0 / speed).toFixed(2) + ' = iteration +' + (5 * (1.0 / speed)).toFixed(1));
-
-  check('the intra-cloud pass starts the curve one unit in, matching strikeAnimEnd',
-    /lightningIntensityOverTime\(lightningTime \+ 1\.0, lightningPos/.test(displayShader),
-    'the IC pass has to skip the leader unit the slot manager no longer books for it');
+  // ... so no strike may carry a stage that is drawn at a brightness of its own
+  check('the display shader has no leader stage left',
+    !/leaderBrightness/.test(displayShader) && !/leaderRevealSpeed/.test(displayShader) &&
+    !/brightnessThreshold = 1\. - /.test(displayShader),
+    'a leader stage is a fixed brightness the curve cannot reach, i.e. a frozen glow');
+  check('both passes sample the curve at the same one-unit offset',
+    (displayShader.match(/lightningIntensityOverTime\(lightningTime \+ 1\.0, lightningPos/g) || []).length === 2,
+    'the cloud-to-ground slot loop and the intra-cloud pass have to agree, or a ' +
+    'stroke is drawn dark for its first iterations');
 }
 
 /* ---------------------------------------------------------- 2. the schedule */

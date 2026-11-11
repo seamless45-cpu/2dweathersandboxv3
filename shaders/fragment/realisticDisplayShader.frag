@@ -139,7 +139,7 @@ const float lightningTexAspect = lightningTexRes.x / lightningTexRes.y;
 float calcLightningTime(float startIterNum)
 {
   float lightningTime = iterNum - startIterNum;
-  return lightningTime / 5.0; // 30.0    0. to 1. leader stage, 1. + Flash stage
+  return lightningTime / 5.0; // 5 iterations per unit of the intensity curve
 }
 
 float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
@@ -189,29 +189,21 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
 
   float pixVal = texture(lightningTex, lightningTexCoord).r;
 
-  const float branchShowFactor = 2.5;     // 1.5
-  const float leaderBrightness = 50000.;  // 200.0
   const float mainBoltBrightness = 100000.; // 100000.
 
-  // The leader only gets a fraction of one iteration to run down the channel.
-  // At the speed a stepped leader actually moves this is still slow motion, and
-  // it stops a bolt taking five iterations (a fifth of a second on a slow
-  // machine) to appear: the strike lands, and the whole channel is there.
-  const float leaderRevealSpeed = 6.0;
-
-  float leaderReveal = min(lightningTime * leaderRevealSpeed, 1.);
-
-  float brightnessThreshold = 1. - leaderReveal * branchShowFactor;
-  brightnessThreshold += lightningTexCoord.y * branchShowFactor; // grow from the top to the bottem
-
-  brightnessThreshold = clamp(brightnessThreshold, 0., 1.);
-
-  if (lightningTime > 1.0) { // main bolt
-    brightnessThreshold = 0.95;
-    currentLightningIntensity *= mainBoltBrightness;
-  } else {
-    currentLightningIntensity = leaderBrightness;
-  }
+  // The whole channel, at once.
+  //
+  // A stepped leader is a real thing, but it is not the part of a return stroke
+  // anybody sees, and drawing it as a lit stage cost more than it was worth: a
+  // strike spent its first iterations with the bolt held at one fixed brightness
+  // (it could not follow the flicker curve, because the curve is still near zero
+  // while a leader would be crawling), so the glow on screen was static - a frozen
+  // bright shape for a fifth of a second on a slow machine, before the flash it
+  // was announcing had even started. A return stroke is a few tens of
+  // microseconds of light: it should be there, whole, in the iteration it is
+  // booked, and then flicker with the curve like every other strike.
+  float brightnessThreshold = 0.95;
+  currentLightningIntensity *= mainBoltBrightness;
 
   pixVal -= brightnessThreshold;
 
@@ -291,6 +283,26 @@ const float icBrightness = 0.58;
 // channels they surround - the halo is light *around* the network, and a halo as
 // bright as a channel would fill the gaps between channels and turn the flash
 // into the bright slab this whole pass exists to avoid.
+// ------------------------------------------------ the glare on a channel ---
+//
+// The halo above is light *around* the network and it has to stay dimmer than the
+// channels it surrounds, or the gaps between channels fill in and the flash turns
+// into the white slab this whole pass exists to avoid. A channel's own glare is
+// the opposite kind of light: it is the part of a flash that is brighter than the
+// frame can hold, and it is what a cloud-to-ground bolt has always had (it is
+// written at a hundred thousand HDR units and the bloom's bright pass - knee 32 -
+// turns that surplus into the halo around it).
+//
+// An intra-cloud flash could never have one, because everything it wrote was
+// squeezed under 1.0 before it reached the buffer. So the two rings that hug a
+// channel - a flare a couple of screen pixels wide and the light it scatters a few
+// pixels out - are lifted to their own ceiling instead, where the bright pass can
+// see them. The wide ring, the cloud glow and the tiers of the network itself are
+// not lifted, so the glow hangs on the channels and not on the whole sprite.
+const vec3 icFlareCol = vec3(0.86, 0.90, 1.0); // hotter and less blue than the halo
+const float icFlareBoost = 55.0;               // lifts a channel's glare past white
+const float icFlareCeiling = 220.0;            // its own ceiling, far inside a 16F texel
+
 const float icGlowTightBias = 1.5; // extra LOD on top of the sampling LOD
 const float icGlowMidLod = 4.0;
 const float icGlowWideLod = 6.5;
@@ -303,7 +315,11 @@ const float icGlowWide = 0.30;
 // arrives through the cloud, which takes the violet out of it.
 const vec3 icGlowCol = vec3(0.64, 0.70, 1.0);
 
-vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningIntensity,
+// Returns the flash in .rgb and the channel glare in .a. The two go through
+// different ceilings in computeICLight(): the flash has to stay inside the range a
+// thin channel can carry, while the glare is the part that is allowed past white
+// so that a channel carries a glow the way a cloud-to-ground bolt does.
+vec4 displayICLightning(vec2 pos, float lightningTime, float currentLightningIntensity,
                         float tileSeed, float artPerPixel)
 {
   // The flash is always the same size and orientation on screen: the artwork is
@@ -319,7 +335,7 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   // rectangle: the light has faded out to nothing by 0.62 anyway.
   float reach = max(abs(local.x), abs(local.y));
   if (reach > 0.62)
-    return vec3(0.0);
+    return vec4(0.0);
 
   // Which of the eight networks this strike uses, and which way round it is
   // mirrored. The hash runs on the strike's own start iteration and position, so
@@ -353,7 +369,7 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   // light with channels in it instead of a hard-edged rectangle of artwork.
   float haloReveal = clamp((spread * 1.30 - radial * 0.55) / 0.45, 0.0, 1.0);
   if (reveal <= 0.0 && haloReveal <= 0.0)
-    return vec3(0.0);
+    return vec4(0.0);
 
   // Fade the outer part of the sprite out, so a branch never ends in a hard cut
   // where the artwork stops. The artwork keeps a margin of its own, so this only
@@ -383,23 +399,34 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
   // The halo. The widest ring is fetched first and on its own: most of the screen
   // is nowhere near a flash, and for those pixels it is the only fetch paid.
   float glow = 0.0;
+  float glare = 0.0;
   if (haloReveal > 0.0) {
     float wide = textureLod(icLightningTex, vec3(uv, layer), icGlowWideLod).r;
     glow = wide * icGlowWide;
     if (wide > 0.0 || channel > 0.0) {
-      glow += textureLod(icLightningTex, vec3(uv, layer), icGlowMidLod).r * icGlowMid;
+      float mid = textureLod(icLightningTex, vec3(uv, layer), icGlowMidLod).r;
       // the flare is measured in screen pixels, so it keeps the artwork's own
       // sampling LOD and only adds a couple of levels to it
-      glow += textureLod(icLightningTex, vec3(uv, layer), artLod + icGlowTightBias).r * icGlowTight;
+      float tight = textureLod(icLightningTex, vec3(uv, layer), artLod + icGlowTightBias).r;
+      glow += mid * icGlowMid;
+      glow += tight * icGlowTight;
+      // The two rings that hug a channel are also the glare on it: this is the
+      // light that is allowed past white (see icFlareCeiling), so a channel
+      // blooms the way a bolt does. The wide ring is deliberately not in here -
+      // it is the cloud lit from the inside, and that has to stay under the
+      // channels or the whole sprite turns into the white slab this pass exists
+      // to avoid.
+      glare = tight * icGlowTight + mid * icGlowMid * 0.55;
     }
     glow *= haloReveal * glowWindow;
+    glare *= haloReveal * glowWindow;
   }
 
   // The channel is white and the light around it is cold. Adding them keeps the
   // channel readable inside its own halo, which is the whole difference between
   // a flash and a bright smear.
   vec3 light = vec3(core) + icGlowCol * glow;
-  return light * icPower * icBrightness * icEnergy;
+  return vec4(light * icPower * icBrightness * icEnergy, glare * icPower * icBrightness * icEnergy);
 }
 
 
@@ -418,6 +445,7 @@ vec3 displayICLightning(vec2 pos, float lightningTime, float currentLightningInt
 vec3 computeICLight()
 {
   vec3 icLight = vec3(0.0);
+  float icGlare = 0.0; // light past white, on the channels themselves
 
   // How many artwork pixels one screen pixel covers, worked out once, outside
   // the slot loop: screen-space derivatives inside a loop with `continue` are
@@ -436,27 +464,21 @@ vec3 computeICLight()
     vec2 lightningPos = lightningData.xy;
     float lightningTime = calcLightningTime(lightningStartIterNum);
 
-    // An intra-cloud flash has no leader stage. The intensity curve spends its
-    // first unit (5 iterations) ramping a stepped leader down a channel, which is
-    // a cloud-to-ground idea: an IC flash is a network lighting up inside the
-    // cloud all at once, and nothing in its artwork grows. For it that first unit
-    // is not a ramp, it is five iterations of a strike that is on screen and
-    // emitting almost nothing - the reason a flash took a beat to "fire up"
-    // instead of just happening. Skipping the unit puts an IC flash at its peak
-    // in the iteration it is booked; the reveal below still fans it out from the
-    // centre, which is a couple of iterations and visible light.
-    //
-    // strikeAnimEnd() knows: an IC strike ends one unit earlier than a CG one.
+    // The curve starts one unit in: no strike has a leader stage to climb out of,
+    // so a flash is at its peak brightness in the iteration it is booked and the
+    // curve is what the player sees from the first frame on (strikeAnimEnd knows).
     float icIntensity = lightningIntensityOverTime(lightningTime + 1.0, lightningPos, lightningData[INTENSITY]);
     if (icIntensity <= 0.0)
       continue;
 
-    icLight += displayICLightning(lightningPos, lightningTime, icIntensity,
-                                  lightningStartIterNum * 0.6180339 + float(slot) * 11.7,
-                                  artPerPixel);
+    vec4 ic = displayICLightning(lightningPos, lightningTime, icIntensity,
+                                 lightningStartIterNum * 0.6180339 + float(slot) * 11.7,
+                                 artPerPixel);
+    icLight += ic.rgb;
+    icGlare += ic.a;
   }
 
-  if (dot(icLight, vec3(1.0)) <= 0.0)
+  if (dot(icLight, vec3(1.0)) <= 0.0 && icGlare <= 0.0)
     return icLight; // nothing running: no cloud sample needed
 
   // Seen through the cloud it is in. A channel has to stay readable against the
@@ -483,7 +505,25 @@ vec3 computeICLight()
   // the flash is brightest. 1 - exp(-x) passes small values almost untouched,
   // gives the trunk a shoulder, and cannot exceed 1, so every tier stays a
   // different colour on screen instead of all of them clipping together.
-  return vec3(1.0) - exp(-gained);
+  vec3 flashLight = vec3(1.0) - exp(-gained);
+
+  // The glare on the channels goes through a second, much higher ceiling.
+  //
+  // A cloud-to-ground bolt is written at a hundred thousand HDR units and gets a
+  // halo out of the bloom's bright pass, which only sees light above its knee
+  // (32). An intra-cloud flash could never have one: everything it wrote was
+  // squeezed under 1.0 by the knee above, and the frame only carries halo-making
+  // light above 32. So the two rings that hug a channel - a screen-pixel flare
+  // and the light it scatters a few pixels out - are kept out of that knee and
+  // written against their own ceiling instead. They are the glare of the channel,
+  // the part that is allowed to be brighter than white, and the bright pass picks
+  // them up; the flash, the wide cloud glow and the tiers above them are not
+  // touched by it, so the network keeps its structure instead of turning into the
+  // white slab this pass exists to avoid.
+  vec3 glare = icFlareCol * icGlare * icFlareBoost * (1.0 + icCloudScatter * cloudOpacity);
+  vec3 glareLight = vec3(icFlareCeiling) * (1.0 - exp(-max(glare, vec3(0.0)) / icFlareCeiling));
+
+  return flashLight + glareLight;
 }
 
 
@@ -607,7 +647,10 @@ vec4 getAirColor(vec2 fragCoordIn)
 
     vec2 lightningPos = lightningData.xy;
     float lightningTime = calcLightningTime(lightningStartIterNum);
-    float currentLightningIntensity = lightningIntensityOverTime(lightningTime, lightningPos, lightningData[INTENSITY]);
+    // One unit in, for both kinds: there is no leader stage to climb out of, so a
+    // strike is at its peak brightness in the iteration it is booked and the curve
+    // is what the player sees from the first frame on (see strikeAnimEnd).
+    float currentLightningIntensity = lightningIntensityOverTime(lightningTime + 1.0, lightningPos, lightningData[INTENSITY]);
     if (currentLightningIntensity <= 0.0)
       continue;
 
@@ -966,29 +1009,29 @@ void main()
 
 
   // ------------------------------------------------------------ lightning rods
+  //
+  // A rod is the one piece of scenery the player builds, so it is drawn as a real
+  // air terminal instead of a stick: a wide pedestal where it is grounded, a mast
+  // that tapers to a point, a cylindrical highlight down its length, and a corona
+  // that lives at the tip. When a mast takes a strike the current is drawn down it
+  // too - the light runs from the tip toward the ground - so a capture is
+  // something to watch rather than something to infer from where the bolt landed.
+  //
   // Drawn last so the mast stands in front of the terrain it is planted on, and
   // lit by the same sunlight / lightning light as everything else.
+  const float rodBaseCells = 1.6;   // height of the pedestal above the ground
+  const float rodCoronaReach = 3.0; // how far the tip's own glow reaches, in cells
   for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
     if (i >= rodCount)
       break;
     vec2 rod = rodPositions[i];
     float dxCells = (texCoord.x - rod.x) * resolution.x; // horizontal offset in cells
     float dyCells = (texCoord.y - rod.y) * resolution.y; // height above the surface, in cells
-    if (dyCells < -1.0 || dyCells > rodHeight)
+    if (dyCells < -1.5 || dyCells > rodHeight + rodCoronaReach)
       continue;
 
-    float alongRod = clamp(dyCells / max(rodHeight, 1.), 0., 1.);        // 0 base .. 1 tip
-    float halfWidth = max(rodThickness * mix(1.0, 0.25, alongRod), 0.35); // tapered mast
-    if (abs(dxCells) > halfWidth)
-      continue;
-
-    float acrossRod = abs(dxCells) / halfWidth;                           // 0 centre .. 1 edge
-    color = mix(vec3(0.07, 0.08, 0.10), vec3(0.50, 0.54, 0.62), 1. - acrossRod * 0.8);
-    shadowLight = max(shadowLight, 0.35);                                 // never fully black
-    opacity = 1.0;
-
-    // The mast tip glows a little on its own and lights up when it takes a hit.
-    float tipGlow = smoothstep(0.72, 1.0, alongRod);
+    // The current this mast is carrying, if it has taken a strike: the same curve
+    // at the same one-unit offset the bolt itself is drawn with.
     float strikeGlow = 0.0;
     for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
       vec4 strikeData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
@@ -996,10 +1039,41 @@ void main()
         continue;
       if (iterNum < strikeData[START_ITERNUM] || iterNum >= strikeAnimEnd(strikeData))
         continue; // this strike is not running
-      strikeGlow = max(strikeGlow, lightningIntensityOverTime(calcLightningTime(strikeData[START_ITERNUM]), strikeData.xy, strikeData[INTENSITY]));
+      strikeGlow = max(strikeGlow, lightningIntensityOverTime(calcLightningTime(strikeData[START_ITERNUM]) + 1.0,
+                                                              strikeData.xy, strikeData[INTENSITY]));
     }
-    emittedLight += tipGlow * (vec3(0.10, 0.13, 0.30) + vec3(0.55, 0.68, 1.0) * strikeGlow * 60000.0);
+
+    float alongRod = clamp(dyCells / max(rodHeight, 1.), 0., 1.);                      // 0 base .. 1 tip
+    float mastWidth = max(rodThickness * mix(0.85, 0.10, pow(alongRod, 0.85)), 0.35);  // to a point at the top
+    float baseWidth = max(rodThickness * mix(2.6, 0.85, clamp(dyCells / rodBaseCells, 0., 1.)), 0.6);
+    float halfWidth = dyCells < rodBaseCells ? baseWidth : mastWidth;
+    bool onMetal = dyCells >= -0.75 && abs(dxCells) <= halfWidth;
+
+    if (onMetal) {
+      float acrossRod = clamp(abs(dxCells) / halfWidth, 0., 1.);  // 0 centre .. 1 edge
+      // Dark steel with the light coming down one side of it, so the mast reads as
+      // round instead of as a flat strip, and a bright edge where it turns away.
+      vec3 steel = mix(vec3(0.62, 0.67, 0.76), vec3(0.10, 0.11, 0.13), pow(acrossRod, 0.75));
+      steel += vec3(0.30, 0.34, 0.42) * pow(acrossRod, 4.0);
+      color = mix(steel, vec3(1.0, 0.97, 0.88), clamp(strikeGlow * 0.5, 0.0, 1.0));
+      shadowLight = max(shadowLight, 0.35);                       // never fully black
+      opacity = 1.0;
+    }
+
+    // The corona at the tip. It is drawn as light rather than as metal, so it
+    // reaches past the mast into the air, and it is what makes a rod visible at all
+    // against a night sky.
+    float tipDistance = length(vec2(dxCells, dyCells - rodHeight));
+    float corona = tipDistance < rodCoronaReach
+      ? exp(-tipDistance / max(rodThickness * 0.9, 1.2))
+      : 0.0;
+    emittedLight += vec3(0.35, 0.45, 0.85) * corona * (0.30 + strikeGlow * 40.0);
+
+    // A captured strike runs down the mast, brightest at the point it entered.
+    float tipCore = smoothstep(0.80, 1.0, alongRod);
+    emittedLight += vec3(0.55, 0.68, 1.0) * strikeGlow * (tipCore * 120.0 + 2500.0) * (onMetal ? 1.0 : 0.20);
   }
+
 
   float scatering = clamp(map_range(abs(sunAngle), 75. * deg2rad, 90. * deg2rad, 0., 1.), 0., 1.); // how red the sunlight is
 
