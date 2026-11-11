@@ -68,10 +68,11 @@ check('both lightning programs declare the rod uniforms',
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(locationShader) &&
   /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(displayShader));
 check('every strike is drawn with the same bolt, with no dispatch on kind',
-  /lightningBoltLight \+= displayLightning\(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight\(lightningPos\),/
+  /lightningBoltLight \+= displayLightning\(lightningPos, lightningTime, currentLightningIntensity\);/
     .test(displayShader) &&
-  !/displayLightning\([^)]*LIGHTNING_IC_MAX_INTENSITY/.test(displayShader),
-  'the artwork no longer depends on which kind of strike it is');
+  !/displayLightning\([^)]*LIGHTNING_IC_MAX_INTENSITY/.test(displayShader) &&
+  !/lightningGroundHeight/.test(displayShader),
+  'one call, one artwork, and no ground anchor: the bolt runs to the bottom of the sim as it shipped');
 
 /*
  * One artwork.
@@ -207,70 +208,57 @@ const softHdrClamp = (value) => {
   check('the emission is written straight, as the original wrote it',
     /\+ emittedLight\), opacity\);/.test(displayShader) && !/emitted \/ max\(opacity/.test(displayShader),
     'no premultiplication: the fragment is the fragment');
-  check('the channel is eased out, so the fade is a fade and not a switch',
-    /pixVal \*= channelBrightness;/.test(displayShader) &&
-    /pow\(max\(curveShare, 1e-6\), cgChannelFalloff\)/.test(displayShader),
-    'the easing is the one thing the later rounds had that was asked back');
+  check('the channel is written as the shipped code wrote it',
+    /pixVal \*= currentLightningIntensity;/.test(displayShader) &&
+    !/curveShare/.test(displayShader) && !/cgChannelFalloff/.test(displayShader) &&
+    !/lightningCurvePeak/.test(displayShader),
+    'the curve times mainBoltBrightness, straight - no envelope and no easing of the tail');
 }
 
-// The bloom is where "brighter than white" is actually visible, and it is built
-// from a separate set of 16-bit float buffers, so it needs its own bound.
+// The bloom is where a bolt's light actually shows, and the shipped app took two
+// percent of the whole frame into it and nothing else. That is what is back: no
+// knee to single the channel out, no ceiling of its own, and no second lobe on the
+// clouds. The one thing kept is the NaN backstop at the read, which cannot change
+// the picture and is the guard the HDR chain is required to have.
 {
   const brightParts = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'isolateBrightPartsShader.frag'), 'utf8');
   const post = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'postProcessingShader.frag'), 'utf8');
-  const num = (source, name) => Number((source.match(new RegExp('const float ' + name + ' = ([\\d.]+);')) || [])[1]);
-  const ambientGain = num(brightParts, 'ambientGain');
-  const brightKnee = num(brightParts, 'brightKnee');
-  const brightGain = num(brightParts, 'brightGain');
-  const brightCeiling = num(brightParts, 'brightCeiling');
 
-  check('the bright pass keeps the ambient veil the scene always had',
-    Math.abs(ambientGain - 0.02) < 1e-6, 'ambientGain ' + ambientGain);
-  check('its knee sits above every cloud and below every bolt',
-    brightKnee > 8 && brightKnee < 1000, 'knee ' + brightKnee);
-  check('the bright pass scatters far more light than the ambient veil',
-    brightGain > ambientGain * 10, 'brightGain ' + brightGain + ' vs ambientGain ' + ambientGain);
-  check('one level of the bloom pyramid cannot overflow a 16-bit float',
-    brightCeiling > 1000 && brightCeiling * 12 < 65504,
-    'ceiling ' + brightCeiling + ' x 12 levels = ' + brightCeiling * 12);
-  check('the bright pass is bounded and cannot go infinite',
-    brightParts.includes('over = brightCeiling * (1.0 - exp(-over / brightCeiling));'));
+  check('the bright pass takes the two percent the app always took',
+    /outputCol \*= 0\.02;/.test(brightParts) && /fragmentColor = vec3\(outputCol\);/.test(brightParts),
+    'one multiply, the shipped one');
+  check('nothing in the bright pass singles the channel out',
+    !/brightKnee/.test(brightParts) && !/brightCeiling/.test(brightParts) &&
+    !/brightGain/.test(brightParts) && !/ambientGain/.test(brightParts),
+    'no knee, no ceiling, no second gain');
+  check('the bloom composite is the shipped 0.990',
+    /color \+= safeSample\(texture\(bloomTex, uv\)\.rgb\) \* 0\.990;/.test(post));
   check('the tonemap reads both buffers through a NaN and infinity guard',
     /vec3 safeSample\(vec3 value\)/.test(post) &&
-    /color \+= safeSample\(texture\(bloomTex, uv\)\.rgb\) \* 0\.990;/.test(post) &&
     /color = safeSample\(texture\(hdrTex, uv\)\.rgb\);/.test(post),
     'postProcessingShader.frag has to guard what it reads');
 }
 
-// A cloud-to-ground stroke lights its own neighbourhood and no further: the two
-// lobes on the clouds around it are the original values, and there is no
-// frame-wide term any more. Later rounds lifted the whole picture and carried the
-// flash into the sky through the additive pass; both went with the look that was
-// asked for back, so these checks hold the original numbers instead.
-const lightningCurvePeak = (intensity) => 20.0 * intensity * intensity; // 1/(T*2)^3 at T0 = 0
+// A cloud-to-ground stroke lights its own neighbourhood and no further: one lobe
+// on the clouds around the channel, at the value the app shipped with, and no
+// frame-wide term.
 {
   const onLift = Number((displayShader.match(/#define lightningOnLightBrightness ([\d.]+)/) || [])[1]);
-  const skyLift = Number((displayShader.match(/#define lightningSkyLightBrightness ([\d.]+)/) || [])[1]);
 
   check('a cloud-to-ground stroke lights the clouds around it',
-    Number.isFinite(onLift) && /lightningOnLight = lightningOnLightBrightness \/ \(distanceSquared \+ 0\.03\)/.test(displayShader) &&
+    onLift === 0.004 &&
+    /float lightningOnLight = lightningOnLightBrightness \/ \(pow\(length\(dist\), 2\.\) \+ 0\.03\);/.test(displayShader) &&
     /onLight \+= vec3\(lightningOnLight\)/.test(displayShader),
     'the tight lobe has to sit on the channel it came from');
-  check('at the original strength',
-    onLift === 0.004 && skyLift === 0.0011,
-    'on-light ' + onLift + ', sky lobe ' + skyLift + ' - the values the app shipped with');
-  check('and the wide lobe is the weaker of the two',
-    skyLift < onLift / 2,
-    'sky ' + skyLift + ' against ' + onLift + ': a return stroke lights its own neighbourhood, not the whole sky');
+  check('there is no second, wide lobe any more',
+    !/lightningSkyLightBrightness/.test(displayShader) && !/distanceSquared/.test(displayShader),
+    'one lobe, as shipped');
   check('there is no frame-wide flash any more',
     !/lightningScreenFlashBrightness/.test(displayShader) &&
     !/screenFlash/.test(displayShader) &&
     !/icScreenFlash/.test(displayShader),
     'the screen-wide light of the later rounds is gone with the rest of the look');
-  check('and there is no second light pass for it to carry anything into',
-    !/cgFlash/.test(displayShader) && !/screenFlash/.test(displayShader),
-    'the frame-wide and additive light terms went with the pass that used them');
-  check('the lobes are driven by the strike\'s own curve',
+  check('the lobe is driven by the strike\'s own curve',
     /lightningOnLight \*= currentLightningIntensity;/.test(displayShader),
     'so a weak flash lights less than a storm core');
 }
