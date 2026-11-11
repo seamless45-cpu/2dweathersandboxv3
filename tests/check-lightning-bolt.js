@@ -206,6 +206,47 @@ check('and the trunk stays inside the sprite',
     trunkRows + ' rows carry the channel, and it wanders as it goes');
 }
 
+/* ---------------------------------------- 5. the artwork at load time */
+
+/*
+ * A tile is a 2500 x 5000 canvas in a worker (a 50 MB backing store, drawn with
+ * tens of thousands of line segments) and then a 12.5 MB texture. Doing that at
+ * load - which is what this did, two at once, in the middle of shader compilation
+ * and buffer creation - is the hitch at the end of the loading bar, and on a
+ * device with a tight memory budget it takes the graphics context with it.
+ */
+{
+  const app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  const workerBlock = app.slice(app.indexOf('function startLightningTextureWorker'),
+                                app.indexOf('const emptyLightningTexturePixel'));
+
+  check('no artwork is generated while the loading screen is up',
+    !/for \(let i = 0; i < Math\.min\(2/.test(app) &&
+    /setTimeout\(startLightningTextureWorker, 1200\);/.test(app),
+    'the first tile is asked for after the first frames, not during them');
+  check('one worker at a time, and never twice in a second',
+    /lightningTextureWorkerBusy/.test(workerBlock) &&
+    /performance\.now\(\) - lightningTextureLastStart < 1000/.test(workerBlock) &&
+    !/startLightningTextureWorker\(\);\s*\}\);/.test(workerBlock),
+    'the old code chained the next worker straight out of onmessage');
+  check('the artwork is capped at four tiles',
+    /const numLightningTextures = 4;/.test(app) &&
+    /lightningTexturesReady >= numLightningTextures/.test(workerBlock),
+    '12.5 MB a tile: ten of them is 125 MB of texture');
+  check('the display never samples a tile that has not been drawn yet',
+    /const lightningTexNum = Math\.min\(wantedLightningTexNum, Math\.max\(lightningTexturesReady - 1, 0\)\);/.test(app),
+    'a missing tile must not mean an invisible bolt');
+  check('a failed worker backs off instead of retrying every frame',
+    /lightningTextureFailures\+\+/.test(workerBlock) &&
+    /lightningTextureFailures >= 4/.test(workerBlock),
+    'four attempts, six seconds apart, then it gives up quietly');
+  check('a lost graphics context is reported instead of leaving a black tab',
+    /addEventListener\('webglcontextlost'/.test(app) &&
+    /event\.preventDefault\(\);/.test(app) &&
+    /graphicsContextLost\)\s*\/\/ nothing left to draw with/.test(app),
+    'the overlay offers a reload; draw() stops instead of writing into a dead context');
+}
+
 restoreCanvas();
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
