@@ -169,19 +169,41 @@ float lightningGroundHeight(vec2 pos)
   return 0.0;
 }
 
-// A cloud-to-ground channel, drawn the way the original app drew it.
+// The peak of lightningIntensityOverTime(): the curve at T = 0, i.e. 1 / 0.05 -
+// 0.005. Dividing a strike's own curve by intensity^2 * this gives the share of
+// that strike's peak light, which is what the channel's fade is shaped by (see
+// cgChannelFalloff). The share does not depend on how strong the stroke is, so a
+// weak stroke and a storm core let go over the same part of their lives.
+const float lightningCurvePeak = 19.995;
+
+// How slowly a stroke's channel lets go.
 //
-// The bolt is written at a hundred thousand HDR units - four decades over the
-// point where the tonemap runs out of range - so the channel itself is clipped
-// white for as long as it is lit, and what a player sees of a stroke is the light
-// it throws around itself: the two lobes on its own clouds, and the halo the
-// bloom's bright pass builds out of the surplus. Its colour is the original
-// violet-white, and its brightness is the intensity curve times
-// mainBoltBrightness with nothing reshaping either: a stroke is white from the
-// iteration it is booked until the iteration the curve reaches zero, and then it
-// is gone. That is the look that was asked for back - the compressions and the
-// cooling colour that a later round put in here are gone with it.
-vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity, float groundY)
+// A return stroke's channel is written at mainBoltBrightness - a hundred thousand
+// HDR units, four decades over the point where the tonemap runs out of range - so
+// fed the intensity curve straight, as curve * mainBoltBrightness, it is pure
+// white for the whole strike and then gone in the iteration the curve reaches
+// zero. That is a switch, not a fade, and it is what the channel used to do: on
+// screen the halo dwindled and the line itself disappeared between two frames.
+//
+// Raising the share of the strike's peak to cgChannelFalloff before multiplying by
+// mainBoltBrightness pulls the tail of the curve down into the band the display
+// can show, so the channel comes down through greys and arrives at black instead
+// of leaving from white. The exponent is how much of the stroke's life is spent
+// fading: at 1.6 a stroke was down to its last lit frame in nine iterations (about
+// 150 ms); 2.2 stretches the same tail over twelve or thirteen (about 200 ms),
+// which is what "the fade is a bit too fast" was asking for. Every flicker peak is
+// still exactly 1.0, i.e. the full 100000, so a stroke is as over-bright as it ever
+// was - only the way it lets go changes.
+const float cgChannelFalloff = 2.2;
+
+// A cloud-to-ground channel: the original artwork, colour and leader, and a fade
+// that slows down instead of switching off.
+//
+// The bolt is written at a hundred thousand HDR units, so what a player sees of a
+// stroke is the light it throws around itself - the two lobes on its own clouds and
+// the halo the bloom's bright pass builds out of the surplus - and, at the end, the
+// channel coming down through grey to black (see cgChannelFalloff).
+vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity, float groundY, float strikeIntensity)
 {
   float boltHeight = max(pos.y - groundY, 0.02); // cloud base down to the ground / rod tip
   vec2 lightningTexCoord = texCoord;
@@ -218,18 +240,23 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
 
   brightnessThreshold = clamp(brightnessThreshold, 0., 1.);
 
+  float channelBrightness;
   if (lightningTime > 1.0) { // main bolt
     brightnessThreshold = 0.95;
-    currentLightningIntensity *= mainBoltBrightness;
+    // The share of this stroke's own peak light, eased out so the tail of the
+    // curve lands where the display can show it; see cgChannelFalloff. pow(0, n)
+    // is 0 on paper and has been NaN on real drivers, so the base is floored.
+    float curveShare = clamp(currentLightningIntensity / max(lightningCurvePeak * strikeIntensity * strikeIntensity, 1e-6), 0.0, 1.0);
+    channelBrightness = mainBoltBrightness * pow(max(curveShare, 1e-6), cgChannelFalloff);
   } else {
-    currentLightningIntensity = leaderBrightness;
+    channelBrightness = leaderBrightness;
   }
 
   pixVal -= brightnessThreshold;
 
   pixVal = max(pixVal, 0.0);
 
-  pixVal *= currentLightningIntensity;
+  pixVal *= channelBrightness;
 
   const vec3 lightningCol = vec3(0.70, 0.57, 1.0); // 0.584, 0.576, 1.0
 
@@ -685,7 +712,8 @@ vec4 getAirColor(vec2 fragCoordIn)
     // Cloud-to-ground strokes light the scene here; intra-cloud flashes are the
     // additive pass, so they only contribute their light-on-objects term below.
     if (lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY)
-      lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight(lightningPos));
+      lightningBoltLight += displayLightning(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight(lightningPos),
+                                             lightningData[INTENSITY]);
 
     // The light a strike throws on the clouds around it: one tight lobe that
     // blows out the cloud right next to the channel, and one wide lobe that lifts

@@ -264,18 +264,26 @@ check('the slot count agrees between app.js, common.glsl and this test',
     'a mast has to light up with the channel that struck it, not a unit later');
 }
 
-/* ----------------------------- 1c. the channel, as the original drew it */
+/* -------------------------------- 1c. how a stroke's channel lets go */
 
 {
-  // The channel is the line of the bolt itself, and it is the one part of a strike
-  // written four decades over the point where the tonemap runs out of range: the
-  // intensity curve times mainBoltBrightness, white for as long as the curve is
-  // above zero and gone the iteration it is not. Later rounds put a compression
-  // and a cooling colour in here; the look was asked for back, so they are gone,
-  // and these checks hold the original constants instead.
+  // The channel - the line of the bolt itself - is the one part of a strike that
+  // is written four decades over the point where the tonemap runs out of range.
+  // Fed the intensity curve straight, as curve * mainBoltBrightness, it is white
+  // for every iteration of the strike and then gone in the iteration the curve
+  // reaches zero: a switch, which is what it looked like - the halo dwindled and
+  // the line disappeared between two frames.
+  //
+  // The display shader raises the share of the strike's peak light to
+  // cgChannelFalloff before multiplying by mainBoltBrightness, which pulls the
+  // tail of the curve down into the band the display can show. These checks run
+  // the real curve through the real constants and ask what one pixel of the
+  // channel is worth, iteration by iteration, to the iteration after the end.
   const HDR_CEILING = defineValue(common, 'HDR_CEILING');
   const mainBoltBrightness = Number((displayShader.match(/const float mainBoltBrightness = ([\d.]+);/) || [])[1]);
   const leaderBrightness = Number((displayShader.match(/const float leaderBrightness = ([\d.]+);/) || [])[1]);
+  const cgChannelFalloff = Number((displayShader.match(/const float cgChannelFalloff = ([\d.]+);/) || [])[1]);
+  const lightningCurvePeak = Number((displayShader.match(/const float lightningCurvePeak = ([\d.]+);/) || [])[1]);
 
   const softHdrClamp = (value) => Number.isNaN(value) ? 0 : HDR_CEILING * (1 - Math.exp(-Math.max(value, 0) / HDR_CEILING));
   const toneMap = (hdr) => {
@@ -284,20 +292,46 @@ check('the slot count agrees between app.js, common.glsl and this test',
     return 255 * Math.pow(aces, 1 / 2.2);
   };
   // what a pixel of the channel is written at, for a share of the strike's peak
-  const channelBrightness = (share) => mainBoltBrightness * Math.min(Math.max(share, 0), 1);
+  const channelBrightness = (share) => mainBoltBrightness * Math.pow(Math.min(Math.max(share, 0), 1), cgChannelFalloff);
+  const switchedBrightness = (share) => mainBoltBrightness * Math.min(Math.max(share, 0), 1); // the switch it replaced
 
   check('the channel is written at the original hundred thousand HDR units',
-    mainBoltBrightness === 100000,
-    'mainBoltBrightness ' + mainBoltBrightness + ' (the leader holds at ' + leaderBrightness + ')');
+    mainBoltBrightness === 100000 && leaderBrightness === 50000,
+    'mainBoltBrightness ' + mainBoltBrightness + ', leaderBrightness ' + leaderBrightness);
+  check('the fade is the slower of the two the shader has had',
+    Number.isFinite(cgChannelFalloff) && cgChannelFalloff >= 2.0 && cgChannelFalloff <= 2.6,
+    'cgChannelFalloff ' + cgChannelFalloff + ' (1.6 gave a nine-iteration fade, which was too quick)');
+  check('the channel still normalizes by the curve\'s own peak, at every intensity',
+    [ 0.95, 1.4, 2.5, 4.5 ].every((i) => Math.abs(lightningIntensityOverTime(1.0, [ 0.5, 0.5 ], i) /
+                                                (lightningCurvePeak * i * i) - 1) < 1e-3),
+    'lightningCurvePeak ' + lightningCurvePeak + ' vs the curve at T = 0: ' +
+      lightningIntensityOverTime(1.0, [ 0.5, 0.5 ], 2.5).toFixed(3) + ' at intensity 2.5');
 
   // the channel, iteration by iteration, to the end of the strike and one past it
   const channelOverTime = (strike, brightness) => {
     const end = Math.ceil(strikeAnimEnd(strike));
-    const peak = 19.995 * strike.intensity * strike.intensity;
+    const peak = lightningCurvePeak * strike.intensity * strike.intensity;
     const seq = [];
     for (let iter = strike.start; iter <= end + 1; iter++)
       seq.push(toneMap(brightness(cgLightOf(strike, iter) / peak)));
     return seq;
+  };
+  // The fade: the last unbroken run of *lit* iterations once the channel has left
+  // white for good.
+  const fadeOf = (seq) => {
+    let last = seq.length - 1;
+    while (last > 0 && seq[last] <= 0.001)
+      last--;
+    let first = last;
+    while (first > 0 && seq[first - 1] < 255)
+      first--;
+    return seq.slice(first, last + 1);
+  };
+  const biggestStep = (seq) => {
+    let step = 0;
+    for (let i = 1; i < seq.length; i++)
+      step = Math.max(step, Math.abs(seq[i] - seq[i - 1]));
+    return step;
   };
 
   let seed = 5;
@@ -309,63 +343,62 @@ check('the slot count agrees between app.js, common.glsl and this test',
       intensity : 1.0 + next() * 3.5 // the whole cloud-to-ground range
     });
 
-  const sequences = strikes.map((strike) => channelOverTime(strike, channelBrightness));
-  const white = (seq) => seq.filter((value) => value >= 254.5).length;
-  const darkTail = (seq) => {
-    let lastLit = 0;
-    for (let i = 1; i < seq.length; i++)
-      if (seq[i] > 0.001) lastLit = i;
-    return seq[lastLit];
-  };
-  // The iteration in which the channel lets go: the biggest drop between two
-  // consecutive frames of a strike.
-  const biggestStep = (seq) => {
-    let step = 0;
-    for (let i = 1; i < seq.length; i++)
-      step = Math.max(step, Math.abs(seq[i] - seq[i - 1]));
-    return step;
-  };
+  const faded = strikes.map((strike) => fadeOf(channelOverTime(strike, channelBrightness)));
+  const switched = strikes.map((strike) => fadeOf(channelOverTime(strike, switchedBrightness)));
+  const sorted = (values) => [ ...values ].sort((a, b) => a - b);
+  const median = (values) => sorted(values)[Math.floor((values.length - 1) * 0.5)];
+  const fadeLengths = faded.map((fade) => fade.length);
+  const switchLengths = switched.map((fade) => fade.length);
 
-  check('the channel is clipped white for the whole of every flicker',
-    sequences.every((seq) => white(seq) >= 2),
-    'median ' + sequences.map(white).sort((a, b) => a - b)[150] + ' white iterations per stroke');
-  check('and it goes out between one iteration and the next, as the original did',
-    Math.min(...sequences.map(biggestStep)) >= 100,
-    'the smallest drop out of a stroke is ' + Math.min(...sequences.map(biggestStep)).toFixed(0) + '/255');
-  check('every flicker peak is the full over-bright channel',
-    channelBrightness(1.0) === mainBoltBrightness && toneMap(mainBoltBrightness) >= 254.5,
-    'channel(' + mainBoltBrightness + ' HDR) tonemaps to white');
-  // ... and because the curve is used straight, where a stroke's last lit frame
-  // lands is wherever the curve happened to be when the light ran out: usually
-  // white (the channel disappears from white, which is the switch this look is
-  // made of), now and then a dim frame. That is the trade that was asked for.
-  // How many frames of dim channel a stroke shows before it goes: the curve is
-  // used straight, so the last frame or two can land on its tail. Two is the
-  // switch; more than that would be the fade the later rounds put in.
-  const tailOf = (seq) => {
-    let lastLit = 0;
-    for (let i = 1; i < seq.length; i++)
-      if (seq[i] > 0.001) lastLit = i;
-    let tail = 0;
-    while (lastLit - tail >= 0 && seq[lastLit - tail] < 254.5)
-      tail++;
-    return tail;
-  };
-  const tails = sequences.map(tailOf).sort((a, b) => a - b);
-  check('a stroke is a switch: at most a frame or two of dim channel before it goes',
-    tails[Math.floor(tails.length / 2)] <= 2 && tails[tails.length - 1] <= 3,
-    'median ' + tails[Math.floor(tails.length / 2)] + ' dim frames, worst ' + tails[tails.length - 1]);
+  check('a cloud-to-ground channel fades out over a dozen iterations instead of switching off',
+    median(fadeLengths) >= 11,
+    'median fade ' + median(fadeLengths) + ' iterations (' + (median(fadeLengths) / 60).toFixed(2) +
+      ' s at 60 iterations/s), shortest ' + Math.min(...fadeLengths));
+  check('... which is longer than the fade the shader used to run',
+    median(fadeLengths) > 9,
+    median(fadeLengths) + ' iterations now against 9 at cgChannelFalloff 1.6');
+  check('the straight-curve form it replaced did switch off in a single iteration',
+    median(switchLengths) <= 2 && Math.max(...switchLengths) <= 3,
+    'median fade ' + median(switchLengths) + ' iterations as a switch, longest ' + Math.max(...switchLengths));
 
-  // the wiring: the artwork is multiplied by the curve times the bolt constant,
-  // straight, with nothing reshaping it on the way
-  check('the channel is drawn with the raw curve, as the original drew it',
-    /pixVal \*= currentLightningIntensity;/.test(displayShader) &&
-    !/channelBrightness/.test(displayShader) && !/curveShare/.test(displayShader),
-    'the compression later rounds put here is what was asked to go');
-  check('the channel colour is the original violet-white',
-    /const vec3 lightningCol = vec3\(0\.70, 0\.57, 1\.0\);/.test(displayShader) &&
-    !/lightningCoolingCol/.test(displayShader),
-    'the cooling colour that replaced it is gone with it');
+  const withTheEnd = (fade) => [ ...fade, 0 ];
+  const fadeSteps = faded.map((fade) => biggestStep(withTheEnd(fade)));
+  check('no iteration of the fade gives away most of the range at once',
+    Math.max(...fadeSteps) <= 128,
+    'biggest jump between two iterations ' + Math.max(...fadeSteps).toFixed(0) + '/255, was ' +
+      Math.max(...switched.map((fade) => biggestStep(withTheEnd(fade)))).toFixed(0) + '/255');
+  check('the channel lands near black before it goes, instead of leaving from white',
+    Math.max(...faded.map((fade) => fade[fade.length - 1])) <= 48,
+    'darkest lit iteration of the worst stroke ' +
+      Math.max(...faded.map((fade) => fade[fade.length - 1])).toFixed(0) + '/255');
+  check('the peak of every flicker is still the full over-bright channel',
+    Math.abs(channelBrightness(1.0) - mainBoltBrightness) < 1e-6 && toneMap(mainBoltBrightness) >= 254.5,
+    'channel(' + mainBoltBrightness + ' HDR) still tonemaps to white');
+  check('the crescent before the fade is still white, not dimmed',
+    faded.every((fade) => fade[0] >= 230),
+    'all ' + faded.length + ' fades start at ' + Math.min(...faded.map((fade) => fade[0])).toFixed(0) + '/255 or above');
+
+  // A weak stroke has a fifth of a storm core's peak light, so an envelope that
+  // was not taken as a share of the peak would fade a weak stroke out almost at
+  // once and a strong one over a second.
+  const weak = fadeOf(channelOverTime({ x : 0.31, y : 0.72, start : 100, intensity : 1.05 }, channelBrightness));
+  const strong = fadeOf(channelOverTime({ x : 0.88, y : 0.55, start : 100, intensity : 4.45 }, channelBrightness));
+  check('a weak stroke and a storm core fade over the same part of their lives',
+    Math.abs(weak.length - strong.length) <= 2,
+    'weak ' + weak.length + ' iterations, strong ' + strong.length);
+
+  // the wiring: the artwork is multiplied by the eased envelope, and the envelope
+  // gets the strike's intensity from the slot it was booked in
+  check('the channel is drawn with the envelope, not with the raw curve',
+    /pixVal \*= channelBrightness;/.test(displayShader) && !/pixVal \*= currentLightningIntensity;/.test(displayShader),
+    'the raw curve in the gain is what made the channel a switch');
+  check('the falloff cannot be asked for the power of zero',
+    /pow\(max\(curveShare, 1e-6\), cgChannelFalloff\)/.test(displayShader),
+    'pow(0, 2.2) is 0 on paper and has been NaN on real drivers');
+  check('the slot loop hands the stroke its own intensity',
+    /displayLightning\(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight\(lightningPos\),\s*lightningData\[INTENSITY\]\)/
+      .test(displayShader),
+    'without it the envelope cannot normalize by the stroke\'s peak');
   check('the emission is written straight into the fragment, not premultiplied',
     /\+ emittedLight\), opacity\);/.test(displayShader) && !/emitted \/ max\(opacity/.test(displayShader),
     'the original fragment is the original fragment');
