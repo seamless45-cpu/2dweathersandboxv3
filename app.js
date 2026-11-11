@@ -4551,6 +4551,40 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     throw new Error(message);
   }
 
+  /*
+   * A lost graphics context is what a crash looks like from the outside: the frame
+   * goes black, the sound keeps playing and nothing responds. It is normally the
+   * device reclaiming graphics memory (or a driver reset), not a bug in the page,
+   * and the page can at least say so instead of sitting there dead.
+   *
+   * Carrying on in place would mean rebuilding every framebuffer, VAO and texture
+   * this app owns by hand, so the honest recovery is a reload - offered, rather
+   * than leaving a black tab behind. preventDefault() keeps the door open for a
+   * browser that restores the context on its own.
+   */
+  let graphicsContextLost = false;
+  canvas.addEventListener('webglcontextlost', event => {
+    event.preventDefault();
+    if (graphicsContextLost)
+      return;
+    graphicsContextLost = true;
+    const note = document.createElement('div');
+    note.id = 'graphicsContextLost';
+    note.style.cssText = 'position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;' +
+      'background:rgba(6,9,12,0.92);color:#e8eef6;font:16px/1.5 Arial,sans-serif;text-align:center;padding:24px;';
+    note.innerHTML = '<div style="max-width:560px">' +
+      '<h2 style="margin:0 0 12px;font-size:20px">The graphics device was reset</h2>' +
+      '<p style="margin:0 0 18px;color:#b9c6d4">The browser took the WebGL context back, which usually means the ' +
+      'device ran out of graphics memory. Reload to continue. If it happens again, lower the HDR and bloom ' +
+      'resolution in the Performance folder, or use a smaller simulation resolution.</p>' +
+      '<button id="graphicsContextReload" style="padding:10px 18px;border-radius:8px;border:1px solid #3a4a5c;' +
+      'background:#182430;color:#e8eef6;font:inherit;cursor:pointer">Reload</button></div>';
+    document.body.appendChild(note);
+    const button = note.querySelector('#graphicsContextReload');
+    if (button)
+      button.addEventListener('click', () => location.reload());
+  });
+
   // SETUP GUI
 
   if (guiControlsFromSaveFile == null) { // use default settings
@@ -6615,8 +6649,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.7'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.7')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.8'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.8')
   ]);
 
   const [
@@ -7141,7 +7175,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const colorScalesTexture = gl.createTexture();
 
   const lightningTextures = [];
-  const numLightningTextures = 10;
+  // How many bolt artworks to keep resident. One tile is a whole bolt at
+  // 2500 x 5000 texels, which is 12.5 MB of texture memory; the original ten is
+  // 125 MB, and a GPU with a tight texture budget drops the context rather than
+  // refuse it. Four is 50 MB and still gives the storm four different shapes to
+  // cycle through.
+  const numLightningTextures = 4;
 
 
 
@@ -7390,23 +7429,57 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   }
 
 
-  let nextLightningTextureIndex = 0;
+  /*
+   * Lightning artwork, generated one tile at a time and only when it is needed.
+   *
+   * This used to start two workers right here, in the middle of shader
+   * compilation and buffer creation, and each of them was a 2500 x 5000 canvas
+   * (a 50 MB backing store) being drawn with tens of thousands of segments and
+   * then uploaded as a 12.5 MB texture. That is the hitch at the end of the
+   * loading bar, and on a device with a tight memory budget it is also what takes
+   * the graphics context down with it.
+   *
+   * So: one worker at a time, never while the loading screen is still up, at
+   * least a second apart, only for the tile the simulation has actually reached,
+   * and never more than numLightningTextures of them. The display clamps to the
+   * newest tile it has (see the draw loop), so a bolt is never invisible while
+   * the artwork is still catching up.
+   */
+  let lightningTexturesReady = 0;        // tiles 0 .. ready-1 are filled
+  let lightningTextureWorkerBusy = false;
+  let lightningTextureLastStart = 0;
+  let lightningTextureFailures = 0;
+
   function startLightningTextureWorker()
   {
-    if (nextLightningTextureIndex >= numLightningTextures)
+    if (lightningTextureWorkerBusy || lightningTexturesReady >= numLightningTextures)
       return;
+    if (lightningTextureFailures >= 4)  // the worker is not coming back; stop asking
+      return;
+    if (document.hidden)               // nothing to show, nothing to draw
+      return;
+    if (performance.now() - lightningTextureLastStart < 1000)
+      return;                          // one tile a second: this is not what loading is for
 
-    const textureIndex = nextLightningTextureIndex++;
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.7');
+    const textureIndex = lightningTexturesReady;
+    lightningTextureLastStart = performance.now();
+    lightningTextureWorkerBusy = true;
+
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.8');
+    const stop = () => {
+      lightningGeneratorWorker.terminate();
+      lightningTextureWorkerBusy = false;
+    };
     lightningGeneratorWorker.onmessage = event => {
       generateLightningTexture(textureIndex, event.data);
-      lightningGeneratorWorker.terminate();
-      startLightningTextureWorker();
+      lightningTexturesReady = textureIndex + 1;
+      stop();
     };
     lightningGeneratorWorker.onerror = event => {
       console.error('Lightning texture generation failed.', event.message);
-      lightningGeneratorWorker.terminate();
-      startLightningTextureWorker();
+      lightningTextureFailures++;
+      lightningTextureLastStart = performance.now() + 6000; // back off; do not spin
+      stop();
     };
     // The original tile: 2500 x 5000 at a 9 pixel channel. The fork this repo
     // started from halved both and doubled the brightness gain (1250 x 2500 at
@@ -7425,8 +7498,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   }
-  for (let i = 0; i < Math.min(2, numLightningTextures); i++)
-    startLightningTextureWorker();
+  // Nothing is generated while the loading screen is up: the first tile is asked
+  // for once the simulation is running (see the draw loop), and the rest after it
+  // as the strike windows come round.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden)
+      startLightningTextureWorker();
+  });
 
   await loadingBar.set(78, 'Preparing render buffers');
 
@@ -7777,6 +7855,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   var destTF;
   let lastLightningSoundIteration = 0;
   let lastLightningSoundCheckIteration = 0;
+  let lightningSoundFrame = 0;
   const lightningDataValues = new Float32Array(numLightningSlots * 4);
 
   // preload uniform locations for tiny performance gain
@@ -7788,6 +7867,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   setInterval(calcFps, 1000); // log fps
   setInterval(publishWeatherDataIfEnabled, 1000);
+  // The first bolt, just after the loading screen has gone. One worker, and it
+  // starts a second late on purpose: the first frames are the expensive ones.
+  setTimeout(startLightningTextureWorker, 1200);
   requestAnimationFrame(draw);
   await loadingBar.set(100, 'Simulation ready');
   await new Promise(resolve => setTimeout(resolve, 350));
@@ -7795,6 +7877,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   function draw()
   { // Runs for every frame
+    if (graphicsContextLost) // nothing left to draw with; the overlay explains why
+      return;
+
     let camPanSpeed = guiControls.camSpeed;
 
     if (rightCtrlPressed) {
@@ -8139,8 +8224,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           airplane.move();
         }
 
-        if (guiControls.sound && guiControls.enablePrecipitation &&
-            iterNum != lastLightningSoundCheckIteration) {
+        // Thunder is read back out of the GPU, and a readback waits for everything
+        // queued to finish: doing it every frame is a sync on every frame, which on
+        // a busy GPU is milliseconds of stall that no other optimisation can hide.
+        // Every third frame is 20 Hz at 60 fps - far inside the tolerance of
+        // hearing thunder - and no strike is missed, because a strike is found by
+        // comparing its start iteration against the last one we heard, not against
+        // the previous frame.
+        const lightningSoundDue = guiControls.sound && guiControls.enablePrecipitation &&
+                                  iterNum != lastLightningSoundCheckIteration &&
+                                  (lightningSoundFrame++ % 3) === 0;
+        if (lightningSoundDue) {
           lastLightningSoundCheckIteration = iterNum;
           gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuffs[lightningDataSrc]);
           gl.readBuffer(gl.COLOR_ATTACHMENT0);
@@ -8165,7 +8259,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             );
             lastLightningSoundIteration = newestIteration;
           }
-        } else {
+        } else if (!guiControls.sound || !guiControls.enablePrecipitation) {
           lastLightningSoundIteration = iterNum;
           lastLightningSoundCheckIteration = iterNum;
         }
@@ -8400,8 +8494,15 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'volumetricCloudLighting'), guiControls.volumetricCloudLighting);
 
 
-      let lightningTexNum = Math.floor(iterNum / 400) % numLightningTextures;
-      // console.log(lightningTexNum)
+      // Which bolt artwork this window uses, clamped to the ones that exist. The
+      // artwork is generated a tile at a time (see startLightningTextureWorker),
+      // so early on there may be fewer tiles than windows: a strike then draws the
+      // newest bolt we have instead of a blank placeholder, and the next tile is
+      // requested here, off the critical path of the frame.
+      const wantedLightningTexNum = Math.floor(iterNum / 400) % numLightningTextures;
+      if (wantedLightningTexNum >= lightningTexturesReady)
+        startLightningTextureWorker();
+      const lightningTexNum = Math.min(wantedLightningTexNum, Math.max(lightningTexturesReady - 1, 0));
 
       gl.activeTexture(gl.TEXTURE7);
       gl.bindTexture(gl.TEXTURE_2D, lightningTextures[lightningTexNum]);
@@ -9230,7 +9331,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.7');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.8');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
