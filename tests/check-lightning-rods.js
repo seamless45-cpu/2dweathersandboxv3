@@ -371,10 +371,10 @@ const softHdrClamp = (value) => {
   check('the emission is written straight, as the original wrote it',
     /\+ emittedLight\), opacity\);/.test(displayShader) && !/emitted \/ max\(opacity/.test(displayShader),
     'no premultiplication: the fragment is the fragment');
-  check('the channel brightness is the curve, with nothing reshaping it',
-    /pixVal \*= currentLightningIntensity;/.test(displayShader) &&
-    !/curveShare/.test(displayShader) && !/cgChannelFalloff/.test(displayShader),
-    'the compression of the later rounds is gone');
+  check('the channel is eased out, so the fade is a fade and not a switch',
+    /pixVal \*= channelBrightness;/.test(displayShader) &&
+    /pow\(max\(curveShare, 1e-6\), cgChannelFalloff\)/.test(displayShader),
+    'the easing is the one thing the later rounds had that was asked back');
 }
 
 // The bloom is where "brighter than white" is actually visible, and it is built
