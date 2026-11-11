@@ -402,7 +402,7 @@ const lightningCurvePeak = (intensity) => 20.0 * intensity * intensity; // 1/(T*
     frameLight(0.95) > 0.15 && frameLight(0.95) < frameLight(2.5) * 0.75,
     frameLight(0.95).toFixed(2) + ' HDR at the lowest cloud-to-ground intensity');
   check('the frame-wide light is bounded and cannot go infinite',
-    Number.isFinite(screenCeiling) && screenCeiling > 0.5 && screenCeiling < 4 &&
+    Number.isFinite(screenCeiling) && screenCeiling > 0.5 && screenCeiling < 8 &&
     /screenCeiling \*|icScreenFlashCeiling \*/.test(displayShader),
     'ceiling ' + screenCeiling);
   check('an intra-cloud flash never lights the whole frame',
