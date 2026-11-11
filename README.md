@@ -19,6 +19,8 @@ A cloud-to-ground stroke lights the frame, not just its own halo. The bolt and t
 
 There is no leader stage. A stepped leader is real, but drawing it as a lit stage meant a strike spent its first iterations with the bolt held at one fixed brightness - the flicker curve is still near zero while a leader would be crawling - so the glow on screen was static: a frozen bright shape before the flash it was announcing. A return stroke is tens of microseconds of light, so the whole channel is now there in the iteration the strike is booked, and the curve (sampled one unit in, for both kinds of strike) is what the player sees from the first frame on. `strikeAnimEnd()` follows: a slot is released at `start + 5 * (period * flickers + 2.924)`.
 
+A cloud-to-ground channel fades out now instead of blinking out. The channel is the one thing in the scene written four decades over the white point - 100000 HDR units against a tonemap that is white from 6.3 up - so feeding it the intensity curve straight (`curve * mainBoltBrightness`) made it pure white for every iteration of the strike and then gone in the iteration the curve reached zero: its last lit iteration still carried 355 units, and the one after it carried nothing. On screen the halo faded and the channel vanished. The share of the strike's own peak light is now raised to `cgChannelFalloff` (1.6) before it is multiplied by `mainBoltBrightness` - the same compression `softHdrClamp` applies at the top of the scene's range, applied to the bottom of the channel's - which pulls the tail of the curve down into the band the display can show. A stroke now spends eight iterations (about 130 ms at 60 iterations/s) coming down from white, and its last lit iteration is worth 29/255: it arrives at black before it goes. Every flicker peak is still exactly 1.0, i.e. the full 100000, so a stroke is as over-bright as it ever was; only the way it lets go has changed. The envelope is taken as a share of the peak (`lightningCurvePeak`, the curve at T = 0), so a weak stroke and a storm core fade over the same part of their lives.
+
 Intra-cloud channels are drawn the way a discharge is, not the way a line is: every stroke fades toward its tip (`IC_TIP_TONE`), each is drawn a second time as a narrower, hotter centreline inside its sheath, and every fork is a hot junction. Channels are 1.0-2.2 artwork pixels wide with a tone hierarchy of 0.92/0.60/0.35/0.20 across trunk, arm, hair and wisp.
 
 An intra-cloud flash also carries a glare now. Everything it writes is squeezed under 1.0 by its soft knee, which is what keeps its channels apart - but the bloom's bright pass only sees light above 32, so a channel could never glow the way a bolt does. The two rings that hug a channel (a screen-pixel flare and the light it scatters a few pixels out) are lifted past that knee against their own ceiling (`icFlareBoost` / `icFlareCeiling`), which puts them in the bright pass; the wide ring, the cloud glow and the tiers of the network stay under the knee, so the glow hangs on the channels instead of flooding the sprite. Measured at the default camera: glare peak 50 HDR units with 0.8 % of the frame above the bloom knee.
@@ -304,12 +306,12 @@ Two things decide how long a lightning event takes to show up, and both are
 pinned down there. The slot: a storm in a cold cloud asks for a strike on almost
 every iteration, so the slots are the rate, and an attempt that finds all of them
 busy is dropped - which is why a flash could arrive at a moment nothing in the
-cloud asked for. Six slots instead of four shorten that wait. The curve: the
-intensity curve spends its first unit - five iterations - ramping a stepped
-leader down the channel, which a cloud-to-ground stroke wants but an intra-cloud
-flash does not. An IC flash now starts at its peak and is at full brightness in
-the iteration it is booked; a CG leader is drawn down its whole channel inside
-one iteration (`leaderRevealSpeed`) instead of five. Measured with that suite's
+cloud asked for. Six slots instead of four shorten that wait. The curve: it used to
+spend its first unit - five iterations - ramping a stepped leader down the
+channel, which a cloud-to-ground stroke wants but an intra-cloud flash does not,
+and that stage is gone for both kinds of strike now. Every strike, intra-cloud
+and cloud-to-ground, starts at its peak and is at full brightness in the
+iteration it is booked. Measured with that suite's
 own model: the dimmest first iteration of an IC flash is 100% of its peak, and the
 worst gap between strikes in a saturated storm falls from 27 to 22 iterations.
 

@@ -19,8 +19,13 @@
 //      iterations of the last lit one (nothing is booked for longer than it is).
 //      Also: how much light a strike emits in the iteration it is booked. That is
 //      the wait the player sees between "the storm let go" and "there is a
-//      flash", and it is the reason the leader stage is only kept for
-//      cloud-to-ground strokes.
+//      flash" - a strike has to be at its peak in the iteration it is booked.
+//   1c. How a stroke's channel lets go. The channel is written four decades over
+//      the white point, so the intensity curve used straight made it pure white
+//      for the whole strike and gone in one iteration: a switch, not a fade. The
+//      share of the strike's peak light is compressed now, and these checks ask
+//      what one pixel of the channel is worth, iteration by iteration, to the end
+//      of the strike.
 //   2. The schedule. The slot manager simulated over a saturated storm: gaps
 //      between strikes, and the same simulation run the old way, for comparison.
 //   3. The wiring. All four places that ask "is this strike still running?" ask
@@ -243,6 +248,154 @@ check('the slot count agrees between app.js, common.glsl and this test',
   check('the rod too, so a mast lights up with the bolt that hit it',
     /lightningIntensityOverTime\(calcLightningTime\(strikeData\[START_ITERNUM\]\) \+ 1\.0,/.test(displayShader),
     'the rod corona has to follow the same curve the bolt is drawn with');
+}
+
+/* ------------------------------- 1c. how a stroke's channel lets go */
+
+{
+  // The channel - the line of the bolt itself - is the one part of a strike that
+  // is written four decades over the point where the tonemap runs out of range.
+  // Fed the intensity curve straight, as curve * mainBoltBrightness, it is white
+  // for every iteration of the strike and then gone in the iteration the curve
+  // reaches zero: the last lit iteration of a storm-core stroke still carries 355
+  // HDR units against a white point of 6.3, and the next one carries nothing. A
+  // switch, not a fade - which is what it looked like on screen, the halo fading
+  // while the channel itself vanished.
+  //
+  // The display shader now raises the share of the strike's peak light to
+  // cgChannelFalloff before multiplying by mainBoltBrightness, which pulls the tail
+  // of the curve down into the band the display can actually show. These checks run
+  // the real curve through the real constants and ask what one pixel of the channel
+  // is worth, iteration by iteration, to the iteration after the strike's end.
+  const HDR_CEILING = defineValue(common, 'HDR_CEILING');
+  const mainBoltBrightness = Number((displayShader.match(/const float mainBoltBrightness = ([\d.]+);/) || [])[1]);
+  const cgChannelFalloff = Number((displayShader.match(/const float cgChannelFalloff = ([\d.]+);/) || [])[1]);
+  const lightningCurvePeak = Number((displayShader.match(/const float lightningCurvePeak = ([\d.]+);/) || [])[1]);
+
+  const softHdrClamp = (value) => Number.isNaN(value) ? 0 : HDR_CEILING * (1 - Math.exp(-Math.max(value, 0) / HDR_CEILING));
+  const toneMap = (hdr) => {
+    const c = softHdrClamp(hdr);
+    const aces = Math.min(1, Math.max(0, (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14)));
+    return 255 * Math.pow(aces, 1 / 2.2);
+  };
+  // what a pixel of the channel is written at, for a share of the strike's peak
+  const channelBrightness = (share) => mainBoltBrightness * Math.pow(Math.min(Math.max(share, 0), 1), cgChannelFalloff);
+  const oldChannelBrightness = (share) => mainBoltBrightness * share; // what it was before
+
+  check('the channel normalizes by the curve\'s own peak, at every intensity',
+    [ 0.95, 1.4, 2.5, 4.5 ].every((i) => Math.abs(lightningIntensityOverTime(1.0, [ 0.5, 0.5 ], i) /
+                                                (lightningCurvePeak * i * i) - 1) < 1e-3),
+    'lightningCurvePeak ' + lightningCurvePeak + ' vs the curve at T = 0: ' +
+      lightningIntensityOverTime(1.0, [ 0.5, 0.5 ], 2.5).toFixed(3) + ' at intensity 2.5');
+
+  // the channel, iteration by iteration, to the end of the strike and one past it
+  const channelOverTime = (strike, brightness) => {
+    const end = Math.ceil(strikeAnimEnd(strike));
+    const peak = lightningCurvePeak * strike.intensity * strike.intensity;
+    const seq = [];
+    for (let iter = strike.start; iter <= end + 1; iter++)
+      seq.push(toneMap(brightness(lightOf(strike, iter) / peak)));
+    return seq;
+  };
+  // The fade: the last unbroken run of *lit* iterations once the channel has left
+  // white for good. The iterations after the light is gone are not part of it -
+  // that the light is gone is the previous section's business.
+  const fadeOf = (seq) => {
+    let last = seq.length - 1;
+    while (last > 0 && seq[last] <= 0.001)
+      last--;
+    let first = last;
+    while (first > 0 && seq[first - 1] < 255)
+      first--;
+    return seq.slice(first, last + 1);
+  };
+  const biggestStep = (seq) => {
+    let step = 0;
+    for (let i = 1; i < seq.length; i++)
+      step = Math.max(step, Math.abs(seq[i] - seq[i - 1]));
+    return step;
+  };
+
+  let seed = 5;
+  const next = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  const strikes = [];
+  for (let i = 0; i < 300; i++)
+    strikes.push({
+      x : next(), y : next(), start : 1 + Math.floor(next() * 4000),
+      intensity : 0.95 + next() * 3.5 // the whole cloud-to-ground range
+    });
+
+  const shipped = strikes.map((strike) => fadeOf(channelOverTime(strike, channelBrightness)));
+  const old = strikes.map((strike) => fadeOf(channelOverTime(strike, oldChannelBrightness)));
+  const sorted = (values) => [ ...values ].sort((a, b) => a - b);
+  const median = (values) => sorted(values)[Math.floor((values.length - 1) * 0.5)];
+  const shippedLengths = shipped.map((fade) => fade.length);
+  const oldLengths = old.map((fade) => fade.length);
+  const fadeSeconds = (median(shippedLengths) / 60).toFixed(2);
+
+  check('a cloud-to-ground channel fades out over several iterations instead of switching off',
+    median(shippedLengths) >= 5,
+    'median fade ' + median(shippedLengths) + ' iterations (' + fadeSeconds + ' s at 60 iterations/s), ' +
+      'shortest ' + Math.min(...shippedLengths));
+  check('the straight-curve form it replaced did switch off in a single iteration',
+    median(oldLengths) <= 1 && Math.max(...oldLengths) <= 3,
+    'median fade ' + median(oldLengths) + ' iterations before, longest ' + Math.max(...oldLengths) +
+      ', against ' + median(shippedLengths) + ' now');
+  // the step out of the last lit iteration counts: that one is the switch
+  const withTheEnd = (fade) => [ ...fade, 0 ];
+  const shippedSteps = shipped.map((fade) => biggestStep(withTheEnd(fade)));
+  const oldSteps = old.map((fade) => biggestStep(withTheEnd(fade)));
+  check('no iteration of the fade gives away most of the range at once',
+    Math.max(...shippedSteps) <= 128,
+    'biggest jump between two iterations ' + Math.max(...shippedSteps).toFixed(0) + '/255, was ' +
+      Math.max(...oldSteps).toFixed(0) + '/255');
+  check('the channel lands near black before it goes, instead of leaving from white',
+    Math.max(...shipped.map((fade) => fade[fade.length - 1])) <= 48,
+    'darkest lit iteration of the worst strike ' +
+      Math.max(...shipped.map((fade) => fade[fade.length - 1])).toFixed(0) + '/255, was ' +
+      Math.max(...old.map((fade) => fade[fade.length - 1])).toFixed(0) + '/255');
+  check('the peak of every flicker is still the full over-bright channel',
+    Math.abs(channelBrightness(1.0) - mainBoltBrightness) < 1e-6 && toneMap(mainBoltBrightness) >= 254.5,
+    'channel(' + mainBoltBrightness + ' HDR) still tonemaps to white');
+  check('the crescent before the fade is still white, not dimmed',
+    shipped.every((fade) => fade[0] >= 250),
+    'all ' + shipped.length + ' fades start at ' + Math.min(...shipped.map((fade) => fade[0])).toFixed(0) + '/255 or above');
+
+  // A weak stroke has a fifth of a storm core's peak light, so an envelope that
+  // was not taken as a share of the peak would fade a weak stroke out almost at
+  // once and a strong one over a second.
+  const weak = fadeOf(channelOverTime({ x : 0.31, y : 0.72, start : 100, intensity : 0.95 }, channelBrightness));
+  const strong = fadeOf(channelOverTime({ x : 0.88, y : 0.55, start : 100, intensity : 4.45 }, channelBrightness));
+  check('a weak stroke and a storm core fade over the same part of their lives',
+    Math.abs(weak.length - strong.length) <= 1,
+    'weak ' + weak.length + ' iterations, strong ' + strong.length);
+
+  // ... and the envelope is still an envelope: monotone in the curve, zero when
+  // the light is gone, never above the stroke's own peak.
+  let monotone = true, overshoot = 0;
+  let previous = -1;
+  for (let share = 0; share <= 1.0001; share += 0.001) {
+    const value = channelBrightness(share);
+    if (!(value >= previous)) monotone = false;
+    previous = value;
+    overshoot = Math.max(overshoot, value);
+  }
+  check('the envelope is monotone in the curve and cannot overshoot the peak',
+    monotone && Math.abs(channelBrightness(0)) < 1e-9 && overshoot <= mainBoltBrightness,
+    'channel(0) = ' + channelBrightness(0) + ', largest ' + overshoot.toFixed(0));
+  check('the falloff is a compression of the channel, not a cutoff',
+    Number.isFinite(cgChannelFalloff) && cgChannelFalloff > 1 && cgChannelFalloff < 3,
+    'cgChannelFalloff ' + cgChannelFalloff);
+
+  // the wiring: the artwork is multiplied by the envelope, and the envelope gets
+  // the strike's intensity from the slot it was booked in
+  check('the channel is drawn with the envelope, not with the raw curve',
+    /pixVal \*= channelBrightness;/.test(displayShader) && !/pixVal \*= currentLightningIntensity;/.test(displayShader),
+    'the raw curve in the gain is what made the channel white for the whole strike');
+  check('the slot loop hands the stroke its own intensity',
+    /displayLightning\(lightningPos, lightningTime, currentLightningIntensity, lightningGroundHeight\(lightningPos\),\s*lightningData\[INTENSITY\]\)/
+      .test(displayShader),
+    'without it the envelope cannot normalize by the stroke\'s peak');
 }
 
 /* ---------------------------------------------------------- 2. the schedule */
