@@ -189,11 +189,19 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
 
   float pixVal = texture(lightningTex, lightningTexCoord).r;
 
-  const float branchShowFactor = 2.5;       // 1.5
-  const float leaderBrightness = 50000.;    // 200.0
+  const float branchShowFactor = 2.5;     // 1.5
+  const float leaderBrightness = 50000.;  // 200.0
   const float mainBoltBrightness = 100000.; // 100000.
 
-  float brightnessThreshold = 1. - lightningTime * branchShowFactor;
+  // The leader only gets a fraction of one iteration to run down the channel.
+  // At the speed a stepped leader actually moves this is still slow motion, and
+  // it stops a bolt taking five iterations (a fifth of a second on a slow
+  // machine) to appear: the strike lands, and the whole channel is there.
+  const float leaderRevealSpeed = 6.0;
+
+  float leaderReveal = min(lightningTime * leaderRevealSpeed, 1.);
+
+  float brightnessThreshold = 1. - leaderReveal * branchShowFactor;
   brightnessThreshold += lightningTexCoord.y * branchShowFactor; // grow from the top to the bottem
 
   brightnessThreshold = clamp(brightnessThreshold, 0., 1.);
@@ -427,11 +435,23 @@ vec3 computeICLight()
 
     vec2 lightningPos = lightningData.xy;
     float lightningTime = calcLightningTime(lightningStartIterNum);
-    float currentLightningIntensity = lightningIntensityOverTime(lightningTime, lightningPos, lightningData[INTENSITY]);
-    if (currentLightningIntensity <= 0.0)
+
+    // An intra-cloud flash has no leader stage. The intensity curve spends its
+    // first unit (5 iterations) ramping a stepped leader down a channel, which is
+    // a cloud-to-ground idea: an IC flash is a network lighting up inside the
+    // cloud all at once, and nothing in its artwork grows. For it that first unit
+    // is not a ramp, it is five iterations of a strike that is on screen and
+    // emitting almost nothing - the reason a flash took a beat to "fire up"
+    // instead of just happening. Skipping the unit puts an IC flash at its peak
+    // in the iteration it is booked; the reveal below still fans it out from the
+    // centre, which is a couple of iterations and visible light.
+    //
+    // strikeAnimEnd() knows: an IC strike ends one unit earlier than a CG one.
+    float icIntensity = lightningIntensityOverTime(lightningTime + 1.0, lightningPos, lightningData[INTENSITY]);
+    if (icIntensity <= 0.0)
       continue;
 
-    icLight += displayICLightning(lightningPos, lightningTime, currentLightningIntensity,
+    icLight += displayICLightning(lightningPos, lightningTime, icIntensity,
                                   lightningStartIterNum * 0.6180339 + float(slot) * 11.7,
                                   artPerPixel);
   }

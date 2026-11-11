@@ -281,12 +281,25 @@ node tests/check-ic-lightning.js # the intra-cloud artwork, rendered and measure
 node tests/check-lightning-strikes.js # how often lightning may strike, and when
 ```
 
-`tests/check-lightning-strikes.js` runs the slot manager - the four slots a strike
+`tests/check-lightning-strikes.js` runs the slot manager - the six slots a strike
 can own, and the rule that a new strike may only start when one is idle - against
 the real intensity curve. A slot is booked for exactly as long as its own strike
 can be seen; booking it for the longest strike there can be instead (which is what
 it used to do) meant every flash held a slot for three or four times its own
 length, and a storm could only manage a strike every ~28 iterations.
+
+Two things decide how long a lightning event takes to show up, and both are
+pinned down there. The slot: a storm in a cold cloud asks for a strike on almost
+every iteration, so the slots are the rate, and an attempt that finds all of them
+busy is dropped - which is why a flash could arrive at a moment nothing in the
+cloud asked for. Six slots instead of four shorten that wait. The curve: the
+intensity curve spends its first unit - five iterations - ramping a stepped
+leader down the channel, which a cloud-to-ground stroke wants but an intra-cloud
+flash does not. An IC flash now starts at its peak and is at full brightness in
+the iteration it is booked; a CG leader is drawn down its whole channel inside
+one iteration (`leaderRevealSpeed`) instead of five. Measured with that suite's
+own model: the dimmest first iteration of an IC flash is 100% of its peak, and the
+worst gap between strikes in a saturated storm falls from 27 to 22 iterations.
 
 `tests/check-ic-lightning.js` is the one that does not just read source: it loads
 `lightningGenerator.js` with a stubbed 2D canvas (`tests/ic-canvas-stub.js`),

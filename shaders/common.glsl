@@ -94,7 +94,17 @@ precision highp isampler2D;
 // Lightning slot array. Every strike owns one slot for its entire animation,
 // so a newer strike can never cut a running one short. Keep this in sync with
 // numLightningSlots in app.js.
-#define LIGHTNING_SLOTS 4
+//
+// How many: a storm in a cold cloud tries to start a strike on almost every
+// iteration (a frozen particle forms somewhere constantly), so this is the
+// lightning rate. With four slots a typical storm had every slot booked and
+// most attempts dropped, which is why the flash that did happen arrived at a
+// time nothing in the cloud asked for - the strike waited for whichever slot
+// freed last. Six slots halves that wait: the last attempt to be turned away
+// waits about a third as long (measured, tests/check-lightning-strikes.js).
+// More than that buys little and costs a 2D texture fetch per slot per pixel
+// in the display pass.
+#define LIGHTNING_SLOTS 6
 // Longest a strike can possibly animating, in iterations - a bound, not a timer.
 // A strike is not held for this long: strikeAnimEnd() below works out how long
 // that particular strike lasts, and a slot is released the moment its own light
@@ -189,12 +199,11 @@ float random2d(vec2 s)
 //
 // The slot array only ever held a strike for LIGHTNING_ANIM_ITERS - the length of
 // the *longest* strike there can be - because the slot manager had no way to ask
-// how long a particular strike lasts. A typical intra-cloud flash is over in 27
+// how long a particular strike lasts. A typical intra-cloud flash is over in 15
 // to 35 iterations, so every strike sat on its slot for three or four times as
-// long as it was doing anything, and with four slots that was the whole lightning
-// rate: a storm produced a strike every ~28 iterations and every other attempt
-// was dropped on the floor, which the player saw as seconds of nothing between
-// flashes.
+// long as it was doing anything, and that was the whole lightning rate: a storm
+// produced a strike every ~28 iterations and most attempts were dropped on the
+// floor, which the player saw as seconds of nothing between flashes.
 //
 // lightningIntensityOverTime() is what decides when the light is gone, and it is
 // driven by two hashes of the strike's position, so the end can be worked out
@@ -216,7 +225,12 @@ float strikeAnimEnd(vec4 strike)
   float repeatPeriod = map_range(random2d(strike.xy), 0., 1., 1.5, 3.0);
   float numFlashes = floor(map_range(random2d(strike.xy * 2.737250), 0., 1., 1.0, max(strike[INTENSITY] - 0.5, 0.) * 2.0));
 
-  return start + 5.0 * (1.0 + repeatPeriod * numFlashes + 2.924);
+  // An IC flash has no leader stage: the display shader starts its intensity
+  // curve one unit in (realisticDisplayShader.frag), so its light is over one
+  // unit earlier than a CG stroke's of the same length.
+  float leader = strike[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY ? 1.0 : 0.0;
+
+  return start + 5.0 * (leader + repeatPeriod * numFlashes + 2.924);
 }
 
 float rand2d(vec2 co)

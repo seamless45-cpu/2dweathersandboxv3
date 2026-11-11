@@ -17,6 +17,10 @@
 //      real lightningIntensityOverTime() curve for thousands of strikes: no light
 //      after the end (nothing is ever cut off), and the end is within two
 //      iterations of the last lit one (nothing is booked for longer than it is).
+//      Also: how much light a strike emits in the iteration it is booked. That is
+//      the wait the player sees between "the storm let go" and "there is a
+//      flash", and it is the reason the leader stage is only kept for
+//      cloud-to-ground strokes.
 //   2. The schedule. The slot manager simulated over a saturated storm: gaps
 //      between strikes, and the same simulation run the old way, for comparison.
 //   3. The wiring. All four places that ask "is this strike still running?" ask
@@ -100,7 +104,18 @@ function strikeAnimEnd(strike) {
   const repeatPeriod = mapRange(random2d(strike.x, strike.y), 0, 1, 1.5, 3.0);
   const numFlashes = Math.floor(mapRange(random2d(f32(strike.x * 2.737250), f32(strike.y * 2.737250)), 0, 1, 1.0,
                                          Math.max(strike.intensity - 0.5, 0) * 2.0));
-  return start + 5.0 * (1.0 + repeatPeriod * numFlashes + 2.924);
+  // An intra-cloud flash has no leader stage, so its curve starts one unit in and
+  // its light is over one unit earlier (see the IC pass in the display shader).
+  const leader = strike.intensity > LIGHTNING_IC_MAX_INTENSITY ? 1.0 : 0.0;
+  return start + 5.0 * (leader + repeatPeriod * numFlashes + 2.924);
+}
+
+// The light a strike puts out in a given iteration, exactly as the display
+// shader samples the curve: an IC flash skips the leader unit.
+function lightOf(strike, iter) {
+  const time = calcLightningTime(strike.start, iter) +
+               (strike.intensity > LIGHTNING_IC_MAX_INTENSITY ? 0.0 : 1.0);
+  return lightningIntensityOverTime(time, [ strike.x, strike.y ], strike.intensity);
 }
 
 /* ------------------------------------------------------- 1. the timing model */
@@ -138,14 +153,14 @@ check('the slot count agrees between app.js, common.glsl and this test',
 
     // no light may survive the end: that would mean a flash cut off mid-flicker
     for (let iter = Math.ceil(end) + 1; iter <= end + 200; iter++)
-      if (lightningIntensityOverTime(calcLightningTime(strike.start, iter), [ strike.x, strike.y ], strike.intensity) > 0)
+      if (lightOf(strike, iter) > 0)
         cutOff++;
 
     // ... and the end may not be far past the last lit iteration, or the slot is
     // booked for longer than the strike is doing anything
     let lastLit = strike.start;
     for (let iter = strike.start; iter <= Math.ceil(end); iter++)
-      if (lightningIntensityOverTime(calcLightningTime(strike.start, iter), [ strike.x, strike.y ], strike.intensity) > 0)
+      if (lightOf(strike, iter) > 0)
         lastLit = iter;
     lit++;
     const waste = Math.ceil(end) - lastLit;
@@ -159,7 +174,7 @@ check('the slot count agrees between app.js, common.glsl and this test',
     wasted === 0 && worstWaste <= 2,
     wasted + ' of ' + lit + ' strikes overshoot, worst ' + worstWaste + ' iterations');
   check('the booking follows the strike, not the worst case',
-    longest < LIGHTNING_ANIM_ITERS && shortest > 10,
+    longest < LIGHTNING_ANIM_ITERS && shortest > 9,
     'booked ' + shortest.toFixed(0) + ' to ' + longest.toFixed(0) + ' iterations (bound ' + LIGHTNING_ANIM_ITERS + ')');
   check('LIGHTNING_ANIM_ITERS is still a true upper bound',
     LIGHTNING_ANIM_ITERS >= longest,
@@ -171,6 +186,49 @@ check('the slot count agrees between app.js, common.glsl and this test',
     longest < LIGHTNING_ANIM_ITERS && shortest < 25,
     'shortest booking ' + shortest.toFixed(1) + ' iterations, longest ' + longest.toFixed(1) +
     ', old fixed booking ' + LIGHTNING_ANIM_ITERS);
+}
+
+/* --------------------------------- 1b. how long a strike takes to light up */
+
+{
+  // The wait the player sees is not only the slot: a strike that is booked and
+  // then emits almost nothing for its first iterations reads as "the lightning
+  // has not fired up yet". The intensity curve spends its first unit (five
+  // iterations) ramping a stepped leader down the channel - which is a
+  // cloud-to-ground idea. For an intra-cloud flash that unit was five iterations
+  // of near-dark output on every single flash.
+  const sample = [];
+  for (let i = 0; i < 400; i++)
+    sample.push({ x : (i * 0.137) % 1, y : (i * 0.311) % 1, start : 100, intensity : 0.9 });
+
+  const peakOf = (strike) => {
+    let peak = 0;
+    for (let iter = strike.start; iter <= strike.start + 40; iter++)
+      peak = Math.max(peak, lightOf(strike, iter));
+    return peak;
+  };
+
+  let worstFirstFraction = 1;
+  for (const strike of sample) {
+    const peak = strikeAnimEnd(strike) && peakOf(strike);
+    worstFirstFraction = Math.min(worstFirstFraction, peak > 0 ? lightOf(strike, strike.start) / peak : 1);
+  }
+  check('an intra-cloud flash is at full brightness in the iteration it is booked',
+    worstFirstFraction > 0.99,
+    'the dimmest first iteration of ' + sample.length + ' flashes is ' +
+    (worstFirstFraction * 100).toFixed(1) + '% of that flash\'s peak');
+
+  // ... and the cloud-to-ground leader, which is wanted, is over in one iteration
+  // instead of five.
+  const speed = Number((displayShader.match(/leaderRevealSpeed\s*=\s*([\d.]+)/) || [])[1]);
+  check('a cloud-to-ground leader runs down its whole channel within one iteration',
+    speed >= 5.0 && 1.0 / speed <= 0.2,
+    'leaderRevealSpeed ' + speed + ' -> the channel is complete at lightningTime ' +
+    (1.0 / speed).toFixed(2) + ' = iteration +' + (5 * (1.0 / speed)).toFixed(1));
+
+  check('the intra-cloud pass starts the curve one unit in, matching strikeAnimEnd',
+    /lightningIntensityOverTime\(lightningTime \+ 1\.0, lightningPos/.test(displayShader),
+    'the IC pass has to skip the leader unit the slot manager no longer books for it');
 }
 
 /* ---------------------------------------------------------- 2. the schedule */
