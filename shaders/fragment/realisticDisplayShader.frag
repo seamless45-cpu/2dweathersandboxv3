@@ -335,7 +335,8 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   float c2 = textureLod(lightningTex, vec2(clamp(u + du, 0.01, 0.99), v), 0.0).r;
   float pixVal = max(c0, max(c1, c2) * 0.90);
 
-  const float extBoltBrightness = 130000.;
+  // 20x normal CG brightness (mainBoltBrightness = 100000.) for high-current positive CG superbolts.
+  const float extBoltBrightness = 2000000.;
   const float brightnessThreshold = 0.88;
   float intensity = currentLightningIntensity * extBoltBrightness;
 
@@ -516,9 +517,10 @@ vec4 getAirColor(vec2 fragCoordIn)
     lightningOnLight *= currentLightningIntensity;
     onLight += vec3(lightningOnLight);
     if (isExternalPositive) {
+      onLight += vec3(lightningOnLight * 19.0);
       float originDx = mod(lightningMeta.x - texCoord.x + 0.5, 1.0) - 0.5;
       vec2 originDist = vec2(originDx * aspectRatios[0], texCoord.y - lightningPos.y);
-      onLight += vec3(lightningOnLightBrightness * 0.85 / (pow(length(originDist) * 0.7, 2.) + 0.03) * currentLightningIntensity);
+      onLight += vec3(lightningOnLightBrightness * 20.0 / (pow(length(originDist) * 0.7, 2.) + 0.03) * currentLightningIntensity);
     }
   }
 

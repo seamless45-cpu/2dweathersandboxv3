@@ -247,6 +247,11 @@ float lightningFlickers(vec4 strike)
   if (strike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY)
     return floor(map_range(r, 0., 1., 2.0, 5.0)); // 2, 3 or 4 strokes
 
+  // External positive CG ("bolt from the blue") almost always fires as a single
+  // powerful stroke (0 restrikes), with only an occasional single restroke.
+  if (strike[INTENSITY] > 4.5)
+    return r < 0.85 ? 0.0 : 1.0;
+
   return floor(map_range(r, 0., 1., 1.0, max(strike[INTENSITY] - 0.5, 0.) * 2.0));
 }
 

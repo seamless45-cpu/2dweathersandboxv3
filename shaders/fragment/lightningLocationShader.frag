@@ -189,7 +189,10 @@ void main()
     if (isExternalPositive) {
       vec4 extStrike = incoming;
       extStrike.x = selectExternalStrikeTarget(vec2(originX, incoming.y), iterNum);
-      extStrike[INTENSITY] = clamp(max(incoming[INTENSITY] * 1.45, 2.8), 2.8, 4.5);
+      // Encode external positive CG above 4.5 so lightningFlickers() selects
+      // a single return stroke (0 restrikes most of the time, rare 1 restroke)
+      // while remaining bounded well inside the maximum slot lifetime.
+      extStrike[INTENSITY] = clamp(4.6 + (incoming[INTENSITY] - 0.75) * 0.25, 4.6, 5.4);
       extStrike = attractToRod(extStrike);
       result = (row == 0) ? extStrike : vec4(originX, 1.0, 0.0, 0.0);
     } else {

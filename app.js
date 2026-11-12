@@ -589,6 +589,7 @@ const guiControls_default = {
   fxaaEnabled : false,
   volumetricCloudLighting : true,
   temporalAAEnabled : false,
+  superSharpDetail : false,
   showWeatherStations : true,
   shareWeatherDataToLan : false,
   sound : true,
@@ -604,6 +605,7 @@ var horizontalDisplayMult = 3.0; // 3.0 to cover srceen while zoomed out
 
 var guiControls;
 var windPushControlsVisibilityUpdater = function() {};
+var applySuperSharpDetail = function() {};
 
 function setBrushCursor(program, cursorType, cursorX, cursorY)
 {
@@ -744,17 +746,35 @@ let bloomRenderScale = 0.5;
 
 function clamp(num, min, max) { return Math.min(Math.max(num, min), max); }
 
+function getCanvasDisplayWidth()
+{
+  return Math.max(1, Math.floor(canvas.clientWidth || window.innerWidth));
+}
+
+function getCanvasDisplayHeight()
+{
+  return Math.max(1, Math.floor(canvas.clientHeight || window.innerHeight));
+}
+
+function getRenderPixelRatio()
+{
+  return guiControls && guiControls.superSharpDetail ? 2 : 1;
+}
+
 function screenToSimX(screenX)
 {
-  let leftEdge = canvas.width / 2.0 - (canvas.width * cam.curZoom) / 2.0;
-  let rightEdge = canvas.width / 2.0 + (canvas.width * cam.curZoom) / 2.0;
+  const displayWidth = getCanvasDisplayWidth();
+  let leftEdge = displayWidth / 2.0 - (displayWidth * cam.curZoom) / 2.0;
+  let rightEdge = displayWidth / 2.0 + (displayWidth * cam.curZoom) / 2.0;
   return map_range(screenX, leftEdge, rightEdge, 0.0, 1.0) - cam.curXpos / 2.0;
 }
 
 function screenToSimY(screenY)
 {
-  let topEdge = canvas.height / 2.0 - ((canvas.width / sim_aspect) * cam.curZoom) / 2.0;
-  let bottemEdge = canvas.height / 2.0 + ((canvas.width / sim_aspect) * cam.curZoom) / 2.0;
+  const displayWidth = getCanvasDisplayWidth();
+  const displayHeight = getCanvasDisplayHeight();
+  let topEdge = displayHeight / 2.0 - ((displayWidth / sim_aspect) * cam.curZoom) / 2.0;
+  let bottemEdge = displayHeight / 2.0 + ((displayWidth / sim_aspect) * cam.curZoom) / 2.0;
   return map_range(screenY, bottemEdge, topEdge, 0.0, 1.0) - (cam.curYpos / 2.0) * sim_aspect;
 }
 
@@ -762,8 +782,9 @@ function simToScreenX(simX)
 {
   simX += 0.5;
   simX /= sim_res_x;
-  let leftEdge = canvas.width / 2.0 - (canvas.width * cam.curZoom) / 2.0;
-  let rightEdge = canvas.width / 2.0 + (canvas.width * cam.curZoom) / 2.0;
+  const displayWidth = getCanvasDisplayWidth();
+  let leftEdge = displayWidth / 2.0 - (displayWidth * cam.curZoom) / 2.0;
+  let rightEdge = displayWidth / 2.0 + (displayWidth * cam.curZoom) / 2.0;
   return map_range(simX + cam.curXpos / 2.0, 0.0, 1.0, leftEdge, rightEdge);
 }
 
@@ -771,8 +792,10 @@ function simToScreenY(simY)
 {
   simY += 0.5; // center in cell
   simY /= sim_res_y;
-  let topEdge = canvas.height / 2.0 - ((canvas.width / sim_aspect) * cam.curZoom) / 2.0;
-  let bottemEdge = canvas.height / 2.0 + ((canvas.width / sim_aspect) * cam.curZoom) / 2.0;
+  const displayWidth = getCanvasDisplayWidth();
+  const displayHeight = getCanvasDisplayHeight();
+  let topEdge = displayHeight / 2.0 - ((displayWidth / sim_aspect) * cam.curZoom) / 2.0;
+  let bottemEdge = displayHeight / 2.0 + ((displayWidth / sim_aspect) * cam.curZoom) / 2.0;
   return map_range(simY + (cam.curYpos / 2.0) * sim_aspect, 0.0, 1.0, bottemEdge, topEdge);
 }
 
@@ -2520,6 +2543,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     currentPerformanceReadouts.simulationRate = measuredSimulationStepsPerSecond + ' steps/s';
     currentPerformanceReadouts.renderQuality = 'HDR ' + guiControls.hdrQuality +
       ' / Bloom ' + (guiControls.bloomEnabled ? guiControls.bloomQuality : 'Off') +
+      (guiControls.superSharpDetail ? ' / 2x Pixel Ratio' : '') +
       (guiControls.filmicToneMapping ? ' / ACES' : '') +
       (guiControls.fxaaEnabled ? ' / FXAA' : '') +
       (guiControls.temporalAAEnabled ? ' / TAA' : '') +
@@ -2541,7 +2565,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     currentPerformanceReadoutControllers.fps.domElement.closest('li').dataset.level = performanceLevel;
     currentPerformanceReadoutControllers.frameTime.domElement.closest('li').dataset.level = timeLevel;
     currentPerformanceReadoutControllers.simulationRate.domElement.closest('li').dataset.level = performanceLevel;
-    currentPerformanceReadoutControllers.renderQuality.domElement.closest('li').dataset.level = guiControls.hdrQuality == '50%' ? 'good' :
+    currentPerformanceReadoutControllers.renderQuality.domElement.closest('li').dataset.level =
+      guiControls.superSharpDetail ? 'poor' :
+      guiControls.hdrQuality == '50%' ? 'good' :
       guiControls.hdrQuality == '75%' ? 'warn' : 'poor';
     currentPerformanceReadoutControllers.overall.domElement.closest('li').dataset.level = performanceLevel;
   }
@@ -2558,8 +2584,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     diagnosticLegend.classList.toggle('diagnostic-legend-reflectivity', reflectivityMode);
 
     const canvasBounds = canvas.getBoundingClientRect();
-    const pointerOverCanvas = canvas.matches(':hover') && mouseX >= 0 && mouseX <= canvas.width &&
-      mouseY >= 0 && mouseY <= canvas.height;
+    const displayWidth = getCanvasDisplayWidth();
+    const displayHeight = getCanvasDisplayHeight();
+    const pointerOverCanvas = canvas.matches(':hover') && mouseX >= 0 && mouseX <= displayWidth &&
+      mouseY >= 0 && mouseY <= displayHeight;
     if (!capeMode || !pointerOverCanvas || mouseXinSim == null || mouseYinSim == null || SETUP_MODE) {
       capeHoverTooltip.hidden = true;
       return;
@@ -2714,8 +2742,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     {
       if (cam.changeViewZoom(delta)) {
         // zoom center at mouse position
-        var mousePositionZoomCorrectionX = (((mouseX - canvas.width / 2 + this.tarXpos) * delta) / cam.tarZoom / canvas.width) * 2.0;
-        var mousePositionZoomCorrectionY = ((((mouseY - canvas.height / 2 + this.tarYpos) * delta) / cam.tarZoom / canvas.height) * 2.0) / canvas_aspect;
+        const displayWidth = getCanvasDisplayWidth();
+        const displayHeight = getCanvasDisplayHeight();
+        var mousePositionZoomCorrectionX = (((mouseX - displayWidth / 2 + this.tarXpos) * delta) / cam.tarZoom / displayWidth) * 2.0;
+        var mousePositionZoomCorrectionY = ((((mouseY - displayHeight / 2 + this.tarYpos) * delta) / cam.tarZoom / displayHeight) * 2.0) / canvas_aspect;
         this.changeViewXpos(-mousePositionZoomCorrectionX);
         this.changeViewYpos(mousePositionZoomCorrectionY);
       }
@@ -4516,7 +4546,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       } else if (gp) {
         this.elevator = -gp.axes[1];
       } else {                                                              // manual elevator control
-        this.elevator = (mouseY - canvas.height / 2) / canvas.height * 2.0; // pitch input -1.0 to +1.0
+        const displayHeight = getCanvasDisplayHeight();
+        this.elevator = (mouseY - displayHeight / 2) / displayHeight * 2.0; // pitch input -1.0 to +1.0
       }
 
       // this.elevator /= 1.0 + Math.max(this.#airspeed - 80, 0.) * 0.01;          // limit elevator throw at higher airspeed
@@ -4807,7 +4838,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     bloomRenderScale = renderQualityScales[guiControls.bloomQuality];
     if (!['Extreme', 'Quality', 'Balanced', 'Performance', 'Custom'].includes(guiControls.performancePreset))
       guiControls.performancePreset = 'Balanced';
-    for (const setting of ['filmicToneMapping', 'fxaaEnabled', 'volumetricCloudLighting', 'temporalAAEnabled'])
+    for (const setting of ['filmicToneMapping', 'fxaaEnabled', 'volumetricCloudLighting', 'temporalAAEnabled', 'superSharpDetail'])
       guiControls[setting] = guiControls[setting] === true;
     if (!['Unlocked', '30', '60', '90', '120', '144', '165', '240'].includes(guiControls.autoFpsTarget))
       guiControls.autoFpsTarget = '120';
@@ -4838,6 +4869,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         setGuiUniforms();
         hideOrShowGraph();
         updateSunlight();
+        applySuperSharpDetail();
       }
     };
 
@@ -5417,6 +5449,21 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     ];
     const renderTechnologyControllers = renderTechnologySettings.map(([setting, label]) =>
       performanceFolder.add(guiControls, setting).name(label).onChange(updateRenderPresetLabel));
+    const superSharpDetailWarning =
+      'Warning: Super Sharp Detail Mode increases the rendering pixel ratio by 2x (4x more total pixels rendered in HDR, bloom, post-processing, and plant overlays).\n\n' +
+      'This substantially increases GPU load and graphics memory usage, which may lower frame rates or cause instability on weaker GPUs.\n\n' +
+      'Turn on Super Sharp Detail Mode?';
+    const superSharpDetailController = performanceFolder.add(guiControls, 'superSharpDetail')
+      .name('Super Sharp Detail Mode')
+      .onChange(function(enabled) {
+        if (enabled && !confirm(superSharpDetailWarning)) {
+          guiControls.superSharpDetail = false;
+          superSharpDetailController.updateDisplay();
+          return;
+        }
+        temporalHistoryValid = false;
+        applySuperSharpDetail();
+      });
     performanceFolder.add(guiControls, 'showPlants')
       .name('Render Plants')
       .listen();
@@ -5478,6 +5525,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       'FXAA Anti-Aliasing': ['Smooths jagged edges in the final image with a screen-space filter. It adds a small post-processing cost and can slightly soften fine details.', 'Low', 'low'],
       'Volumetric Cloud Lighting': ['Adds cloud self-shadowing, cool shaded interiors, sun-warmed edges, and a richer altitude- and time-of-day sky gradient. The extra lighting samples are most costly in scenes with widespread clouds.', 'High', 'high'],
       'Temporal Anti-Aliasing': ['Blends a small amount of the previous frame into the current frame to reduce flicker and jagged edges. History is neighborhood-clamped and reset on camera or display-mode changes; this is screen-space smoothing, not motion-reprojected TAA.', 'Low to medium', 'medium'],
+      'Super Sharp Detail Mode': ['Increases the rendering pixel ratio by 2x (4x total rendered pixels across HDR, bloom, post-processing, and plant overlays) for razor-sharp details. Shows a warning before turning on.', 'Very high (4x pixel load & VRAM)', 'high'],
       'Render Plants': ['Hides or draws the plant layer. Hiding plants reduces per-frame 2D rendering work; plant growth and weather simulation continue.', 'Low to medium', 'low'],
       'Render Precipitation Particles': ['Shows or hides individual falling-particle markers. Hiding them skips their display draw; precipitation simulation and deposition continue.', 'Low to medium', 'medium'],
       'Weather Station Overlays': ['Hides or updates station cards and charts. Hiding them can reduce browser rendering overhead; weather station measurements continue.', 'Low to medium', 'low'],
@@ -6161,8 +6209,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   var canvas_aspect;
 
-  canvas.width = Math.max(1, Math.floor(window.innerWidth));
-  canvas.height = Math.max(1, Math.floor(window.innerHeight));
+  const initialPixelRatio = getRenderPixelRatio();
+  canvas.style.width = '100vw';
+  canvas.style.height = '100vh';
+  canvas.width = Math.max(1, Math.floor(getCanvasDisplayWidth() * initialPixelRatio));
+  canvas.height = Math.max(1, Math.floor(getCanvasDisplayHeight() * initialPixelRatio));
   canvas.style.display = 'block';
   canvas_aspect = canvas.width / canvas.height;
 
@@ -6170,12 +6221,15 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   var prevMouseXinSim, prevMouseYinSim;
   let resizeTimeout;
 
-  function resizeSimulationCanvases()
+  function resizeSimulationCanvases(force = false)
   {
     resizeTimeout = null;
-    const width = Math.max(1, Math.floor(window.innerWidth));
-    const height = Math.max(1, Math.floor(window.innerHeight));
-    if (canvas.width == width && canvas.height == height)
+    const displayWidth = getCanvasDisplayWidth();
+    const displayHeight = getCanvasDisplayHeight();
+    const pixelRatio = getRenderPixelRatio();
+    const width = Math.max(1, Math.floor(displayWidth * pixelRatio));
+    const height = Math.max(1, Math.floor(displayHeight * pixelRatio));
+    if (!force && canvas.width == width && canvas.height == height)
       return;
 
     canvas.width = width;
@@ -6184,8 +6238,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     ecosystemCanvas.height = height;
     canvas_aspect = width / height;
 
-    soundingGraph.graphCanvas.height = height;
-    soundingGraph.graphCanvas.width = height;
+    soundingGraph.graphCanvas.height = displayHeight;
+    soundingGraph.graphCanvas.width = displayHeight;
 
     if (gl.isContextLost())
       return;
@@ -6194,6 +6248,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     createHdrFBO();
     createTemporalHistoryTexture();
   }
+
+  applySuperSharpDetail = function() {
+    resizeSimulationCanvases(true);
+  };
 
   window.addEventListener('resize', function() {
     if (resizeTimeout !== undefined)
@@ -6326,8 +6384,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       mouseY = event.clientY - rect.top;
 
     if (middleMousePressed) {
-      cam.changeViewXpos(((mouseX - prevMouseX) / cam.curZoom / canvas.width) * 2.0);
-      cam.changeViewYpos(-((mouseY - prevMouseY) / cam.curZoom / canvas.width) * 2.0);
+      const displayWidth = getCanvasDisplayWidth();
+      cam.changeViewXpos(((mouseX - prevMouseX) / cam.curZoom / displayWidth) * 2.0);
+      cam.changeViewYpos(-((mouseY - prevMouseY) / cam.curZoom / displayWidth) * 2.0);
       prevMouseX = mouseX;
       prevMouseY = mouseY;
     }
@@ -6741,8 +6800,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.22'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.22')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.23'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.23')
   ]);
 
   const [
@@ -7665,7 +7724,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.22');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.23');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8180,7 +8239,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.viewport(0, 0, sim_res_x, sim_res_y);
       gl.useProgram(setupProgram);
       gl.uniform1f(gl.getUniformLocation(setupProgram, 'seed'), mouseXinSim);
-      gl.uniform1f(gl.getUniformLocation(setupProgram, 'heightMult'), ((canvas.height - mouseY) / canvas.height) * 2.0);
+      const displayHeight = getCanvasDisplayHeight();
+      gl.uniform1f(gl.getUniformLocation(setupProgram, 'heightMult'), ((displayHeight - mouseY) / displayHeight) * 2.0);
       // Render to both framebuffers
       gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_0);
       gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2 ]);
@@ -9082,9 +9142,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       plantEcosystem.stepWindPhysics((physicsTime - ecosystemLastPhysicsTime) / 1000);
     ecosystemLastPhysicsTime = physicsTime;
 
+    ecosystemContext.setTransform(1, 0, 0, 1, 0, 0);
     ecosystemContext.clearRect(0, 0, ecosystemCanvas.width, ecosystemCanvas.height);
     if (guiControls.showPlants && !SETUP_MODE) {
-      const cellPixels = canvas.width / sim_res_x * cam.curZoom;
+      const displayWidth = getCanvasDisplayWidth();
+      const pixelScale = canvas.width / displayWidth;
+      ecosystemContext.setTransform(pixelScale, 0, 0, pixelScale, 0, 0);
+      const cellPixels = displayWidth / sim_res_x * cam.curZoom;
       const hoveredPlant = plantEcosystem.draw(
         ecosystemContext,
         simToScreenX,
@@ -9591,7 +9655,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.22');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.23');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

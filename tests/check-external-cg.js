@@ -171,7 +171,7 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
       selectExternalStrikeTarget(originX, originY, iter, stormScoreFn, resX, resY),
       originY,
       iter,
-      clamp(Math.max(incoming[3] * 1.45, 2.8), 2.8, 4.5)
+      clamp(4.6 + (incoming[3] - 0.75) * 0.25, 4.6, 5.4)
     ];
     return {
       row0 : attractToRod(extStrike, rods),
@@ -231,9 +231,56 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
   check('clear-air left/right targeting is balanced when both sides are clear',
     leftHits > extCount * 0.35 && rightHits > extCount * 0.35,
     'left ' + leftHits + ', right ' + rightHits);
-  check('external positive CG carries high CG intensity ([2.8, 4.5])',
-    minExtIntensity >= 2.8 && maxExtIntensity <= 4.5 && minExtIntensity > LIGHTNING_IC_MAX_INTENSITY,
+  check('external positive CG carries elevated high-current intensity ([4.6, 5.4])',
+    minExtIntensity >= 4.6 && maxExtIntensity <= 5.4 && minExtIntensity > LIGHTNING_IC_MAX_INTENSITY,
     'intensity range ' + minExtIntensity.toFixed(2) + ' .. ' + maxExtIntensity.toFixed(2));
+}
+
+// 2e. 20x normal CG brightness & single-stroke behavior
+{
+  const mainMatch = displayShader.match(/const float mainBoltBrightness = ([\d.]+);/);
+  const extMatch = displayShader.match(/const float extBoltBrightness = ([\d.]+);/);
+  const mainB = mainMatch ? Number(mainMatch[1]) : NaN;
+  const extB = extMatch ? Number(extMatch[1]) : NaN;
+  check('displayExternalLightning uses 20x normal CG brightness (2000000 vs 100000)',
+    Number.isFinite(mainB) && Number.isFinite(extB) && extB === mainB * 20,
+    'main=' + mainB + ', ext=' + extB);
+
+  check('external positive CG illuminates ground and storm origin 20x brighter than normal CG',
+    /onLight \+= vec3\(lightningOnLight \* 19\.0\);/.test(displayShader) &&
+    /onLight \+= vec3\(lightningOnLightBrightness \* 20\.0 \//.test(displayShader),
+    'expected 20x total ground (1 + 19) and 20x origin cloud onLight');
+
+  const LIGHTNING_ANIM_ITERS = defineValue(common, 'LIGHTNING_ANIM_ITERS');
+  const flickersExt = (x, y, intensity) => {
+    const r = random2d(f32(x * 2.737250), f32(y * 2.737250));
+    if (intensity > 4.5) return r < 0.85 ? 0.0 : 1.0;
+    return Math.floor(mapRange(r, 0, 1, 1.0, Math.max(intensity - 0.5, 0) * 2.0));
+  };
+  let zeroRestrikes = 0;
+  let oneRestrike = 0;
+  let overOneRestrike = 0;
+  let maxAnimDuration = 0;
+  const samples = 2000;
+  for (let i = 0; i < samples; i++) {
+    const gx = ((i * 0.6180339887) % 1);
+    const oy = 0.2 + ((i * 0.037) % 0.45);
+    const inten = 4.6 + ((i % 9) * 0.1);
+    const f = flickersExt(gx, oy, inten);
+    if (f === 0) zeroRestrikes++;
+    else if (f === 1) oneRestrike++;
+    else overOneRestrike++;
+    const period = mapRange(random2d(gx, oy), 0, 1, 1.5, 3.0);
+    const dur = 5.0 * (period * f + 2.924);
+    maxAnimDuration = Math.max(maxAnimDuration, dur);
+  }
+  const singleStrokeRate = zeroRestrikes / samples;
+  check('external positive CG usually strikes once (0 restrikes ~85%, <= 1 restroke) and fits slot upper bound',
+    overOneRestrike === 0 && singleStrokeRate >= 0.80 && singleStrokeRate <= 0.90 &&
+    oneRestrike > 0 && maxAnimDuration <= LIGHTNING_ANIM_ITERS &&
+    /if \(strike\[INTENSITY\] > 4\.5\)\s*\n\s*return r < 0\.85 \? 0\.0 : 1\.0;/.test(common),
+    '0 restrikes=' + (singleStrokeRate * 100).toFixed(1) + '%, 1 restroke=' + oneRestrike +
+    ', >1=' + overOneRestrike + ', maxDur=' + maxAnimDuration.toFixed(1));
 }
 
 // 2c. waterTex clear-air steering avoids adjacent storms / wide anvils
