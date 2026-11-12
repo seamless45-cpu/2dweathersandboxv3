@@ -126,7 +126,7 @@ precision highp isampler2D;
 // Lightning rods. A rod is placed with the Lightning Rod tool; it is a mast
 // standing on the terrain that pulls nearby CG strikes onto itself. Keep in
 // sync with MAX_LIGHTNING_RODS in app.js.
-#define MAX_LIGHTNING_RODS 6
+#define MAX_LIGHTNING_RODS 12
 
 // Precipitation deposition
 #define RAIN_DEPOSITION 0

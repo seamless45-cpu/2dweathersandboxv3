@@ -87,8 +87,8 @@ check('a flash reads its own artwork, mip-filtered, over a slab of the sky at tr
 check('a flash lights the slab it lives in and a stroke lights the cloud under it',
   /if \(isFlash\) \{\s*\n\s*\/\/ A flash lights the whole slab/.test(displayShader) &&
   /vec2 flashDist = vec2\(\(lightningPos\.x - texCoord\.x\) \* aspectRatios\[0\], texCoord\.y - lightningPos\.y\);/.test(displayShader) &&
-  /vec2 dist = vec2\(lightningPos\.x - texCoord\.x, max\(\(abs\(lightningPos\.y \/ 2\. - texCoord\.y\) - 0\.1\), 0\.\)\);/.test(displayShader),
-  'the shipped lobe is a point below the strike; a network is a slab');
+  /float cgDx = mod\(lightningPos\.x - texCoord\.x \+ 0\.5, 1\.0\) - 0\.5;\s*\n\s*vec2 dist = vec2\(cgDx, max\(\(abs\(lightningPos\.y \/ 2\. - texCoord\.y\) - 0\.1\), 0\.\)\);/.test(displayShader),
+  'the shipped lobe is a point below the strike (wrapped across x=0/1); a network is a slab');
 check('a stroke still takes the shipped level-0 fetch of the bolt tile',
   /float pixVal = textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.r;/.test(displayShader) &&
   !/mipped/.test(displayShader) && !/flash \? texture/.test(displayShader),
@@ -295,8 +295,24 @@ const softHdrClamp = (value) => {
     'so a weak flash lights less than a storm core');
 }
 
-check('rod snaps are gated to cloud-to-ground strikes',
-  locationShader.includes('strike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY'));
+check('rod snaps are gated to cloud-to-ground strikes and attract both normal -CG and external +CG',
+  locationShader.includes('strike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY') &&
+  /float wrappedHorizontalDist\(/.test(locationShader) &&
+  /float rodEffectiveRadius\(/.test(locationShader) &&
+  /bool hasNearbyLightningRod\(/.test(locationShader) &&
+  /extStrike = attractToRod\(extStrike\);/.test(locationShader) &&
+  /vec4 normalStrike = attractToRod\(incoming\);/.test(locationShader));
+
+const commonDisplay = fs.readFileSync(path.join(ROOT, 'shaders', 'commonDisplay.glsl'), 'utf8');
+check('captured CG channels terminate squarely on the rod tip and rod cursor preview is wired',
+  /float findCapturedRodTipY\(float strikeX\)/.test(displayShader) &&
+  /uniform float lightningBottomU;/.test(displayShader) &&
+  /if \(rodHit && texCoord\.y < rodTipY\)/.test(displayShader) &&
+  /float endY = rodTipY >= 0\.0 \? rodTipY : 0\.0;/.test(displayShader) &&
+  /if \(cursor\.w >= 4\.\)/.test(commonDisplay) &&
+  /function findBoltBottomU\(/.test(appSource) &&
+  /function tryRemoveNearestLightningRod\(/.test(appSource) &&
+  /lightningRodCaptures/.test(appSource));
 
 // the Lightning Rod is a tool, like the weather station
 check('the Lightning Rod tool exists in the tool list',
@@ -343,9 +359,25 @@ function random2d(x, y) {
 
 /* --------------------------------------------------- attractToRod port */
 
-const ROD_ATTRACT_RADIUS = 0.08; // matches rodAttractRadius in app.js
+const ROD_ATTRACT_RADIUS = 0.11; // matches LIGHTNING_ROD_ATTRACT_RADIUS in app.js
+const DEFAULT_ROD_HEIGHT_CELLS = 18.0;
+const DEFAULT_SIM_HEIGHT_CELLS = 300.0;
 const START_ITERNUM = 2;
 const INTENSITY = 3;
+
+const wrappedHorizontalDist = (a, b) => {
+  const d = (a - b + 0.5);
+  return Math.abs(d - Math.floor(d) - 0.5);
+};
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const fract = (v) => v - Math.floor(v);
+
+function rodEffectiveRadius(rod, intensity, radius = ROD_ATTRACT_RADIUS,
+                            rodHeight = DEFAULT_ROD_HEIGHT_CELLS, resY = DEFAULT_SIM_HEIGHT_CELLS) {
+  const heightFactor = 1.0 + clamp(rod.y * 1.2 + (rodHeight / Math.max(resY, 1.0)) * 3.0, 0.0, 0.45);
+  const currentFactor = clamp(0.85 + 0.12 * intensity, 0.90, 1.45);
+  return radius * heightFactor * currentFactor;
+}
 
 // strike = [x, y, startIterNum, intensity]; rods = [{x, y}]
 function attractToRod(strike, rods, radius = ROD_ATTRACT_RADIUS) {
@@ -354,19 +386,23 @@ function attractToRod(strike, rods, radius = ROD_ATTRACT_RADIUS) {
     return result; // intra-cloud: no ground contact, nothing to attract
 
   let nearestRod = -1;
-  let nearestDist = radius;
+  let bestNormalizedDist = 1.0;
   for (let i = 0; i < rods.length && i < MAX_LIGHTNING_RODS; i++) {
-    const dx = Math.abs(result[0] - rods[i].x);
-    if (dx < nearestDist) {
-      nearestDist = dx;
+    const effRadius = Math.max(rodEffectiveRadius(rods[i], result[INTENSITY], radius), 1e-5);
+    const dx = wrappedHorizontalDist(result[0], rods[i].x);
+    const normDist = dx / effRadius;
+    if (normDist < bestNormalizedDist) {
+      bestNormalizedDist = normDist;
       nearestRod = i;
     }
   }
   if (nearestRod < 0)
     return result;
 
-  const pull = 1 - nearestDist / Math.max(radius, 1e-5);
-  if (random2d(result[1] * 149.7, result[START_ITERNUM] * 7.31) > pull)
+  const pull = bestNormalizedDist <= 0.35
+    ? 1.0
+    : Math.pow(clamp((1.0 - bestNormalizedDist) / 0.65, 0.0, 1.0), 1.35);
+  if (random2d(result[1] * 149.7 + fract(result[0]) * 31.3, result[START_ITERNUM] * 7.31) > pull)
     return result;
 
   result[0] = rods[nearestRod].x;
@@ -420,25 +456,60 @@ check('some CG strikes are captured', snapped > 0, 'captured ' + snapped);
 check('every captured strike lands on a rod', mislanded === 0, mislanded + ' landed elsewhere');
 check('every captured strike is a full return stroke', weakIntensity === 0, weakIntensity + ' too weak');
 
-// capture probability falls off linearly with distance: p = 1 - d / radius
-function captureRate(distance) {
+// direct inner cone captures 100% of CG strikes
+{
+  let innerHits = 0;
+  const trials = 1000;
+  for (let i = 0; i < trials; i++) {
+    const strike = [0.30 + 0.025, (i * 0.0173) % 1, 10 + i, 3.0];
+    if (attractToRod(strike, rods)[0] === 0.30) innerHits++;
+  }
+  check('CG strikes inside the inner striking cone (<= 35% effective reach) capture 100%',
+    innerHits === trials, innerHits + ' of ' + trials);
+}
+
+// periodic boundary wrap capture (rod near x=0.99 captures CG at x=0.01)
+{
+  const seamRod = [{x: 0.99, y: 0.02}];
+  let seamHits = 0;
+  for (let i = 0; i < 200; i++) {
+    const strike = [0.01, 0.45, 50 + i, 3.0];
+    if (attractToRod(strike, seamRod)[0] === 0.99) seamHits++;
+  }
+  check('lightning rod captures CG strikes across the periodic x=0/1 boundary',
+    seamHits === 200, seamHits + ' of 200');
+}
+
+// elevated rods and stronger CG currents extend electrogeometric reach
+{
+  const valleyRod = {x: 0.50, y: 0.02};
+  const mountainRod = {x: 0.50, y: 0.30};
+  check('elevated mountain rods and higher-current CG strikes have wider effective reach',
+    rodEffectiveRadius(mountainRod, 3.0) > rodEffectiveRadius(valleyRod, 3.0) &&
+    rodEffectiveRadius(valleyRod, 5.0) > rodEffectiveRadius(valleyRod, 1.5));
+}
+
+// capture probability follows electrogeometric curve outside the inner cone
+function captureRate(distance, intensity = 3.0) {
   let hits = 0;
   const trials = 4000;
   for (let i = 0; i < trials; i++) {
-    const strike = [0.30 + distance, (i * 0.0173) % 1, 10 + i, 3.0];
+    const strike = [0.30 + distance, (i * 0.0173) % 1, 10 + i, intensity];
     if (attractToRod(strike, rods)[0] === 0.30) hits++;
   }
   return hits / trials;
 }
 
-for (const distance of [0.005, 0.02, 0.05, 0.079]) {
-  const expected = 1 - distance / ROD_ATTRACT_RADIUS;
-  const actual = captureRate(distance);
+const effR3 = rodEffectiveRadius(rods[0], 3.0);
+for (const distance of [0.01, 0.055, 0.095, 0.13]) {
+  const norm = distance / effR3;
+  const expected = norm >= 1.0 ? 0 : (norm <= 0.35 ? 1.0 : Math.pow((1.0 - norm) / 0.65, 1.35));
+  const actual = captureRate(distance, 3.0);
   check('capture rate at d=' + distance + ' is ~' + expected.toFixed(2),
     Math.abs(actual - expected) < 0.05,
     'measured ' + actual.toFixed(3) + ' expected ' + expected.toFixed(3));
 }
-check('strikes outside the rod radius are never captured', captureRate(ROD_ATTRACT_RADIUS + 0.01) === 0);
+check('strikes outside effective rod radius are never captured', captureRate(effR3 + 0.01, 3.0) === 0);
 
 // the nearest rod wins when two rods are in reach
 let nearestWins = 0;

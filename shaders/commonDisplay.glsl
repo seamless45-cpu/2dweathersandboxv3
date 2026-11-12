@@ -15,10 +15,28 @@ const vec3 tempColorPalette[] = vec3[](vec3(1., 0.7, 1.), vec3(1., 0.5, 1.), vec
 
 
 // functions for display shaders
-void drawCursor(vec4 cursor, vec3 view)            // OFF: cursor.w < 1       Normal round: cursor.w 1 to 2         WHOLE WIDTH: cursor.w >= 2
+void drawCursor(vec4 cursor, vec3 view)            // OFF: cursor.w < 1       Normal round: cursor.w 1 to 2         WHOLE WIDTH: cursor.w >= 2         LIGHTNING ROD: cursor.w >= 4
 {
   if (cursor.w >= 1.) {                            // draw cursor enabled
-    if (cursor.w >= 3.) {                          // wind push area
+    if (cursor.w >= 4.) {                          // lightning rod placement preview (cursor[2] = rodAttractRadius)
+      float dx = cursor.x - texCoord.x;
+      if (cursorWrapHorizontally)
+        dx = mod(dx + 0.5, 1.0) - 0.5;
+      float horizontalDist = abs(dx);
+      float edgeTolX = max(0.0016 / max(view[2], 0.25), texelSize.x * 0.35);
+      float edgeTolY = edgeTolX * (resolution.x / max(resolution.y, 1.0));
+      float mastHeight = 18.0 * texelSize.y;
+      float dy = texCoord.y - cursor.y;
+      bool onMast = horizontalDist < edgeTolX * 0.85 && dy >= 0.0 && dy <= mastHeight;
+      bool onBase = horizontalDist <= edgeTolX * 4.5 && abs(dy) < edgeTolY * 0.9;
+      bool onReachLine = abs(dy) < edgeTolY * 0.65 && horizontalDist <= cursor[2] &&
+                         fract(horizontalDist * 140.0) < 0.45;
+      bool onReachTick = abs(horizontalDist - cursor[2]) < edgeTolX * 0.85 && abs(dy) <= edgeTolY * 3.0;
+      if (onMast || onBase)
+        fragmentColor = vec4(0.75, 0.90, 1.0, 1.0);
+      else if (onReachLine || onReachTick)
+        fragmentColor = vec4(0.45, 0.72, 1.0, 1.0);
+    } else if (cursor.w >= 3.) {                   // wind push area
       float horizontalDist = abs(cursor.x - texCoord.x);
       if (cursorWrapHorizontally)
         horizontalDist = min(horizontalDist, 1.0 - horizontalDist);
