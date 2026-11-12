@@ -6800,8 +6800,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.24'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.24')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.25'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.25')
   ]);
 
   const [
@@ -7724,7 +7724,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.24');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.25');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8584,6 +8584,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               const midY = 0.5 * (originY + targetY);
               const ccThunderGain = metaType >= 2.5 ? 1.0 : 0.67; // +CC ~50% stronger than -CC while staying in cc*.mp3
               soundSystem.soundThunder(midX, midY, ccThunderGain);
+            } else if (Math.abs(metaType - 1.0) < 0.25) {
+              // External positive CG: normalize [4.6, 5.4] slot tag back to normal-CG thunder scale.
+              const extBaseIntensity = clamp(1.8 + (strikeIntensity - 4.6) * 2.0, 1.8, 3.4);
+              soundSystem.soundThunder(targetX, originY, Math.pow(extBaseIntensity, 2.0) * 1.5);
             } else {
               soundSystem.soundThunder(targetX, originY, Math.pow(strikeIntensity, 2.0));
             }
@@ -9667,7 +9671,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.24');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.25');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
