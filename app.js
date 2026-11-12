@@ -6800,8 +6800,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.27'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.27')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.28'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.28')
   ]);
 
   const [
@@ -7724,7 +7724,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.27');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.28');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8070,6 +8070,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'precipFeedbackTex'), 0);
   gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'lightningDataTex'), 1);
   gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'waterTex'), 2);
+  gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'baseTex'), 3);
+  gl.uniform1f(gl.getUniformLocation(lightningLocationProgram, 'dryLapse'), dryLapse);
   gl.uniform2f(gl.getUniformLocation(lightningLocationProgram, 'resolution'), sim_res_x, sim_res_y);
   gl.uniform2f(gl.getUniformLocation(lightningLocationProgram, 'texelSize'), texelSizeX, texelSizeY);
 
@@ -8516,6 +8518,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               gl.bindTexture(gl.TEXTURE_2D, lightningDataTextures[lightningDataSrc]);
               gl.activeTexture(gl.TEXTURE2);
               gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
+              gl.activeTexture(gl.TEXTURE3);
+              gl.bindTexture(gl.TEXTURE_2D, baseTexture_1);
 
               gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuffs[lightningDst]);
               gl.viewport(0, 0, numLightningSlots, 2);
@@ -9674,7 +9678,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.27');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.28');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

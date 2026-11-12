@@ -12,6 +12,7 @@ in vec2 texCoordX0Ym; // down
 uniform sampler2D precipFeedbackTex;
 uniform sampler2D lightningDataTex; // slot array from the previous iteration
 uniform sampler2D waterTex;         // cloud & precipitation field for clear-air positive CG targeting
+uniform sampler2D baseTex;          // potential temperature field for cloud temperature gating
 
 uniform vec2 resolution;
 uniform vec2 texelSize;
@@ -253,10 +254,16 @@ void main()
   vec4 result = previous;
   if (hasNewStrike && !duplicate && slot == freeSlot) {
     float originX = fract(incoming.x);
-    // Tall convective clouds build upper positive charge that occasionally
-    // discharges out the side/anvil as a high-current external positive CG.
-    float posChance = mix(0.14, 0.24, clamp((incoming.y - 0.18) / 0.28, 0.0, 1.0));
+    // Tall convective clouds only initiate external positive CG from cold upper
+    // charge regions strictly below -25 °C.
+    float originPotentialT = texture(baseTex, vec2(originX, incoming.y))[TEMPERATURE];
+    float originTempK = potentialToRealT(originPotentialT, incoming.y);
+    float originTempC = KtoC(originTempK);
+    float coldFactor = clamp((-25.0 - originTempC) / 30.0, 0.0, 1.0);
+    float posChance = mix(0.14, 0.26, coldFactor);
     bool isExternalPositive = incoming.y >= 0.18 &&
+                              originTempK > 50.0 &&
+                              originTempK < CtoK(-25.0) &&
                               random2d(vec2(originX * 31.7 + incoming.y * 59.3, iterNum * 0.73)) < posChance;
     if (isExternalPositive) {
       vec4 extStrike = incoming;

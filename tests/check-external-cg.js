@@ -82,22 +82,27 @@ check('app.js allocates lightningDataTextures as numLightningSlots x 2 RGBA32F',
   /gl\.viewport\(0,\s*0,\s*numLightningSlots,\s*2\)/.test(appSource),
   'metadata row 1 requires height = 2 in both texImage2D and lightningLocationProgram viewport');
 
-check('app.js binds waterTexture_1 to waterTex unit 2 on lightningLocationProgram',
+check('app.js binds waterTexture_1 (unit 2), baseTexture_1 (unit 3), and dryLapse on lightningLocationProgram',
   /gl\.uniform1i\(gl\.getUniformLocation\(lightningLocationProgram,\s*'waterTex'\),\s*2\)/.test(appSource) &&
-  /gl\.activeTexture\(gl\.TEXTURE2\);\s*\n\s*gl\.bindTexture\(gl\.TEXTURE_2D,\s*waterTexture_1\);/.test(appSource),
-  'lightningLocationShader.frag needs waterTex to probe clear air around the storm');
+  /gl\.uniform1i\(gl\.getUniformLocation\(lightningLocationProgram,\s*'baseTex'\),\s*3\)/.test(appSource) &&
+  /gl\.uniform1f\(gl\.getUniformLocation\(lightningLocationProgram,\s*'dryLapse'\),\s*dryLapse\)/.test(appSource) &&
+  /gl\.activeTexture\(gl\.TEXTURE2\);\s*\n\s*gl\.bindTexture\(gl\.TEXTURE_2D,\s*waterTexture_1\);/.test(appSource) &&
+  /gl\.activeTexture\(gl\.TEXTURE3\);\s*\n\s*gl\.bindTexture\(gl\.TEXTURE_2D,\s*baseTexture_1\);/.test(appSource),
+  'lightningLocationShader.frag needs waterTex, baseTex, and dryLapse to check real cloud temp (< -25 C)');
 
 check('app.js thunder audio wraps periodic x distance across the seam',
   /let wrappedDx = \(x - camXnorm\) - Math\.round\(x - camXnorm\);/.test(appSource) &&
   /let camHorDistFromStrike = wrappedDx \* cellHeight \* sim_res_x;/.test(appSource),
   'external positive strikes wrapping across x=0/1 must compute shortest distance');
 
-check('lightningLocationShader.frag reads row 1 metadata and selects clear-air positive CG targets',
+check('lightningLocationShader.frag gates external positive CG on cloud temperature strictly below -25 C',
   /uniform sampler2D waterTex;/.test(locationShader) &&
+  /uniform sampler2D baseTex;/.test(locationShader) &&
   /float selectExternalStrikeTarget\(/.test(locationShader) &&
   /int row = int\(gl_FragCoord\.y\);/.test(locationShader) &&
+  /originTempK < CtoK\(-25\.0\)/.test(locationShader) &&
   /bool isExternalPositive = incoming\.y >= 0\.18/.test(locationShader),
-  'row 1 stores (originX, isExternalPositive) cleanly alongside row 0');
+  'row 1 stores (originX, isExternalPositive) gated strictly on cloud temp < -25 C');
 
 check('realisticDisplayShader.frag draws external positive CG via displayExternalLightning and illuminates origin + ground',
   /vec3 displayExternalLightning\(/.test(displayShader) &&
@@ -154,12 +159,16 @@ function attractToRod(strike, rods, radius = 0.08) {
   return result;
 }
 
-function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 300) {
+function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 300, originTempC = -35.0) {
   const originX = fract(incoming[0]);
   const originY = incoming[1];
   const iter = incoming[2];
-  const posChance = mix(0.14, 0.24, clamp((originY - 0.18) / 0.28, 0.0, 1.0));
+  const originTempK = originTempC + 273.15;
+  const coldFactor = clamp((-25.0 - originTempC) / 30.0, 0.0, 1.0);
+  const posChance = mix(0.14, 0.26, coldFactor);
   const isExternalPositive = originY >= 0.18 &&
+    originTempK > 50.0 &&
+    originTempK < (-25.0 + 273.15) &&
     random2d(originX * 31.7 + originY * 59.3, iter * 0.73) < posChance;
   if (isExternalPositive) {
     const extStrike = [
@@ -179,7 +188,7 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
   };
 }
 
-// 2a. Low clouds never emit external positive CG
+// 2a. Low clouds or clouds >= -25 C never emit external positive CG
 {
   let extLow = 0;
   for (let i = 0; i < 1000; i++) {
@@ -188,6 +197,18 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
   }
   check('low-altitude triggers (y < 0.18) never trigger external positive CG', extLow === 0,
     extLow + ' of 1000 triggered');
+
+  let extWarm = 0;
+  for (const tempC of [-25.0, -24.9, -15.0, -5.0, 10.0, 650.0, -273.15]) {
+    for (let i = 0; i < 400; i++) {
+      const ox = 0.2 + ((i * 0.0137) % 0.6);
+      const oy = 0.30 + ((i * 0.023) % 0.45);
+      const out = resolveStrike([ox, oy, 700 + i, 1.5], () => 0, [], 2000, 300, tempC);
+      if (out.row1[1] > 0.5) extWarm++;
+    }
+  }
+  check('cloud temperatures at or above -25.0 C (and wall/uninitialized extremes) never trigger positive CG',
+    extWarm === 0, extWarm + ' triggered');
 }
 
 // 2b. Tall storm triggers emit ~14-24% external positive CG, landing far away with high current
