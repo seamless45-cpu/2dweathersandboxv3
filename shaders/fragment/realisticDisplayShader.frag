@@ -124,12 +124,12 @@ const float lightningTexAspect = lightningTexRes.x / lightningTexRes.y;
 float calcLightningTime(float startIterNum)
 {
   float lightningTime = iterNum - startIterNum;
-  return lightningTime / 5.0; // 30.0    0. to 1. leader stage, 1. + Flash stage
+  return lightningTime / 5.0; // zero-latency flash timeline from trigger iteration
 }
 
 float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
 {
-  float T0 = Tin - 1.;
+  float T0 = Tin;
 
   float repeatPeriod = map_range(random2d(lightningPos), 0., 1., 1.5, 3.0); // 2.5
   float numFlashes = lightningFlickers(vec4(lightningPos, 0., intensity));  // 0.4
@@ -141,15 +141,12 @@ float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
   return max((1. / (0.05 + pow(T * 2.0, 3.))) - 0.005, 0.) * pow(intensity, 2.0); // fading out curve
 }
 
-// The cloud-to-ground channel: the code the app shipped with, restored in full.
-//
-// One heading down the picture, revealed by a threshold that grows with
-// lightningTime, held at leaderBrightness while the leader runs and then written
-// at the stroke's own curve times mainBoltBrightness. The light it throws is the
-// bolt itself plus one tight lobe on the cloud around it, and the bloom takes two
-// percent of the frame as it always did. There is no easing of the tail and no
-// second, wide lobe: a stroke goes from white to gone as fast as the curve does,
-// which is what it did before any of this was touched.
+// The cloud-to-ground channel: fires immediately on trigger with no fixed
+// pre-strike latency, written at the stroke's own curve times mainBoltBrightness.
+// The light it throws is the bolt itself plus one tight lobe on the cloud around
+// it, and the bloom takes two percent of the frame as it always did. There is no
+// easing of the tail and no second, wide lobe: a stroke goes from white to gone
+// as fast as the curve does.
 vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity)
 {
   vec2 lightningTexCoord = texCoord;
@@ -174,21 +171,10 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   // over dark ground.
   float pixVal = textureLod(lightningTex, lightningTexCoord, 0.0).r;
 
-  const float branchShowFactor = 2.5;       // 1.5
-  const float leaderBrightness = 50000.;    // 200.0
   const float mainBoltBrightness = 100000.; // 100000.
 
-  float brightnessThreshold = 1. - lightningTime * branchShowFactor;
-  brightnessThreshold += lightningTexCoord.y * branchShowFactor; // grow from the top to the bottem
-
-  brightnessThreshold = clamp(brightnessThreshold, 0., 1.);
-
-  if (lightningTime > 1.0) { // main bolt
-    brightnessThreshold = 0.95;
-    currentLightningIntensity *= mainBoltBrightness;
-  } else {
-    currentLightningIntensity = leaderBrightness;
-  }
+  const float brightnessThreshold = 0.95;
+  currentLightningIntensity *= mainBoltBrightness;
 
   pixVal -= brightnessThreshold;
 
@@ -213,7 +199,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
  * earlier rounds settled that the hard way: down the picture it was a stroke that
  * stopped early, and across the picture it was a bolt lying on its side. So a
  * flash reads its own artwork now, generated once at load by the same generator,
- * on a 2048 x 512 tile (see generateLightningNetwork in lightningGenerator.js).
+ * on a 1024 x 256 tile (see generateLightningNetwork in lightningGenerator.js).
  *
  * Where it goes: 0.28 of the simulation's height (84 cells, ~3.4 km) and
  * `flashHeight * networkTexAspect / aspectRatios[0]` of its width (~336 cells at
@@ -230,10 +216,9 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
  * are the point of the thing. Only the stroke's cloud attenuation applies, which is
  * a filter on the light, not a mask on the channel.
  *
- * How it plays out: the same way the bolt does. The threshold starts at one and
- * falls at branchShowFactor a unit of lightningTime, so over the leader stage the
- * network is revealed from the strike out to its own edge - the leaders running
- * outward - and then the strokes light all of it at once and the curve fades it.
+ * How it plays out: immediately on trigger with zero fixed delay, lighting the
+ * full curved network across the sky and pulsing with the intensity curve as it
+ * decays.
  *
  * The threshold is 0.03 rather than the stroke's 0.95 because the network's
  * channels are a ladder of brightnesses (1.0 trunk, 0.70, 0.46 for the tendrils)
@@ -246,7 +231,6 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
   const float networkTexAspect = networkTexRes.x / networkTexRes.y; // 4.0
   const float flashHeight = 0.28;                                   // 84 sim cells tall (~3.4 km) at 300-row sim height
   vec2 flashSpan = vec2(flashHeight * networkTexAspect / aspectRatios[0], flashHeight);
-  const float branchShowFactor = 2.5;            // the leader's outward speed
   const float flashThreshold = 0.03;             // preserve mip-filtered curved branches and forks
 
   // A stroke is written at a hundred thousand because it is only ever seen
@@ -257,7 +241,6 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
   // at a fortieth of that - white in a cloud, where the column divides it down to
   // about a hundred and twenty, and a few times a stroke's own light in the clear
   // air between two decks.
-  const float leaderBrightness = 8000.;
   const float mainBoltBrightness = 25000.;
 
   float flashDir = random2d(vec2(pos.y * 3.77, 1.23)) < 0.5 ? -1. : 1.;
@@ -271,17 +254,8 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
 
   float pixVal = texture(lightningNetworkTex, flashCoord).r; // mip-filtered: a network of fine channels
 
-  float brightnessThreshold = 1. - lightningTime * branchShowFactor;
-  brightnessThreshold += flashCoord.x * branchShowFactor; // the leaders run outward from the strike
-
-  brightnessThreshold = clamp(brightnessThreshold, 0., 1.);
-
-  if (lightningTime > 1.0) { // a stroke of the flash
-    brightnessThreshold = flashThreshold;
-    currentLightningIntensity *= mainBoltBrightness;
-  } else {
-    currentLightningIntensity = leaderBrightness;
-  }
+  const float brightnessThreshold = flashThreshold;
+  currentLightningIntensity *= mainBoltBrightness;
 
   pixVal -= brightnessThreshold;
 
@@ -421,9 +395,7 @@ vec4 getAirColor(vec2 fragCoordIn)
 
     vec2 lightningPos = lightningData.xy;
     float lightningTime = calcLightningTime(lightningStartIterNum);
-    // Every strike is sampled where its curve starts: the first unit is the
-    // leader running down the channel, and it is part of the look (see
-    // displayLightning).
+    // Every strike starts directly on the trigger iteration with zero fixed delay.
     float currentLightningIntensity = lightningIntensityOverTime(lightningTime, lightningPos, lightningData[INTENSITY]);
     if (currentLightningIntensity <= 0.0)
       continue;
