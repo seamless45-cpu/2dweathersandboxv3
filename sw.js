@@ -23,7 +23,7 @@
 
 'use strict';
 
-const VERSION = '2026-12-06.28';
+const VERSION = '2026-12-06.29';
 
 const APP_CACHE_PREFIX = 'weather-sandbox-';
 const SHELL_CACHE_PREFIX = APP_CACHE_PREFIX + 'shell-';
@@ -44,7 +44,6 @@ const PRECACHE = [
   './favicon.ico',
   './app.js',
   './pwa.js',
-  './ecosystem.js',
   './lightningGenerator.js',
   './libraries/chart.js',
   './libraries/chartjs-adapter-date-fns.js',
