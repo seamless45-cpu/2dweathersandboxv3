@@ -244,6 +244,108 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
   return outputColor;
 }
 
+float extTriWave(float x)
+{
+  return 4.0 * abs(fract(x) - 0.5) - 1.0;
+}
+
+vec2 evalExtArc(float t, float Hw, float V)
+{
+  float om = max(1.0 - t, 1e-5);
+  float tc = max(t, 1e-5);
+  float x = Hw * pow(om, 1.3);
+  float y = V * (1.0 - pow(tc, 2.8)) + 0.14 * V * sin(PI * t) * (1.0 - t);
+  return vec2(x, y);
+}
+
+vec2 evalExtArcDeriv(float t, float Hw, float V)
+{
+  float om = max(1.0 - t, 1e-5);
+  float tc = max(t, 1e-5);
+  float dx = -1.3 * Hw * pow(om, 0.3);
+  float dy = -2.8 * V * pow(tc, 1.8) + 0.14 * V * (PI * cos(PI * t) * (1.0 - t) - sin(PI * t));
+  return vec2(dx, dy);
+}
+
+// External positive CG ("bolt from the blue"): emerges from the upper storm
+// cloud at originX, arches laterally out into clear air far from the storm core,
+// and plunges down to groundPos.x.
+vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime, float currentLightningIntensity)
+{
+  float relX = mod(texCoord.x - groundPos.x + 0.5, 1.0) - 0.5;
+  float dxWrap = mod(originX - groundPos.x + 0.5, 1.0) - 0.5;
+  float Hw = dxWrap * aspectRatios[0];
+  float V = max(groundPos.y, 0.05);
+  float pxw = relX * aspectRatios[0];
+  float pyw = texCoord.y;
+  float pad = 0.35 * max(V, 0.35);
+
+  if (pxw < min(0.0, Hw) - pad || pxw > max(0.0, Hw) + pad ||
+      pyw < 0.0 || pyw > V * 1.25 + pad)
+    return vec3(0.0);
+
+  vec2 target = vec2(pxw, pyw);
+  float bestT = 0.0;
+  float bestD2 = 1e9;
+  for (int k = 0; k < 4; k++) {
+    float tc = float(k) / 3.0;
+    vec2 diff = evalExtArc(tc, Hw, V) - target;
+    float d2 = dot(diff, diff);
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      bestT = tc;
+    }
+  }
+
+  float t = bestT;
+  for (int it = 0; it < 3; it++) {
+    vec2 r = evalExtArc(t, Hw, V) - target;
+    vec2 dC = evalExtArcDeriv(t, Hw, V);
+    float denom = dot(dC, dC) + 1e-6;
+    t = clamp(t - dot(r, dC) / denom, 0.0, 1.0);
+  }
+
+  vec2 c = evalExtArc(t, Hw, V);
+  vec2 dC = evalExtArcDeriv(t, Hw, V);
+  float dLen = length(dC);
+  vec2 tanDir = dLen > 1e-5 ? dC / dLen : vec2(0.0, -1.0);
+  vec2 normDir = vec2(-tanDir.y, tanDir.x);
+
+  float dPerp = dot(target - c, normDir);
+  float seed = random2d(vec2(originX * 19.3, groundPos.y * 23.7)) * 4.0 + 0.5;
+  float jagScale = clamp(min(abs(Hw), V) * 0.14, 0.025, 0.055);
+  float jagEnv = sin(PI * t);
+  float jag = (0.65 * extTriWave(t * 3.8 + seed) +
+               0.32 * extTriWave(t * 9.3 + seed * 1.9) +
+               0.14 * extTriWave(t * 21.0 + seed * 3.1)) * jagScale * jagEnv;
+  dPerp += jag;
+
+  float scaleLen = max(V, 0.25);
+  float u = 0.5 + dPerp / (scaleLen * lightningTexAspect);
+  float v = t;
+  if (v < 0.005 || v > 0.998 || u < 0.01 || u > 0.99)
+    return vec3(0.0);
+
+  // Sub-pixel cross-channel antialiasing without conditional fwidth() derivatives,
+  // keeping the arched bolt continuous against bright daytime sky at 1x zoom.
+  float du = clamp(0.24 * aspectRatios[0] / (1400.0 * max(view[2], 0.5) * scaleLen * lightningTexAspect),
+                   0.0005, 0.0028);
+  float c0 = textureLod(lightningTex, vec2(u, v), 0.0).r;
+  float c1 = textureLod(lightningTex, vec2(clamp(u - du, 0.01, 0.99), v), 0.0).r;
+  float c2 = textureLod(lightningTex, vec2(clamp(u + du, 0.01, 0.99), v), 0.0).r;
+  float pixVal = max(c0, max(c1, c2) * 0.90);
+
+  const float extBoltBrightness = 130000.;
+  const float brightnessThreshold = 0.88;
+  float intensity = currentLightningIntensity * extBoltBrightness;
+
+  pixVal = max(pixVal - brightnessThreshold, 0.0);
+  pixVal *= intensity;
+
+  const vec3 positiveLightningCol = vec3(1.0, 0.90, 0.82);
+  return max(pixVal * positiveLightningCol, vec3(0.0));
+}
+
 
 
 
@@ -386,9 +488,15 @@ vec4 getAirColor(vec2 fragCoordIn)
     // cloud's attenuation of the *light* at the end of this function, which is a
     // filter on how bright a channel seen through a cloud is, not a mask on whether
     // the channel exists.
+    vec4 lightningMeta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
     bool isFlash = lightningData[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY;
-    lightningBoltLight += isFlash ? displayFlash(lightningPos, lightningTime, currentLightningIntensity)
-                                  : displayLightning(lightningPos, lightningTime, currentLightningIntensity);
+    bool isExternalPositive = !isFlash && lightningMeta.y > 0.5;
+    if (isExternalPositive) {
+      lightningBoltLight += displayExternalLightning(lightningPos, lightningMeta.x, lightningTime, currentLightningIntensity);
+    } else {
+      lightningBoltLight += isFlash ? displayFlash(lightningPos, lightningTime, currentLightningIntensity)
+                                    : displayLightning(lightningPos, lightningTime, currentLightningIntensity);
+    }
 
     // The light a strike throws on the clouds around it.
     float lightningOnLight;
@@ -407,6 +515,11 @@ vec4 getAirColor(vec2 fragCoordIn)
     }
     lightningOnLight *= currentLightningIntensity;
     onLight += vec3(lightningOnLight);
+    if (isExternalPositive) {
+      float originDx = mod(lightningMeta.x - texCoord.x + 0.5, 1.0) - 0.5;
+      vec2 originDist = vec2(originDx * aspectRatios[0], texCoord.y - lightningPos.y);
+      onLight += vec3(lightningOnLightBrightness * 0.85 / (pow(length(originDist) * 0.7, 2.) + 0.03) * currentLightningIntensity);
+    }
   }
 
   emittedLight += lightningBoltLight / (1. + cloudDensity * 100.0);
