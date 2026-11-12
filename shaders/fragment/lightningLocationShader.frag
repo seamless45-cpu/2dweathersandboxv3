@@ -102,38 +102,29 @@ float stormScoreAt(float cx, float yMid)
          0.45 * max(wSkirtR[CLOUD] + wSkirtR[PRECIPITATION], 0.0);
 }
 
-// Choose a distant ground strike location in clear air well outside the main
-// storm core for an external positive CG ("bolt from the blue"). Probing both
-// sides across wide lateral distances (with a clear-air distance bias) lets the
-// bolt escape wide storm anvils and strike far out in distant clear sky while
-// remaining < 0.5 domain width for clean periodic seam wrapping.
+// Choose a ground strike location in clear air outside the main storm core for
+// an external positive CG ("bolt from the blue"), sampling uniformly at random
+// across the full 5.5 km - 39.0 km range (0.4583 - 3.25 world height units at
+// 12 km sim height, clamped < 0.4875 domain width so periodic wrapping never
+// flips sides) while steering clear of dense cloud/rain cells.
 float selectExternalStrikeTarget(vec2 originPos, float iter)
 {
-  float aspect = resolution.x / max(resolution.y, 1.0);
-  float nearWorld = map_range(random2d(vec2(originPos.y * 13.1, iter * 2.1)), 0.0, 1.0, 1.40, 2.00);
-  float midWorld = map_range(random2d(vec2(originPos.x * 19.7 + originPos.y * 7.3, iter * 2.9)), 0.0, 1.0, 2.05, 2.60);
-  float farWorld = map_range(random2d(vec2(originPos.x * 23.7, iter * 3.3)), 0.0, 1.0, 2.65, 3.20);
-
-  float dNear = clamp(nearWorld / max(aspect, 1.0), 0.16, 0.30);
-  float dMid = clamp(midWorld / max(aspect, 1.0), dNear + 0.05, 0.39);
-  float dFar = clamp(farWorld / max(aspect, 1.0), dMid + 0.05, 0.47);
+  float aspect = max(resolution.x / max(resolution.y, 1.0), 1.0);
+  const float minWorld = 5.5 / 12.0;  // ~5.5 km minimum lateral travel
+  const float maxWorld = 39.0 / 12.0; // ~39.0 km maximum lateral travel
   float yMid = clamp(originPos.y * 0.55, 0.08, 0.45);
 
-  float cands[6];
-  cands[0] = fract(originPos.x + dNear);
-  cands[1] = fract(originPos.x - dNear);
-  cands[2] = fract(originPos.x + dMid);
-  cands[3] = fract(originPos.x - dMid);
-  cands[4] = fract(originPos.x + dFar);
-  cands[5] = fract(originPos.x - dFar);
-
-  float bestX = cands[0];
+  float bestX = fract(originPos.x + clamp(minWorld / aspect, 0.03, 0.4875));
   float bestScore = 1e9;
   for (int k = 0; k < 6; k++) {
-    float cx = cands[k];
-    float tieBias = 0.12 * random2d(vec2(originPos.x * 17.3 + float(k) * 5.7, iter * 1.9 + float(k)));
-    float distanceBonus = 0.03 * float(k / 2);
-    float score = stormScoreAt(cx, yMid) + tieBias - distanceBonus;
+    float rDist = random2d(vec2(originPos.x * 23.7 + float(k) * 11.3,
+                                originPos.y * 17.9 + iter * 2.13 + float(k) * 3.7));
+    float worldDist = mix(minWorld, maxWorld, rDist);
+    float dx = clamp(worldDist / aspect, 0.03, 0.4875);
+    float side = ((k % 2) == 0) ? 1.0 : -1.0;
+    float cx = fract(originPos.x + side * dx);
+    float tieBias = 0.02 * random2d(vec2(originPos.x * 17.3 + float(k) * 5.7, iter * 1.9 + float(k)));
+    float score = stormScoreAt(cx, yMid) + tieBias;
     if (score < bestScore) {
       bestScore = score;
       bestX = cx;

@@ -110,32 +110,22 @@ check('realisticDisplayShader.frag draws external positive CG via displayExterna
 /* ------------------------------------------- 2. location & targeting port */
 
 function selectExternalStrikeTarget(originX, originY, iter, stormScoreFn, resX = 2000, resY = 300) {
-  const aspect = resX / Math.max(resY, 1.0);
-  const nearWorld = mapRange(random2d(originY * 13.1, iter * 2.1), 0.0, 1.0, 1.40, 2.00);
-  const midWorld = mapRange(random2d(originX * 19.7 + originY * 7.3, iter * 2.9), 0.0, 1.0, 2.05, 2.60);
-  const farWorld = mapRange(random2d(originX * 23.7, iter * 3.3), 0.0, 1.0, 2.65, 3.20);
-
-  const dNear = clamp(nearWorld / Math.max(aspect, 1.0), 0.16, 0.30);
-  const dMid = clamp(midWorld / Math.max(aspect, 1.0), dNear + 0.05, 0.39);
-  const dFar = clamp(farWorld / Math.max(aspect, 1.0), dMid + 0.05, 0.47);
+  const aspect = Math.max(resX / Math.max(resY, 1.0), 1.0);
+  const minWorld = 5.5 / 12.0;
+  const maxWorld = 39.0 / 12.0;
   const yMid = clamp(originY * 0.55, 0.08, 0.45);
 
-  const cands = [
-    fract(originX + dNear),
-    fract(originX - dNear),
-    fract(originX + dMid),
-    fract(originX - dMid),
-    fract(originX + dFar),
-    fract(originX - dFar)
-  ];
-
-  let bestX = cands[0];
+  let bestX = fract(originX + clamp(minWorld / aspect, 0.03, 0.4875));
   let bestScore = 1e9;
   for (let k = 0; k < 6; k++) {
-    const cx = cands[k];
-    const tieBias = 0.12 * random2d(originX * 17.3 + k * 5.7, iter * 1.9 + k);
-    const distanceBonus = 0.03 * Math.floor(k / 2);
-    const score = stormScoreFn(cx, yMid) + tieBias - distanceBonus;
+    const rDist = random2d(originX * 23.7 + k * 11.3,
+                           originY * 17.9 + iter * 2.13 + k * 3.7);
+    const worldDist = mix(minWorld, maxWorld, rDist);
+    const dx = clamp(worldDist / aspect, 0.03, 0.4875);
+    const side = ((k % 2) === 0) ? 1.0 : -1.0;
+    const cx = fract(originX + side * dx);
+    const tieBias = 0.02 * random2d(originX * 17.3 + k * 5.7, iter * 1.9 + k);
+    const score = stormScoreFn(cx, yMid) + tieBias;
     if (score < bestScore) {
       bestScore = score;
       bestX = cx;
@@ -230,9 +220,9 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
   check('external positive CG share in a tall storm stays realistic (12%-26%)',
     rate >= 0.12 && rate <= 0.26,
     (rate * 100).toFixed(1) + '% (' + extCount + ' of ' + total + ')');
-  check('every external positive CG lands far outside the storm core (>= 0.16) and reaches up to 0.47 domain width',
-    minOffset >= 0.16 && maxOffset <= 0.47 && maxOffset >= 0.40,
-    'offset range ' + minOffset.toFixed(3) + ' .. ' + maxOffset.toFixed(3));
+  check('external positive CG strikes randomly across the full minimal-to-maximum range (~5.5 km to ~39 km / 0.06875 to 0.4875 domain width)',
+    minOffset >= 0.068 && minOffset <= 0.09 && maxOffset <= 0.488 && maxOffset >= 0.46,
+    'offset range ' + minOffset.toFixed(4) + ' .. ' + maxOffset.toFixed(4));
   check('clear-air left/right targeting is balanced when both sides are clear',
     leftHits > extCount * 0.35 && rightHits > extCount * 0.35,
     'left ' + leftHits + ', right ' + rightHits);

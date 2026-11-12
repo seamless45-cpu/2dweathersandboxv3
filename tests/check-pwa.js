@@ -341,6 +341,7 @@ check('pwa.js skips non-http origins (file://)', /https\?:/.test(pwa) && /protoc
 check('pwa.js handles beforeinstallprompt', /beforeinstallprompt/.test(pwa));
 check('pwa.js hides the button once installed', /appinstalled/.test(pwa));
 check('pwa.js wires the same ids index.html ships', /installAppWrap/.test(pwa) && /installAppButton/.test(pwa));
+check('index.html removes stray V1.0 version HUD', !/class="app-version"|>V1\.0</.test(html));
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
