@@ -424,6 +424,24 @@ check('the curved network is still a network: visible, and not a solid web',
   'coverage above the display threshold is ' + coverageMin.toFixed(1) + '-'
   + coverageMax.toFixed(1) + '% of the tile');
 
+{
+  const displayShader = fs.readFileSync(path.join(ROOT, 'shaders/fragment/realisticDisplayShader.frag'), 'utf8');
+  const app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  const threshold = Number((displayShader.match(/const float flashThreshold = ([\d.]+);/) || [])[1]);
+
+  check('displayFlash keeps true 4:1 world aspect ratio so IC curves are not crushed vertically',
+    /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader),
+    'unscaled flashSpan in normalized texCoord crushes vertical curves by aspectRatios[0] * 0.5');
+
+  check('displayFlash keeps flashThreshold low enough that mipmapped curved branches survive',
+    Number.isFinite(threshold) && threshold > 0 && threshold <= 0.05,
+    'flashThreshold ' + threshold + ' (high thresholds erase downsampled curved secondary/tertiary channels)');
+
+  check('app.js requests the IC network tile early even before iterNum >= 400 or on low tile budget',
+    /if \(!lightningNetworkReady \|\| wantedLightningTexNum >= lightningTexturesReady\)/.test(app),
+    'waiting for wantedLightningTexNum >= lightningTexturesReady stalls IC network generation');
+}
+
 restoreCanvas();
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

@@ -215,13 +215,13 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
  * flash reads its own artwork now, generated once at load by the same generator,
  * on a 2048 x 512 tile (see generateLightningNetwork in lightningGenerator.js).
  *
- * Where it goes: 0.25 of the simulation's width and 0.125 of its height - a slab a
- * few kilometres across rather than the ten the first cut of this spanned, which
- * read as a web over half the sky - with one artwork pixel landing on about one
- * screen pixel. It is mirrored per strike in both axes off the strike's own
- * position, so two flashes never draw the same network the same way round, and it
- * always starts at the strike itself, because the network artwork starts at its
- * own left edge.
+ * Where it goes: 0.28 of the simulation's height (84 cells, ~3.4 km) and
+ * `flashHeight * networkTexAspect / aspectRatios[0]` of its width (~336 cells at
+ * 2000 x 300), matching the 1024 x 256 (4:1) artwork tile's true aspect ratio in
+ * physical world coordinates so vertical curves are never squashed flat on screen.
+ * It is mirrored per strike in both axes off the strike's own position, so two
+ * flashes never draw the same network the same way round, and it always starts at
+ * the strike itself, because the network artwork starts at its own left edge.
  *
  * It is not masked by the cloud it is born in. A channel that leaves one deck and
  * runs through the clear air to the next is cloud-to-cloud lightning, which is what
@@ -235,18 +235,19 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
  * network is revealed from the strike out to its own edge - the leaders running
  * outward - and then the strokes light all of it at once and the curve fades it.
  *
- * The threshold is 0.15 rather than the stroke's 0.95 because the network's
- * channels are a ladder of brightnesses (1.0 trunk, 0.76, 0.56, 0.42 for the
- * tendrils) and the point of a network is that the fine channels are *there*; 0.95
- * would leave the trunk alone and the flash would be a bolt again. The tile is
- * read mip-filtered, so at any zoom the tendrils come back as an average rather
- * than as dashes.
+ * The threshold is 0.03 rather than the stroke's 0.95 because the network's
+ * channels are a ladder of brightnesses (1.0 trunk, 0.70, 0.46 for the tendrils)
+ * and the tile is read mip-filtered: a higher threshold wipes out downsampled
+ * secondary branches and leaves only the brightest core.
  */
 vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity)
 {
-  const vec2 flashSpan = vec2(0.25, 0.125);      // of the simulation's width and height
+  const vec2 networkTexRes = vec2(1024.0, 256.0);
+  const float networkTexAspect = networkTexRes.x / networkTexRes.y; // 4.0
+  const float flashHeight = 0.28;                                   // 84 sim cells tall (~3.4 km) at 300-row sim height
+  vec2 flashSpan = vec2(flashHeight * networkTexAspect / aspectRatios[0], flashHeight);
   const float branchShowFactor = 2.5;            // the leader's outward speed
-  const float flashThreshold = 0.15;             // the whole network, not just the trunk
+  const float flashThreshold = 0.03;             // preserve mip-filtered curved branches and forks
 
   // A stroke is written at a hundred thousand because it is only ever seen
   // *through* a cloud column, which divides it by a thousand. A flash is not: with

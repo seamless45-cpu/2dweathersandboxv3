@@ -281,38 +281,24 @@ const IC_SHAPE = {
   branchRatio  : 0.66,   // ... and a fork at this share of its parent's
   minWidth     : 1.0,
   stepLength   : 1.4,    // artwork pixels per step
-  jitter       : 0.5,    // heading noise per step, rad - the buzz of a channel
-  straighten   : 0.05,   // pull back toward the strand's own heading
+  jitter       : 0.58,   // heading noise per step, rad - electrical crackle on top of the curve
+  straighten   : 0.075,  // pull back toward the strand's curving course
   forkChance   : 0.0045, // per step, per strand - a fork, not a thicket
   maxLevel     : 2,      // trunk, fork, and one round of sub-forks
-  fanSpread    : 0.22,   // rad - how far the leaders leave the horizontal
+  fanSpread    : 0.60,   // rad - leaders open into a sweeping fan instead of a narrow bundle
 
   // The course a strand follows, not just the buzz around it.
   //
-  // A leader is not on rails: it propagates through a charge layer that is itself
-  // lumpy, so its heading turns steadily for tens of pixels, bends back when it
-  // reaches the edge of the layer, and turns again. Without that, the strand was a
-  // straight line with noise on it - `straighten` pulled the heading back toward one
-  // fixed target forever - which is what made every flash read as a rake of straight
-  // lines lying on their side instead of a network curling inside the cloud.
-  //
-  // So the target the heading is pulled toward now drifts at `turn` radians a step,
-  // reverses when it has wandered `turnRange` away from where the strand started,
-  // and reverses at random now and then (`turnFlip`) so the arcs are not all the
-  // same length. The buzz (`jitter`) rides on top of it, unchanged: the channel
-  // still crackles, it just no longer runs in a straight line while it does.
-  waveAmp      : 0.50,   // rad - how far the course swings either side of the heading
-                         // the strand opened on. This is the curve: a leader that
-                         // keeps one heading is a straight line, whatever the buzz on
-                         // it, and a flash made of straight lines is a rake.
-  waveAmpSpread : 0.24,  // per strand, +/-: some channels arc wider than others
-  waveLength   : 320.,   // artwork pixels per full S - one bend up and one back down
-  waveLengthSpread : 140.,// per strand, +/- so the bends do not line up across the tile
-  waveKink     : 0.0016, // per step - the chance the course is knocked, so the S's are
-                         // not a clean sinusoid
-  layerEdge    : 0.30    // of the tile's height either side of the middle: the layer
-                         // the charge lives in, beyond which a channel is turned back
-                         // into it rather than out of the tile
+  // A leader propagates through a lumpy charge layer, so its target heading
+  // swings through two incommensurate harmonics (`waveAmp`/`waveLength` plus a
+  // slower meander) and knocks its phase now and then (`waveKink`) so the arcs
+  // sweep across the cloud organically instead of forming uniform sine ribbons.
+  waveAmp      : 0.72,   // rad - how far the course swings either side of the opening angle
+  waveAmpSpread : 0.28,  // per strand, +/-: some channels arc wider than others
+  waveLength   : 280.,   // artwork steps per primary arc cycle
+  waveLengthSpread : 110.,// per strand, +/- so the bends do not line up across the tile
+  waveKink     : 0.0024, // per step - random phase knocks so arcs stay irregular
+  layerEdge    : 0.36    // distance from mid-height beyond which channels smoothly curve back inward
 };
 
 const IC_LEVELS = [1.0, 0.70, 0.46]; // channel radiance by fork depth, 0..1
@@ -331,38 +317,47 @@ const IC_LEVELS = [1.0, 0.70, 0.46]; // channel radiance by fork depth, 0..1
  */
 function makeIcStrand(heading, target, rand)
 {
+  const amplitude = (IC_SHAPE.waveAmp + (rand() - 0.5) * IC_SHAPE.waveAmpSpread) *
+                    (rand() < 0.5 ? -1. : 1.);
   return {
     angle : heading,
     target : target,
     opening : target,                                            // the heading it opened on
-    phase : rand() * Math.PI * 2.,                               // where in its S it starts
-    amplitude : (IC_SHAPE.waveAmp + (rand() - 0.5) * IC_SHAPE.waveAmpSpread) *
-                (rand() < 0.5 ? -1. : 1.),
+    phase : rand() * Math.PI * 2.,                               // where in its arc it starts
+    phase2 : rand() * Math.PI * 2.,                              // secondary meander phase
+    ratio2 : 0.45 + rand() * 0.25,                               // secondary harmonic ratio
+    amplitude : amplitude,
     wavelength : Math.max(120., IC_SHAPE.waveLength + (rand() - 0.5) * IC_SHAPE.waveLengthSpread)
   };
 }
 
 function icHeadingStep(strand, rand, heightFraction)
 {
-  strand.phase += (Math.PI * 2.) / strand.wavelength;   // one full S every `wavelength` pixels
-  strand.target = strand.opening + Math.sin(strand.phase) * strand.amplitude;
+  const stepPhase = (Math.PI * 2.) / strand.wavelength;
+  strand.phase += stepPhase;
+  strand.phase2 += stepPhase * strand.ratio2;
+
+  let desired = strand.opening +
+                Math.sin(strand.phase) * strand.amplitude * 0.78 +
+                Math.sin(strand.phase2) * strand.amplitude * 0.32;
 
   if (rand() < IC_SHAPE.waveKink)
-    strand.phase += (rand() - 0.5) * 1.4;               // the course is knocked: not a sine
+    strand.phase += (rand() - 0.5) * 1.4;               // the course is knocked: not a clean sine
 
-  // The charge sits in the middle of the slab, not on its lid: a channel that has
-  // climbed into the top fifth of the tile is turned back down into it, and one that
-  // has sunk into the bottom fifth back up. Without this the arcs simply run out of
-  // tile, and a network of half-length strands is thinner than a straight one.
+  // Smoothly bend channels back into the charge layer when they approach the top
+  // or bottom edge of the tile, instead of clamping them into flat horizontal rails.
   if (heightFraction !== undefined) {
     const fromCentre = heightFraction - 0.5;
     if (Math.abs(fromCentre) > IC_SHAPE.layerEdge) {
       const inward = fromCentre > 0 ? -1. : 1.;
-      if (strand.target * inward < 0.)
-        strand.target = inward * Math.abs(strand.target);
+      const excess = (Math.abs(fromCentre) - IC_SHAPE.layerEdge) / (0.5 - IC_SHAPE.layerEdge);
+      const steer = inward * (0.35 + 0.50 * Math.min(excess, 1.0));
+      strand.opening += (steer - strand.opening) * 0.07;
+      desired += (steer - desired) * Math.min(0.65, 0.25 + 0.40 * excess);
     }
   }
 
+  strand.target = Math.max(-1.2, Math.min(1.2, desired));
   strand.angle += (rand() - 0.5) * IC_SHAPE.jitter;
   strand.angle -= (strand.angle - strand.target) * IC_SHAPE.straighten;
 
@@ -392,7 +387,7 @@ function generateLightningNetwork(width, height)
   const startY = height * 0.5;
 
   /*
-   * One strand: a heading that buzzes, pulled back toward its own target, forking
+   * One strand: a heading that buzzes, pulled back toward its curving target, forking
    * as it goes. A fork is drawn first and the parent resumes from the same point,
    * so the network stays connected whatever order the browser rasterises it in.
    */
@@ -425,8 +420,8 @@ function generateLightningNetwork(width, height)
         ctx.stroke(); // commit the parent so far
 
         const side = Math.random() < 0.5 ? -1. : 1.;
-        const childTarget = clamp(target + side * (0.30 + Math.random() * 0.55), -1.15, 1.15);
-        drawStrand(x, y, childTarget + (Math.random() - 0.5) * 0.5, childTarget,
+        const childTarget = clamp(angle + side * (0.35 + Math.random() * 0.55), -1.15, 1.15);
+        drawStrand(x, y, childTarget + (Math.random() - 0.5) * 0.4, childTarget,
                    Math.max(8, Math.round(steps * (0.30 + Math.random() * 0.45))),
                    Math.max(IC_SHAPE.minWidth, lineWidth * IC_SHAPE.branchRatio), level + 1);
 
@@ -439,22 +434,21 @@ function generateLightningNetwork(width, height)
     ctx.stroke();
   }
 
-  // The trunk: one long, nearly horizontal channel, the spine of the network.
-  drawStrand(startX, startY, 0., 0., Math.round(width / IC_SHAPE.stepLength),
-             IC_SHAPE.trunkWidth, 0);
+  // The trunk: one long curving channel, the spine of the network.
+  const trunkTarget = (Math.random() - 0.5) * 0.30;
+  drawStrand(startX, startY, (Math.random() - 0.5) * 0.25, trunkTarget,
+             Math.round(width / IC_SHAPE.stepLength), IC_SHAPE.trunkWidth, 0);
 
-  // The leaders: a fan that leaves the strike point and fills the tile above and
-  // below it. Half of them are long enough to cross the whole tile, half die out
-  // partway, which is what stops the network looking like a comb.
+  // The leaders: a fan that leaves the strike point and sweeps through the layer.
   for (let i = 0; i < IC_SHAPE.leaders; i++) {
     const fraction = (i + 0.5) / IC_SHAPE.leaders;                       // 0..1 across the fan
     const side = i % 2 === 0 ? -1. : 1.;
-    const target = side * IC_SHAPE.fanSpread * (0.25 + Math.random() * 0.75);
-    const reach = fraction < 0.5 ? (0.35 + Math.random() * 0.35) : (0.7 + Math.random() * 0.3);
+    const target = side * IC_SHAPE.fanSpread * (0.30 + Math.random() * 0.70);
+    const reach = fraction < 0.55 ? (0.35 + Math.random() * 0.30) : (0.65 + Math.random() * 0.28);
     const steps = Math.round(width * reach / IC_SHAPE.stepLength);
 
-    drawStrand(startX + Math.random() * 4., startY + (Math.random() - 0.5) * 24.,
-               target * (0.4 + Math.random() * 0.6), target, steps,
+    drawStrand(startX + Math.random() * 4., startY + (Math.random() - 0.5) * 20.,
+               target * (0.5 + Math.random() * 0.5), target, steps,
                IC_SHAPE.trunkWidth * IC_SHAPE.trunkRatio * (0.75 + Math.random() * 0.25), 1);
   }
 

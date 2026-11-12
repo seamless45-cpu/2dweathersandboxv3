@@ -135,39 +135,20 @@ void main()
           float lightningSpawnChance = max((cloudPlusPrecipDensity - lightningCloudDensityThreshold) * lightningChanceMultiplier, 0.);
           lightningSpawnChance *= legacyLightningGate; // 0 when legacy cloud-density lightning is disabled
 
-          // The gap between strikes, in iterations. The slot manager lets several
-          // strikes run at once, but it cannot pace how often one *starts*: with no
-          // cooldown a storm that is freezing hard starts one on every iteration it
-          // can, and the sky strobes. Thirty iterations is the original number - half
-          // a second at 60 iterations a second - and it is a floor, not a schedule:
-          // a storm that is not freezing simply produces nothing.
-          const float minIterationsSinceLastLightningBolt = 30.;
-
           // Lightning slots: every running strike owns one slot until its own
           // animation has finished (see lightningLocationShader.frag), so a new
-          // strike may only start when a slot is idle. This is what makes
-          // strikes uninterruptible: nothing ever overwrites a running flash.
-          //
-          // "Until its own animation has finished" is the whole point.
-          // strikeAnimEnd() works the end of *this* strike out of its own data,
-          // instead of holding the slot for LIGHTNING_ANIM_ITERS - the length of
-          // the longest strike there can be. A typical flash is over in under a
-          // third of that, and the extra time was pure dead air: with every slot
-          // booked out for it, a storm could only manage one strike every ~28
-          // iterations however hard it tried, and the player saw that as seconds
-          // of nothing between flashes.
-          float newestStrikeIterNum = 0.;
+          // strike may only start when a slot is idle. There is no fixed iteration
+          // cooldown between strikes: whenever a freezing droplet triggers
+          // lightning and any of the LIGHTNING_SLOTS slots is idle, either an
+          // intra-cloud flash or a cloud-to-ground bolt spawns immediately.
           bool lightningSlotFree = false;
           for (int i = 0; i < LIGHTNING_SLOTS; i++) {
             vec4 slotData = texelFetch(lightningDataTex, ivec2(i, 0), 0);
-            if (slotData[START_ITERNUM] > 0. && iterNum < strikeAnimEnd(slotData))
-              newestStrikeIterNum = max(newestStrikeIterNum, slotData[START_ITERNUM]);
-            else
+            if (!(slotData[START_ITERNUM] > 0. && iterNum < strikeAnimEnd(slotData)))
               lightningSlotFree = true;
           }
 
           if (lightningSlotFree &&
-              iterNum - newestStrikeIterNum >= minIterationsSinceLastLightningBolt &&
               random2d(vec2(base[TEMPERATURE] * 0.99, water[TOTAL] * 17.2)) < lightningSpawnChance) { // Spawn lightning
             lightningSpawned = true;
             isActive = false;
