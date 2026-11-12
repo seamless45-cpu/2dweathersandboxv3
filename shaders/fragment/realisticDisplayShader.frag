@@ -244,6 +244,41 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
   return outputColor;
 }
 
+// Positive intra-cloud (+IC) anvil/upper-deck flash: warmer hot white-peach
+// polarity, broader anvil spread, cleaner primary leaders, and 50% brighter
+// peak radiance than negative IC flashes.
+vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningIntensity)
+{
+  const vec2 networkTexRes = vec2(512.0, 256.0);
+  const float networkTexAspect = networkTexRes.x / networkTexRes.y; // 2.0
+  const float flashHeight = 0.095;
+  vec2 flashSpan = vec2(flashHeight * networkTexAspect / aspectRatios[0], flashHeight);
+  const float flashThreshold = 0.045;
+
+  const float mainBoltBrightness = 10500.;
+
+  float flashDir = random2d(vec2(pos.y * 4.91, 2.37)) < 0.5 ? -1. : 1.;
+  float flashFlip = random2d(vec2(pos.x * 6.73, 8.91)) < 0.5 ? -1. : 1.;
+
+  vec2 flashCoord = vec2(0.5 + flashDir * (texCoord.x - mod(pos.x, 1.)) / flashSpan.x,
+                         0.5 + flashFlip * (texCoord.y - pos.y) / flashSpan.y);
+
+  if (flashCoord.x < 0.004 || flashCoord.x > 0.996 || flashCoord.y < 0.004 || flashCoord.y > 0.996)
+    return vec3(0);
+
+  float pixVal = texture(lightningNetworkTex, flashCoord).r;
+
+  const float brightnessThreshold = flashThreshold;
+  currentLightningIntensity *= mainBoltBrightness;
+
+  pixVal -= brightnessThreshold;
+  pixVal = max(pixVal, 0.0);
+  pixVal *= currentLightningIntensity;
+
+  const vec3 positiveIcCol = vec3(1.0, 0.88, 0.80);
+  return max(pixVal * positiveIcCol, vec3(0));
+}
+
 float extTriWave(float x)
 {
   return 4.0 * abs(fract(x) - 0.5) - 1.0;
@@ -350,15 +385,21 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   return max(pixVal * positiveLightningCol, vec3(0.0));
 }
 
-vec2 evalCcCurve(float t, vec2 p0, vec2 pCtrl, vec2 p1)
+vec2 evalCcCubic(float t, vec2 p0, vec2 p1, vec2 p2, vec2 p3)
 {
   float om = 1.0 - t;
-  return om * om * p0 + 2.0 * om * t * pCtrl + t * t * p1;
+  return om * om * om * p0 +
+         3.0 * om * om * t * p1 +
+         3.0 * om * t * t * p2 +
+         t * t * t * p3;
 }
 
-vec2 evalCcCurveDeriv(float t, vec2 p0, vec2 pCtrl, vec2 p1)
+vec2 evalCcCubicDeriv(float t, vec2 p0, vec2 p1, vec2 p2, vec2 p3)
 {
-  return 2.0 * (1.0 - t) * (pCtrl - p0) + 2.0 * t * (p1 - pCtrl);
+  float om = 1.0 - t;
+  return 3.0 * om * om * (p1 - p0) +
+         6.0 * om * t * (p2 - p1) +
+         3.0 * t * t * (p3 - p2);
 }
 
 float ccJagOffset(float t, float jagPhase, float jagScale)
@@ -369,83 +410,49 @@ float ccJagOffset(float t, float jagPhase, float jagScale)
           0.16 * extTriWave(t * 23.0 + jagPhase * 3.1)) * jagScale * jagEnv;
 }
 
-float sampleCcBranch(vec2 target, vec2 p0, vec2 pCtrl, vec2 p1,
-                     float tAttach, float branchAngleOffset, float branchLen,
-                     float branchSeed, float jagPhase, float jagScale,
-                     float scaleLen, float branchThresh)
-{
-  vec2 cAttach = evalCcCurve(tAttach, p0, pCtrl, p1);
-  vec2 dAttach = evalCcCurveDeriv(tAttach, p0, pCtrl, p1);
-  float dLen = length(dAttach);
-  vec2 tanDir = dLen > 1e-5 ? dAttach / dLen : vec2(1.0, 0.0);
-  vec2 normDir = vec2(-tanDir.y, tanDir.x);
-  vec2 branchBase = cAttach - normDir * ccJagOffset(tAttach, jagPhase, jagScale);
-
-  float baseAngle = atan(tanDir.y, tanDir.x) + branchAngleOffset;
-  vec2 dir = vec2(cos(baseAngle), sin(baseAngle));
-  vec2 perp = vec2(-dir.y, dir.x);
-  vec2 rel = target - branchBase;
-
-  float s = dot(rel, dir) / max(branchLen, 1e-4);
-  if (s <= 0.0 || s >= 1.0)
-    return 0.0;
-
-  float archOffset = sin(PI * s) * branchLen * 0.16 * (branchAngleOffset >= 0.0 ? 1.0 : -1.0);
-  float branchJag = (0.65 * extTriWave(s * 3.4 + branchSeed) +
-                     0.32 * extTriWave(s * 8.7 + branchSeed * 1.7)) * clamp(branchLen * 0.08, 0.008, 0.028) * sin(PI * s);
-  float dPerp = dot(rel, perp) - archOffset + branchJag;
-  float widthBoost = mix(1.15, 1.65, s);
-  float u = 0.5 + (dPerp * widthBoost) / (scaleLen * lightningTexAspect);
-  if (u < 0.01 || u > 0.99)
-    return 0.0;
-
-  float v = clamp(0.18 + s * 0.76, 0.01, 0.99);
-  float du = clamp(0.24 * aspectRatios[0] / (1400.0 * max(view[2], 0.5) * scaleLen * lightningTexAspect),
-                   0.0005, 0.0028);
-  float c0 = textureLod(lightningTex, vec2(u, v), 0.0).r;
-  float c1 = textureLod(lightningTex, vec2(clamp(u - du, 0.01, 0.99), v), 0.0).r;
-  float c2 = textureLod(lightningTex, vec2(clamp(u + du, 0.01, 0.99), v), 0.0).r;
-  float pixVal = max(c0, max(c1, c2) * 0.90);
-
-  float normVal = max(pixVal - branchThresh, 0.0) / max(1.0 - branchThresh, 0.05);
-  return normVal * (1.0 - s * 0.45) * 0.62;
-}
-
-// Cloud-to-cloud (CC) lightning: negative (-CC) and positive (+CC) discharges
-// bridging across separate storm cells or distant cloud decks. Positive CC is
-// 50% brighter than negative CC, fires mostly as a single stroke, and develops
-// fewer branches than richly forked negative CC channels.
+// Reworked organic cloud-to-cloud (CC) lightning: uses an asymmetric cubic
+// Bezier leader spine paired with lightningTex's built-in dendritic fractal
+// branches (without artificial geometric stick lines) so -CC discharges form
+// richly forked inter-cloud webs while +CC stays 50% brighter with a cleaner
+// high-current main leader and sparse branching.
 vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiveCC,
                                   float lightningTime, float ccCurve)
 {
   float relX = mod(texCoord.x - targetPos.x + 0.5, 1.0) - 0.5;
   float dxWrap = mod(originPos.x - targetPos.x + 0.5, 1.0) - 0.5;
   vec2 p0 = vec2(dxWrap * aspectRatios[0], originPos.y);
-  vec2 p1 = vec2(0.0, targetPos.y);
+  vec2 p3 = vec2(0.0, targetPos.y);
   vec2 target = vec2(relX * aspectRatios[0], texCoord.y);
 
-  float span = length(p1 - p0);
+  float span = length(p3 - p0);
   if (span < 1e-4)
     return vec3(0.0);
 
   float seed = random2d(vec2(originPos.x * 29.1 + originPos.y * 17.7,
                              targetPos.x * 41.3 + targetPos.y * 13.9));
-  float bowSign = (seed < 0.5) ? 1.0 : -1.0;
-  float bowAmp = clamp(span * 0.16, 0.025, 0.14);
-  vec2 pCtrl = 0.5 * (p0 + p1) + vec2(0.0, bowSign * bowAmp);
-  pCtrl.y = clamp(pCtrl.y, 0.04, 0.94);
+  float s2 = random2d(vec2(seed * 19.3, originPos.y * 37.1));
+  float s3 = random2d(vec2(targetPos.x * 53.7, seed * 23.9));
+  float s4 = random2d(vec2(originPos.x * 47.9, seed * 31.3));
+  float s5 = random2d(vec2(targetPos.y * 61.1, seed * 41.7));
 
-  float pad = max(span * 0.45, 0.18);
-  vec2 boxMin = min(p0, min(pCtrl, p1)) - vec2(pad);
-  vec2 boxMax = max(p0, max(pCtrl, p1)) + vec2(pad);
+  float bow1 = (s2 < 0.5 ? 1.0 : -1.0) * mix(0.08, 0.22, s3) * span;
+  float bow2 = (s4 < 0.5 ? 1.0 : -1.0) * mix(0.08, 0.20, s5) * span;
+  vec2 p1 = mix(p0, p3, 0.32) + vec2((s3 - 0.5) * 0.12 * span, bow1);
+  vec2 p2 = mix(p0, p3, 0.68) + vec2((s5 - 0.5) * 0.12 * span, bow2);
+  p1.y = clamp(p1.y, 0.04, 0.94);
+  p2.y = clamp(p2.y, 0.04, 0.94);
+
+  float pad = max(span * 0.48, 0.22);
+  vec2 boxMin = min(min(p0, p3), min(p1, p2)) - vec2(pad);
+  vec2 boxMax = max(max(p0, p3), max(p1, p2)) + vec2(pad);
   if (target.x < boxMin.x || target.x > boxMax.x || target.y < boxMin.y || target.y > boxMax.y)
     return vec3(0.0);
 
   float bestT = 0.0;
   float bestD2 = 1e9;
-  for (int k = 0; k < 4; k++) {
-    float tc = float(k) / 3.0;
-    vec2 diff = evalCcCurve(tc, p0, pCtrl, p1) - target;
+  for (int k = 0; k < 5; k++) {
+    float tc = float(k) / 4.0;
+    vec2 diff = evalCcCubic(tc, p0, p1, p2, p3) - target;
     float d2 = dot(diff, diff);
     if (d2 < bestD2) {
       bestD2 = d2;
@@ -455,28 +462,28 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
 
   float t = bestT;
   for (int it = 0; it < 3; it++) {
-    vec2 r = evalCcCurve(t, p0, pCtrl, p1) - target;
-    vec2 dC = evalCcCurveDeriv(t, p0, pCtrl, p1);
+    vec2 r = evalCcCubic(t, p0, p1, p2, p3) - target;
+    vec2 dC = evalCcCubicDeriv(t, p0, p1, p2, p3);
     float denom = dot(dC, dC) + 1e-6;
     t = clamp(t - dot(r, dC) / denom, 0.0, 1.0);
   }
 
-  vec2 c = evalCcCurve(t, p0, pCtrl, p1);
-  vec2 dC = evalCcCurveDeriv(t, p0, pCtrl, p1);
+  vec2 c = evalCcCubic(t, p0, p1, p2, p3);
+  vec2 dC = evalCcCubicDeriv(t, p0, p1, p2, p3);
   float dLen = length(dC);
   vec2 tanDir = dLen > 1e-5 ? dC / dLen : vec2(1.0, 0.0);
   vec2 normDir = vec2(-tanDir.y, tanDir.x);
 
-  float jagScale = clamp(span * 0.065, 0.015, 0.045);
+  float jagScale = clamp(span * 0.075, 0.016, 0.052);
   float jagPhase = seed * 7.0 + 0.5;
   float dPerp = dot(target - c, normDir) + ccJagOffset(t, jagPhase, jagScale);
 
-  float scaleLen = clamp(span * 0.45, 0.18, 0.36);
-  float u = 0.5 + dPerp / (scaleLen * lightningTexAspect);
+  float uFlip = (fract(seed * 7.3) < 0.5) ? 1.0 : -1.0;
+  float scaleLen = clamp(span * 0.62, 0.24, 0.52);
+  float u = 0.5 + (uFlip * dPerp) / (scaleLen * lightningTexAspect);
   float v = clamp(0.02 + t * 0.96, 0.01, 0.99);
 
   float channelSignal = 0.0;
-  float mainThreshold = isPositiveCC ? 0.90 : 0.78;
   if (v > 0.005 && v < 0.998 && u > 0.01 && u < 0.99) {
     float du = clamp(0.24 * aspectRatios[0] / (1400.0 * max(view[2], 0.5) * scaleLen * lightningTexAspect),
                      0.0005, 0.0028);
@@ -484,31 +491,23 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
     float c1 = textureLod(lightningTex, vec2(clamp(u - du, 0.01, 0.99), v), 0.0).r;
     float c2 = textureLod(lightningTex, vec2(clamp(u + du, 0.01, 0.99), v), 0.0).r;
     float pixVal = max(c0, max(c1, c2) * 0.90);
-    channelSignal = max(pixVal - mainThreshold, 0.0) / max(1.0 - mainThreshold, 0.05);
+
+    if (isPositiveCC) {
+      const float mainThreshold = 0.91;
+      channelSignal = max(pixVal - mainThreshold, 0.0) / (1.0 - mainThreshold);
+    } else {
+      const float mainThreshold = 0.88;
+      const float branchThreshold = 0.26;
+      float trunkSignal = max(pixVal - mainThreshold, 0.0) / (1.0 - mainThreshold);
+      float branchSignal = (max(pixVal - branchThreshold, 0.0) / (mainThreshold - branchThreshold)) * 0.48;
+      channelSignal = max(trunkSignal, branchSignal);
+    }
   }
 
-  // Negative CC sends out rich forked branches across adjacent clouds; positive CC
-  // maintains a cleaner main leader with far fewer branches.
-  if (!isPositiveCC) {
-    float bLen1 = clamp(span * 0.34, 0.09, 0.24);
-    float bLen2 = clamp(span * 0.28, 0.08, 0.20);
-    float b1 = sampleCcBranch(target, p0, pCtrl, p1, 0.22, (seed < 0.5 ? 0.58 : -0.58),
-                              bLen1, seed * 3.1 + 0.2, jagPhase, jagScale, scaleLen, 0.80);
-    float b2 = sampleCcBranch(target, p0, pCtrl, p1, 0.42, (seed < 0.5 ? -0.64 : 0.64),
-                              bLen1, seed * 5.7 + 1.1, jagPhase, jagScale, scaleLen, 0.80);
-    float b3 = sampleCcBranch(target, p0, pCtrl, p1, 0.62, (seed < 0.5 ? 0.50 : -0.50),
-                              bLen2, seed * 7.3 + 2.4, jagPhase, jagScale, scaleLen, 0.80);
-    float b4 = sampleCcBranch(target, p0, pCtrl, p1, 0.78, (seed < 0.5 ? -0.52 : 0.52),
-                              bLen2, seed * 9.9 + 3.6, jagPhase, jagScale, scaleLen, 0.80);
-    channelSignal = max(channelSignal, max(max(b1, b2), max(b3, b4)));
-  } else if (fract(seed * 13.7) >= 0.60) {
-    float sparseLen = clamp(span * 0.20, 0.06, 0.14);
-    float sparseBranch = sampleCcBranch(target, p0, pCtrl, p1, 0.48, (seed < 0.5 ? 0.42 : -0.42),
-                                        sparseLen, seed * 4.3 + 0.8, jagPhase, jagScale, scaleLen, 0.90);
-    channelSignal = max(channelSignal, sparseBranch * 0.75);
-  }
+  float edgeFade = smoothstep(0.0, 0.03, t) * smoothstep(1.0, 0.97, t);
+  channelSignal *= edgeFade;
 
-  const float ccBaseBrightness = 2500.;
+  const float ccBaseBrightness = 2200.;
   vec3 ccCol = isPositiveCC ? vec3(1.0, 0.90, 0.84) : vec3(0.72, 0.58, 1.0);
   return max(channelSignal * ccCurve * ccBaseBrightness * ccCol, vec3(0.0));
 }
@@ -657,13 +656,18 @@ vec4 getAirColor(vec2 fragCoordIn)
     // the channel exists.
     vec4 lightningMeta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
     bool isFlash = lightningData[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY;
+    bool isPositiveIC = isFlash && lightningMeta.y >= 3.5;
     bool isExternalPositive = !isFlash && abs(lightningMeta.y - 1.0) < 0.25;
     bool isCloudToCloud = !isFlash && lightningMeta.y >= 1.5;
     bool isPositiveCC = isCloudToCloud && lightningMeta.y >= 2.5;
+    float repeatPeriod = map_range(random2d(lightningPos), 0., 1., 1.5, 3.0);
+    float tailT = max(lightningTime - repeatPeriod * lightningFlickers(lightningData), 0.0);
+    float extTailFade = pow(smoothstep(2.924, 1.15, tailT), 2.4);
+    float ccTailFade = pow(smoothstep(2.924, 1.25, tailT), 2.2);
     float ccIntensityGain = (isPositiveCC ? 1.5 : 1.0) * (1.8 / max(pow(lightningData[INTENSITY], 2.0), 0.1));
     float extBaseIntensity = clamp(mix(1.8, 3.4, (lightningData[INTENSITY] - 4.6) / 0.8), 1.8, 3.4);
     float extIntensityGain = pow(extBaseIntensity / max(lightningData[INTENSITY], 1.0), 2.0);
-    float extCurve = currentLightningIntensity * extIntensityGain;
+    float extCurve = currentLightningIntensity * extIntensityGain * extTailFade;
     if (isExternalPositive) {
       lightningBoltLight += displayExternalLightning(lightningPos, lightningMeta.x, lightningTime, extCurve);
     } else if (isCloudToCloud) {
@@ -671,7 +675,9 @@ vec4 getAirColor(vec2 fragCoordIn)
                                                          vec2(lightningMeta.x, lightningPos.y),
                                                          isPositiveCC,
                                                          lightningTime,
-                                                         currentLightningIntensity * ccIntensityGain);
+                                                         currentLightningIntensity * ccIntensityGain * ccTailFade);
+    } else if (isPositiveIC) {
+      lightningBoltLight += displayPositiveFlash(lightningPos, lightningTime, currentLightningIntensity);
     } else {
       lightningBoltLight += isFlash ? displayFlash(lightningPos, lightningTime, currentLightningIntensity)
                                     : displayLightning(lightningPos, lightningTime, currentLightningIntensity);
@@ -686,13 +692,15 @@ vec4 getAirColor(vec2 fragCoordIn)
       // mostly this - the deck glowing from the inside - with the network on top.
       vec2 flashDist = vec2((lightningPos.x - texCoord.x) * aspectRatios[0], texCoord.y - lightningPos.y);
       lightningOnLight = lightningOnLightBrightness * 2.0 / (pow(length(flashDist) * 0.5, 2.) + 0.03);
+      if (isPositiveIC)
+        lightningOnLight *= 1.5;
     } else if (isCloudToCloud) {
       vec2 ccTargetDist = vec2((mod(lightningPos.x - texCoord.x + 0.5, 1.0) - 0.5) * aspectRatios[0],
                                texCoord.y - lightningMeta.z);
-      lightningOnLight = lightningOnLightBrightness * 1.4 / (pow(length(ccTargetDist) * 0.5, 2.) + 0.03) * ccIntensityGain;
+      lightningOnLight = lightningOnLightBrightness * 1.4 / (pow(length(ccTargetDist) * 0.5, 2.) + 0.03) * ccIntensityGain * ccTailFade;
       float ccOriginDx = mod(lightningMeta.x - texCoord.x + 0.5, 1.0) - 0.5;
       vec2 ccOriginDist = vec2(ccOriginDx * aspectRatios[0], texCoord.y - lightningPos.y);
-      onLight += vec3(lightningOnLightBrightness * 1.4 / (pow(length(ccOriginDist) * 0.5, 2.) + 0.03) * ccIntensityGain * currentLightningIntensity);
+      onLight += vec3(lightningOnLightBrightness * 1.4 / (pow(length(ccOriginDist) * 0.5, 2.) + 0.03) * ccIntensityGain * ccTailFade * currentLightningIntensity);
     } else {
       // The one lobe the app shipped with, scaled by the strike's own intensity.
       vec2 dist = vec2(lightningPos.x - texCoord.x, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1), 0.));
@@ -700,7 +708,7 @@ vec4 getAirColor(vec2 fragCoordIn)
       lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03);
     }
     if (isExternalPositive)
-      lightningOnLight *= extIntensityGain;
+      lightningOnLight *= extIntensityGain * extTailFade;
     lightningOnLight *= currentLightningIntensity;
     onLight += vec3(lightningOnLight);
     if (isExternalPositive) {

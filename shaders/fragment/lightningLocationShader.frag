@@ -90,27 +90,33 @@ vec4 attractToRod(vec4 strike)
 float stormScoreAt(float cx, float yMid)
 {
   float wx = fract(cx);
+  float wxL = fract(cx - 0.03);
+  float wxR = fract(cx + 0.03);
   vec4 wMid = texture(waterTex, vec2(wx, yMid));
   vec4 wLow = texture(waterTex, vec2(wx, 0.08));
+  vec4 wSkirtL = texture(waterTex, vec2(wxL, 0.14));
+  vec4 wSkirtR = texture(waterTex, vec2(wxR, 0.14));
   return max(wMid[CLOUD] + wMid[PRECIPITATION], 0.0) +
-         max(wLow[CLOUD] + wLow[PRECIPITATION], 0.0);
+         max(wLow[CLOUD] + wLow[PRECIPITATION], 0.0) +
+         0.45 * max(wSkirtL[CLOUD] + wSkirtL[PRECIPITATION], 0.0) +
+         0.45 * max(wSkirtR[CLOUD] + wSkirtR[PRECIPITATION], 0.0);
 }
 
-// Choose a distant ground strike location in clear air outside the storm core
-// for an external positive CG ("bolt from the blue"). Probing both sides across
-// near, mid, and very far lateral distances lets the bolt escape wide storm
-// anvils, steer away from adjacent storm cells, and travel up to ~33 km into
-// distant clear sky (while remaining < 0.5 domain width for clean seam wrapping).
+// Choose a distant ground strike location in clear air well outside the main
+// storm core for an external positive CG ("bolt from the blue"). Probing both
+// sides across wide lateral distances (with a clear-air distance bias) lets the
+// bolt escape wide storm anvils and strike far out in distant clear sky while
+// remaining < 0.5 domain width for clean periodic seam wrapping.
 float selectExternalStrikeTarget(vec2 originPos, float iter)
 {
   float aspect = resolution.x / max(resolution.y, 1.0);
-  float nearWorld = map_range(random2d(vec2(originPos.y * 13.1, iter * 2.1)), 0.0, 1.0, 0.85, 1.35);
-  float midWorld = map_range(random2d(vec2(originPos.x * 19.7 + originPos.y * 7.3, iter * 2.9)), 0.0, 1.0, 1.40, 2.05);
-  float farWorld = map_range(random2d(vec2(originPos.x * 23.7, iter * 3.3)), 0.0, 1.0, 2.10, 2.75);
+  float nearWorld = map_range(random2d(vec2(originPos.y * 13.1, iter * 2.1)), 0.0, 1.0, 1.40, 2.00);
+  float midWorld = map_range(random2d(vec2(originPos.x * 19.7 + originPos.y * 7.3, iter * 2.9)), 0.0, 1.0, 2.05, 2.60);
+  float farWorld = map_range(random2d(vec2(originPos.x * 23.7, iter * 3.3)), 0.0, 1.0, 2.65, 3.20);
 
-  float dNear = clamp(nearWorld / max(aspect, 1.0), 0.08, 0.22);
-  float dMid = clamp(midWorld / max(aspect, 1.0), dNear + 0.05, 0.32);
-  float dFar = clamp(farWorld / max(aspect, 1.0), dMid + 0.05, 0.42);
+  float dNear = clamp(nearWorld / max(aspect, 1.0), 0.16, 0.30);
+  float dMid = clamp(midWorld / max(aspect, 1.0), dNear + 0.05, 0.39);
+  float dFar = clamp(farWorld / max(aspect, 1.0), dMid + 0.05, 0.47);
   float yMid = clamp(originPos.y * 0.55, 0.08, 0.45);
 
   float cands[6];
@@ -126,7 +132,8 @@ float selectExternalStrikeTarget(vec2 originPos, float iter)
   for (int k = 0; k < 6; k++) {
     float cx = cands[k];
     float tieBias = 0.12 * random2d(vec2(originPos.x * 17.3 + float(k) * 5.7, iter * 1.9 + float(k)));
-    float score = stormScoreAt(cx, yMid) + tieBias;
+    float distanceBonus = 0.03 * float(k / 2);
+    float score = stormScoreAt(cx, yMid) + tieBias - distanceBonus;
     if (score < bestScore) {
       bestScore = score;
       bestX = cx;
@@ -135,30 +142,36 @@ float selectExternalStrikeTarget(vec2 originPos, float iter)
   return bestX;
 }
 
-// Probe waterTex laterally on both sides to find another cloud / storm cell
-// target for cloud-to-cloud (CC) lightning so the channel terminates in real
-// cloud rather than empty sky. Returns vec3(targetX, targetY, found).
+// Probe waterTex laterally on both sides and vertically across storm decks to
+// find a distinct cloud cell or anvil deck target for cloud-to-cloud (CC)
+// lightning, favoring separated pockets with clearer air in between so the
+// discharge visibly bridges across cloud structures. Returns vec3(targetX, targetY, found).
 vec3 selectCloudToCloudTarget(vec2 originPos, float iter)
 {
-  float aspect = resolution.x / max(resolution.y, 1.0);
-  float nearWorld = map_range(random2d(vec2(originPos.x * 37.9, iter * 1.3)), 0.0, 1.0, 0.30, 0.68);
-  float farWorld = map_range(random2d(vec2(originPos.y * 43.1, iter * 2.7)), 0.0, 1.0, 0.72, 1.35);
+  float aspect = max(resolution.x / max(resolution.y, 1.0), 1.0);
+  float w1 = map_range(random2d(vec2(originPos.x * 37.9, iter * 1.3)), 0.0, 1.0, 0.28, 0.58);
+  float w2 = map_range(random2d(vec2(originPos.y * 53.3, iter * 1.9)), 0.0, 1.0, 0.62, 0.92);
+  float w3 = map_range(random2d(vec2(originPos.x * 41.1, iter * 2.3)), 0.0, 1.0, 0.96, 1.32);
+  float w4 = map_range(random2d(vec2(originPos.y * 43.1, iter * 2.7)), 0.0, 1.0, 1.36, 1.76);
 
-  float dNear = clamp(nearWorld / max(aspect, 1.0), 0.04, 0.11);
-  float dFar = clamp(farWorld / max(aspect, 1.0), dNear + 0.04, 0.22);
-  float dMid = 0.5 * (dNear + dFar);
+  float d1 = clamp(w1 / aspect, 0.04, 0.09);
+  float d2 = clamp(w2 / aspect, d1 + 0.03, 0.14);
+  float d3 = clamp(w3 / aspect, d2 + 0.03, 0.20);
+  float d4 = clamp(w4 / aspect, d3 + 0.04, 0.27);
 
-  float ySame = clamp(originPos.y, 0.08, 0.78);
-  float yHigh = clamp(originPos.y + 0.08, 0.12, 0.82);
-  float yLow = clamp(originPos.y - 0.08, 0.08, 0.72);
+  float ySame = clamp(originPos.y, 0.08, 0.80);
+  float yHigh = clamp(originPos.y + 0.14, 0.14, 0.84);
+  float yLow = clamp(originPos.y - 0.14, 0.08, 0.72);
 
-  float dxList[6];
-  dxList[0] = dNear;
-  dxList[1] = -dNear;
-  dxList[2] = dMid;
-  dxList[3] = -dMid;
-  dxList[4] = dFar;
-  dxList[5] = -dFar;
+  float dxList[8];
+  dxList[0] = d1;
+  dxList[1] = -d1;
+  dxList[2] = d2;
+  dxList[3] = -d2;
+  dxList[4] = d3;
+  dxList[5] = -d3;
+  dxList[6] = d4;
+  dxList[7] = -d4;
 
   float yList[3];
   yList[0] = ySame;
@@ -170,7 +183,7 @@ vec3 selectCloudToCloudTarget(vec2 originPos, float iter)
   float bestScore = -1e9;
   bool found = false;
 
-  for (int k = 0; k < 6; k++) {
+  for (int k = 0; k < 8; k++) {
     float dx = dxList[k];
     float cx = fract(originPos.x + dx);
     float mx = fract(originPos.x + 0.5 * dx);
@@ -178,13 +191,15 @@ vec3 selectCloudToCloudTarget(vec2 originPos, float iter)
       float cy = yList[yi];
       vec4 wTarget = texture(waterTex, vec2(cx, cy));
       float targetDensity = max(wTarget[CLOUD] + wTarget[PRECIPITATION], 0.0);
-      if (targetDensity < 0.12)
+      if (targetDensity < 0.14)
         continue;
       vec4 wMid = texture(waterTex, vec2(mx, 0.5 * (originPos.y + cy)));
       float midDensity = max(wMid[CLOUD] + wMid[PRECIPITATION], 0.0);
-      // Prefer genuine remote cloud pockets separated by clearer air or distinct cells.
+      // Prefer bridging across clear/thin gaps between separate cloud decks/cells.
+      float separationBonus = max(targetDensity - midDensity, 0.0) * 0.55;
+      float spanBonus = 0.18 * (abs(dx) / max(d4, 1e-4));
       float tieBias = 0.05 * random2d(vec2(originPos.x * 29.3 + float(k) * 7.1, iter * 3.1 + float(yi)));
-      float score = targetDensity - 0.45 * midDensity + tieBias;
+      float score = targetDensity - 0.45 * midDensity + separationBonus + spanBonus + tieBias;
       if (!found || score > bestScore) {
         bestScore = score;
         bestX = cx;
@@ -281,7 +296,16 @@ void main()
         }
       } else {
         vec4 normalStrike = attractToRod(incoming);
-        result = (row == 0) ? normalStrike : vec4(originX, 0.0, 0.0, 0.0);
+        bool isNormalIC = normalStrike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY;
+        float posIcChance = mix(0.20, 0.36, clamp((incoming.y - 0.16) / 0.28, 0.0, 1.0));
+        bool isPositiveIC = isNormalIC && incoming.y >= 0.16 &&
+                            random2d(vec2(originX * 61.3 + incoming.y * 41.7, iterNum * 1.91)) < posIcChance;
+        if (isPositiveIC) {
+          normalStrike[INTENSITY] = clamp(max(normalStrike[INTENSITY], 0.88), 0.88, LIGHTNING_IC_MAX_INTENSITY);
+          result = (row == 0) ? normalStrike : vec4(originX, 4.0, 0.0, 0.0);
+        } else {
+          result = (row == 0) ? normalStrike : vec4(originX, 0.0, 0.0, 0.0);
+        }
       }
     }
   }

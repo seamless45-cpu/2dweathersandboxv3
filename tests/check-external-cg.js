@@ -111,13 +111,13 @@ check('realisticDisplayShader.frag draws external positive CG via displayExterna
 
 function selectExternalStrikeTarget(originX, originY, iter, stormScoreFn, resX = 2000, resY = 300) {
   const aspect = resX / Math.max(resY, 1.0);
-  const nearWorld = mapRange(random2d(originY * 13.1, iter * 2.1), 0.0, 1.0, 0.85, 1.35);
-  const midWorld = mapRange(random2d(originX * 19.7 + originY * 7.3, iter * 2.9), 0.0, 1.0, 1.40, 2.05);
-  const farWorld = mapRange(random2d(originX * 23.7, iter * 3.3), 0.0, 1.0, 2.10, 2.75);
+  const nearWorld = mapRange(random2d(originY * 13.1, iter * 2.1), 0.0, 1.0, 1.40, 2.00);
+  const midWorld = mapRange(random2d(originX * 19.7 + originY * 7.3, iter * 2.9), 0.0, 1.0, 2.05, 2.60);
+  const farWorld = mapRange(random2d(originX * 23.7, iter * 3.3), 0.0, 1.0, 2.65, 3.20);
 
-  const dNear = clamp(nearWorld / Math.max(aspect, 1.0), 0.08, 0.22);
-  const dMid = clamp(midWorld / Math.max(aspect, 1.0), dNear + 0.05, 0.32);
-  const dFar = clamp(farWorld / Math.max(aspect, 1.0), dMid + 0.05, 0.42);
+  const dNear = clamp(nearWorld / Math.max(aspect, 1.0), 0.16, 0.30);
+  const dMid = clamp(midWorld / Math.max(aspect, 1.0), dNear + 0.05, 0.39);
+  const dFar = clamp(farWorld / Math.max(aspect, 1.0), dMid + 0.05, 0.47);
   const yMid = clamp(originY * 0.55, 0.08, 0.45);
 
   const cands = [
@@ -134,7 +134,8 @@ function selectExternalStrikeTarget(originX, originY, iter, stormScoreFn, resX =
   for (let k = 0; k < 6; k++) {
     const cx = cands[k];
     const tieBias = 0.12 * random2d(originX * 17.3 + k * 5.7, iter * 1.9 + k);
-    const score = stormScoreFn(cx, yMid) + tieBias;
+    const distanceBonus = 0.03 * Math.floor(k / 2);
+    const score = stormScoreFn(cx, yMid) + tieBias - distanceBonus;
     if (score < bestScore) {
       bestScore = score;
       bestX = cx;
@@ -229,8 +230,8 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
   check('external positive CG share in a tall storm stays realistic (12%-26%)',
     rate >= 0.12 && rate <= 0.26,
     (rate * 100).toFixed(1) + '% (' + extCount + ' of ' + total + ')');
-  check('every external positive CG lands far outside the storm core (>= 0.08) and reaches up to 0.42 domain width',
-    minOffset >= 0.08 && maxOffset <= 0.42 && maxOffset >= 0.35,
+  check('every external positive CG lands far outside the storm core (>= 0.16) and reaches up to 0.47 domain width',
+    minOffset >= 0.16 && maxOffset <= 0.47 && maxOffset >= 0.40,
     'offset range ' + minOffset.toFixed(3) + ' .. ' + maxOffset.toFixed(3));
   check('clear-air left/right targeting is balanced when both sides are clear',
     leftHits > extCount * 0.35 && rightHits > extCount * 0.35,
@@ -240,41 +241,54 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
     'intensity range ' + minExtIntensity.toFixed(2) + ' .. ' + maxExtIntensity.toFixed(2));
 }
 
-// 2e. 20x normal CG brightness & single-stroke behavior
+// 2e. 2x normal CG brightness & smooth tail fade behavior
 {
   const mainMatch = displayShader.match(/const float mainBoltBrightness = ([\d.]+);/);
   const extMatch = displayShader.match(/const float extBoltBrightness = ([\d.]+);/);
   const mainB = mainMatch ? Number(mainMatch[1]) : NaN;
   const extB = extMatch ? Number(extMatch[1]) : NaN;
-  check('displayExternalLightning uses 200000 brightness (2x normal CG 100000) and normal CG fade parity',
+  check('displayExternalLightning uses 200000 brightness (2x normal CG 100000) and smooth tail fade',
     Number.isFinite(mainB) && Number.isFinite(extB) && extB === 200000 && extB === mainB * 2 &&
     /const float cgExcessScale = 0\.05 \/ \(1\.0 - brightnessThreshold\);/.test(displayShader) &&
     /float extBaseIntensity = clamp\(mix\(1\.8, 3\.4,/.test(displayShader) &&
-    /float extCurve = currentLightningIntensity \* extIntensityGain;/.test(displayShader),
+    /float extTailFade = pow\(smoothstep\(2\.924, 1\.15, tailT\), 2\.4\);/.test(displayShader) &&
+    /float extCurve = currentLightningIntensity \* extIntensityGain \* extTailFade;/.test(displayShader),
     'main=' + mainB + ', ext=' + extB);
 
   check('external positive CG illuminates ground and storm origin 2x normal CG using extCurve',
-    /if \(isExternalPositive\)\s*\n\s*lightningOnLight \*= extIntensityGain;/.test(displayShader) &&
+    /if \(isExternalPositive\)\s*\n\s*lightningOnLight \*= extIntensityGain \* extTailFade;/.test(displayShader) &&
     /if \(isExternalPositive\) \{\s*\n\s*onLight \+= vec3\(lightningOnLight\);/.test(displayShader) &&
     /onLight \+= vec3\(lightningOnLightBrightness \* 2\.0 \/.*\* extCurve\);/.test(displayShader),
-    'expected 2x ground (1 + 1) and 2x origin cloud onLight driven by extCurve');
+    'expected 2x ground (1 + 1) and 2x origin cloud onLight driven by extCurve + extTailFade');
 
-  // Numerical fade parity: positive CG at slot intensity 5.0 maps to extBaseIntensity 2.6
-  // and keeps an exact 2.000x ratio to normal CG (intensity 2.6) across every time T.
+  // Numerical fade parity + smooth tail decay: positive CG matches normal CG 2.0x over
+  // [0.0, 1.15] and then smoothly fades monotonically toward 0 across [1.15, 2.924]
+  // rather than snapping off from bright white on its final frame.
   const decay = (T) => Math.max(1 / (0.05 + Math.pow(T * 2.0, 3)) - 0.005, 0);
+  const smoothstep = (e0, e1, x) => {
+    const t = clamp((x - e0) / (e1 - e0), 0, 1);
+    return t * t * (3 - 2 * t);
+  };
   const slotI = 5.0;
   const extBaseI = clamp(mix(1.8, 3.4, (slotI - 4.6) / 0.8), 1.8, 3.4);
   const extGain = Math.pow(extBaseI / slotI, 2);
   const cgExcessScale = 0.05 / (1.0 - 0.88);
-  let fadeMatchesNormalCG = true;
-  for (const T of [0.0, 0.25, 0.5, 1.0, 1.5, 2.0, 2.5, 2.9]) {
+  let fadeOk = true;
+  for (const T of [0.0, 0.25, 0.5, 1.0, 1.15]) {
     const normCgLum = (1.0 - 0.95) * decay(T) * Math.pow(extBaseI, 2) * 100000;
     const posCgLum = (1.0 - 0.88) * cgExcessScale * decay(T) * Math.pow(slotI, 2) * extGain * 200000;
     if (Math.abs(posCgLum / normCgLum - 2.0) > 1e-6)
-      fadeMatchesNormalCG = false;
+      fadeOk = false;
   }
-  check('positive CG fades identically to normal CG across the entire time curve (exact 2.0x scale, no harsh dropoff)',
-    fadeMatchesNormalCG);
+  let prevTailLum = Infinity;
+  for (const T of [1.2, 1.6, 2.0, 2.4, 2.8, 2.924]) {
+    const tailFade = Math.pow(smoothstep(2.924, 1.15, T), 2.4);
+    const tailLum = (1.0 - 0.88) * cgExcessScale * decay(T) * Math.pow(slotI, 2) * extGain * tailFade * 200000;
+    if (!(tailLum <= prevTailLum)) fadeOk = false;
+    prevTailLum = tailLum;
+  }
+  check('positive CG keeps 2.0x normal CG shoulder fade and glides smoothly to zero without snapping off',
+    fadeOk && prevTailLum === 0);
 
   const LIGHTNING_ANIM_ITERS = defineValue(common, 'LIGHTNING_ANIM_ITERS');
   const flickersExt = (x, y, intensity) => {
@@ -332,13 +346,13 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
 
 // 2d. Distant lightning rod capture preserves storm originX in row 1
 {
-  const distantRods = [{ x : 0.65, y : 0.03 }];
+  const distantRods = [{ x : 0.86, y : 0.03 }];
   let captured = 0;
   let preservedOrigin = 0;
   for (let i = 0; i < 3000; i++) {
     const ox = 0.50;
     const out = resolveStrike([ox, 0.45, 3000 + i, 1.0], () => 0, distantRods);
-    if (out.row1[1] > 0.5 && out.row0[0] === 0.65) {
+    if (out.row1[1] > 0.5 && out.row0[0] === 0.86) {
       captured++;
       if (Math.abs(out.row1[0] - ox) < 1e-6) preservedOrigin++;
     }
