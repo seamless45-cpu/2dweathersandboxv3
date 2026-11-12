@@ -112,7 +112,11 @@ void main()
   vec4 incoming = vec4(incomingRaw.xy / strikeCount,
                        iterNum,
                        incomingRaw[INTENSITY] / strikeCount);
-  bool hasNewStrike = incomingRaw[START_ITERNUM] > 0.;
+  // Real lightning triggers always write START_ITERNUM >= 1.0 and INTENSITY >= 0.75.
+  // Evaporating droplets near the bottom-left corner can splat small positive VAPOR
+  // (channel 2 == START_ITERNUM) into (1, 0), leaving INTENSITY at 0; require both
+  // channels so phantom zero-intensity vapor splats never hijack a lightning slot.
+  bool hasNewStrike = incomingRaw[START_ITERNUM] >= 0.5 && incomingRaw[INTENSITY] >= 0.5;
 
   bool duplicate = false;
   int freeSlot = -1;

@@ -6737,8 +6737,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.18'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.18')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.19'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.19')
   ]);
 
   const [
@@ -7660,7 +7660,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.18');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.19');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8750,7 +8750,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       // newest bolt we have instead of a blank placeholder, and the next tile is
       // requested here, off the critical path of the frame.
       const wantedLightningTexNum = Math.floor(iterNum / 400) % numLightningTextures;
-      if (wantedLightningTexNum >= lightningTexturesReady)
+      if (!lightningNetworkReady || wantedLightningTexNum >= lightningTexturesReady)
         startLightningTextureWorker();
       const lightningTexNum = Math.min(wantedLightningTexNum, Math.max(lightningTexturesReady - 1, 0));
 
@@ -9583,7 +9583,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.18');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.19');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
