@@ -335,12 +335,15 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   float c2 = textureLod(lightningTex, vec2(clamp(u + du, 0.01, 0.99), v), 0.0).r;
   float pixVal = max(c0, max(c1, c2) * 0.90);
 
-  // Reduced to 200000. (2x mainBoltBrightness = 100000.) so positive CG stands out clearly without blinding washout.
+  // Reduced to 200000. (2x mainBoltBrightness = 100000.) and normalize channel
+  // excess onto displayLightning()'s (1.0 - 0.95) scale so positive CG shares
+  // normal CG's smooth HDR fade curve rather than snapping off harshly.
   const float extBoltBrightness = 200000.;
   const float brightnessThreshold = 0.88;
+  const float cgExcessScale = 0.05 / (1.0 - brightnessThreshold);
   float intensity = currentLightningIntensity * extBoltBrightness;
 
-  pixVal = max(pixVal - brightnessThreshold, 0.0);
+  pixVal = max(pixVal - brightnessThreshold, 0.0) * cgExcessScale;
   pixVal *= intensity;
 
   const vec3 positiveLightningCol = vec3(1.0, 0.90, 0.82);
@@ -658,8 +661,11 @@ vec4 getAirColor(vec2 fragCoordIn)
     bool isCloudToCloud = !isFlash && lightningMeta.y >= 1.5;
     bool isPositiveCC = isCloudToCloud && lightningMeta.y >= 2.5;
     float ccIntensityGain = (isPositiveCC ? 1.5 : 1.0) * (1.8 / max(pow(lightningData[INTENSITY], 2.0), 0.1));
+    float extBaseIntensity = clamp(mix(1.8, 3.4, (lightningData[INTENSITY] - 4.6) / 0.8), 1.8, 3.4);
+    float extIntensityGain = pow(extBaseIntensity / max(lightningData[INTENSITY], 1.0), 2.0);
+    float extCurve = currentLightningIntensity * extIntensityGain;
     if (isExternalPositive) {
-      lightningBoltLight += displayExternalLightning(lightningPos, lightningMeta.x, lightningTime, currentLightningIntensity);
+      lightningBoltLight += displayExternalLightning(lightningPos, lightningMeta.x, lightningTime, extCurve);
     } else if (isCloudToCloud) {
       lightningBoltLight += displayCloudToCloudLightning(vec2(lightningPos.x, lightningMeta.z),
                                                          vec2(lightningMeta.x, lightningPos.y),
@@ -693,13 +699,15 @@ vec4 getAirColor(vec2 fragCoordIn)
       dist.x *= aspectRatios[0];
       lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03);
     }
+    if (isExternalPositive)
+      lightningOnLight *= extIntensityGain;
     lightningOnLight *= currentLightningIntensity;
     onLight += vec3(lightningOnLight);
     if (isExternalPositive) {
       onLight += vec3(lightningOnLight);
       float originDx = mod(lightningMeta.x - texCoord.x + 0.5, 1.0) - 0.5;
       vec2 originDist = vec2(originDx * aspectRatios[0], texCoord.y - lightningPos.y);
-      onLight += vec3(lightningOnLightBrightness * 2.0 / (pow(length(originDist) * 0.7, 2.) + 0.03) * currentLightningIntensity);
+      onLight += vec3(lightningOnLightBrightness * 2.0 / (pow(length(originDist) * 0.7, 2.) + 0.03) * extCurve);
     }
   }
 
