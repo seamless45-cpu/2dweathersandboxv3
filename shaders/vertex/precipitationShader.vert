@@ -66,6 +66,7 @@ void disableDroplet()
 
 void main()
 {
+  feedback = vec4(0.0);
   deposition = vec2(0.0);
   newPos = dropPosition;
   newMass = mass;         // amount of water and ice carried
@@ -163,7 +164,8 @@ void main()
           newMass[ICE] = 0.0;
           newDensity = 1.0;
         }
-        feedback[VAPOR] -= initalMass;
+        if (!lightningSpawned)
+          feedback[VAPOR] -= initalMass;
       }
     }
 

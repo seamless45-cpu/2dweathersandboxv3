@@ -105,15 +105,14 @@ precision highp isampler2D;
 // More than that buys little and costs a 2D texture fetch per slot per pixel
 // in the display pass.
 #define LIGHTNING_SLOTS 6
-// Longest a strike can possibly animating, in iterations - a bound, not a timer.
+// Longest a strike can possibly animate, in iterations - a bound, not a timer.
 // A strike is not held for this long: strikeAnimEnd() below works out how long
 // that particular strike lasts, and a slot is released the moment its own light
 // is over. lightningTime advances 5 iterations per unit (calcLightningTime), the
-// leader stage is one unit, the flicker period is < 3 units, the flicker count is
-// floor(< 2 * intensity - 1) <= 7 for the maximum intensity of 4.5, and the
-// brightness reaches zero at T = 2.924 (lightningIntensityOverTime). So the
-// longest flash is 5 * (3 * 7 + 2.924 + 1) = 124.6 iterations; 126 keeps a
-// margin.
+// flicker period is < 3 units, the flicker count is floor(< 2 * intensity - 1) <= 7
+// for the maximum intensity of 4.5, and the brightness reaches zero at T = 2.924
+// (lightningIntensityOverTime). So the longest flash is
+// 5 * (3 * 7 + 2.924) = 119.6 iterations; 126 keeps a margin.
 #define LIGHTNING_ANIM_ITERS 126.0
 
 // Strikes at or below this intensity are intra-cloud flashes - born inside a
@@ -268,11 +267,10 @@ float lightningFlickers(vec4 strike)
 // display pass call this, so a strike is held for exactly as long as it can
 // still be seen - no cut-off, and no dead time.
 //
-// Layout of the arithmetic: lightningTime = (iterNum - start) / 5 and the leader
-// stage is lightningTime < 1, so iteration = start + 5 * (1 + T0). The last
-// flicker ends when T0 = period * flickers + 2.924 (the T where the intensity
-// curve reaches zero), which is the same expression lightningIntensityOverTime()
-// uses for minT.
+// Layout of the arithmetic: lightningTime = (iterNum - start) / 5 with zero
+// fixed delay (T0 = Tin), so iteration = start + 5 * T0. The last flicker ends
+// when T0 = period * flickers + 2.924 (the T where the intensity curve reaches
+// zero), which is the same expression lightningIntensityOverTime() uses for minT.
 float strikeAnimEnd(vec4 strike)
 {
   float start = strike[START_ITERNUM];
@@ -282,10 +280,7 @@ float strikeAnimEnd(vec4 strike)
   float repeatPeriod = map_range(random2d(strike.xy), 0., 1., 1.5, 3.0);
   float numFlashes = lightningFlickers(strike);
 
-  // Every strike has the leader stage: the display shader samples its curve from
-  // the iteration it is booked, so its light is over one unit later than the
-  // curve's own zero-crossing.
-  return start + 5.0 * (1.0 + repeatPeriod * numFlashes + 2.924);
+  return start + 5.0 * (repeatPeriod * numFlashes + 2.924);
 }
 
 float rand2d(vec2 co)

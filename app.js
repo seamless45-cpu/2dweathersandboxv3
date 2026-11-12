@@ -2925,15 +2925,18 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       // Speed of sound ≈ 343 m/s
       let soundDelay = distance / 343;                                            // in seconds
 
-      let simTimeMult = timePerIteration * guiControls.IterPerFrame * FPS * 3600; // how much faster sime time is than real time
+      let simTimeMult = timePerIteration * (airplaneMode ? 1 / 17 : guiControls.IterPerFrame) * Math.max(FPS, 1) * 3600; // how much faster sim time is than real time
 
       soundDelay /= simTimeMult;
 
+      const scheduledTime = this.audioCtx.currentTime + soundDelay;
       const soundType = intensity > 1.0 ? 'cg' : 'cc';
       const soundNumber = Math.floor(Math.random() * 13) + 1;
       this.loadSound(`${soundType}${soundNumber}.mp3`).then(buffer => {
-        if (buffer)
-          this.playOnce(buffer, intensity / (distance * 0.001), leftRightBalance, soundDelay);
+        if (buffer) {
+          const remainingDelay = Math.max(0, scheduledTime - this.audioCtx.currentTime);
+          this.playOnce(buffer, intensity / (distance * 0.001), leftRightBalance, remainingDelay);
+        }
       });
     }
 
@@ -6737,8 +6740,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.19'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.19')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.20'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.20')
   ]);
 
   const [
@@ -7660,7 +7663,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.19');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.20');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8452,8 +8455,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               gl.bindTexture(gl.TEXTURE_2D, lightningDataTextures[lightningDataSrc]);
 
               gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuffs[lightningDst]);
+              gl.viewport(0, 0, numLightningSlots, 1);
               gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+              gl.viewport(0, 0, sim_res_x, sim_res_y);
               lightningDataSrc = lightningDst;
 
             }
@@ -9583,7 +9588,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.19');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.20');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

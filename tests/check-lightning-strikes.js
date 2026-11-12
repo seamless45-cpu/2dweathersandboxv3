@@ -17,9 +17,10 @@
 //      real lightningIntensityOverTime() curve for thousands of strikes: no light
 //      after the end (nothing is ever cut off), and the end is within two
 //      iterations of the last lit one (nothing is booked for longer than it is).
-//      Also: how much light a strike emits in the iteration it is booked. An
-//      intra-cloud flash is at its peak the moment it is booked; a cloud-to-ground
-//      stroke spends its first unit on the leader, as the original did.
+//   1b. Immediate strike ignition. Both intra-cloud flashes and cloud-to-ground
+//      strokes fire at peak intensity right on the trigger iteration, with zero
+//      fixed 5-iteration leader latency (`T0 = Tin`, no `lightningTime > 1.0`
+//      gate, and clean precipitation feedback initialization).
 //   1c. How a stroke's channel lets go. The channel is the original one: the
 //      intensity curve times a hundred thousand HDR units, straight, so it is
 //      clipped white for the whole strike and gone in the iteration the curve
@@ -93,7 +94,7 @@ const glslMod = (x, y) => x - y * Math.floor(x / y);
 // realisticDisplayShader.frag: calcLightningTime() + lightningIntensityOverTime()
 const calcLightningTime = (start, iter) => (iter - start) / 5.0;
 function lightningIntensityOverTime(Tin, pos, intensity) {
-  const T0 = Tin - 1.0;
+  const T0 = Tin;
   const repeatPeriod = mapRange(random2d(pos[0], pos[1]), 0, 1, 1.5, 3.0);
   const numFlashes = Math.floor(mapRange(random2d(f32(pos[0] * 2.737250), f32(pos[1] * 2.737250)), 0, 1, 1.0,
                                          Math.max(intensity - 0.5, 0) * 2.0));
@@ -109,15 +110,13 @@ function strikeAnimEnd(strike) {
   const repeatPeriod = mapRange(random2d(strike.x, strike.y), 0, 1, 1.5, 3.0);
   const numFlashes = Math.floor(mapRange(random2d(f32(strike.x * 2.737250), f32(strike.y * 2.737250)), 0, 1, 1.0,
                                          Math.max(strike.intensity - 0.5, 0) * 2.0));
-  // Every strike has the leader stage: the display shader samples its curve from
-  // the iteration it is booked, so the light is over one unit later than the
-  // curve's own zero-crossing.
-  return start + 5.0 * (1.0 + repeatPeriod * numFlashes + 2.924);
+  // Zero pre-strike latency: lightningIntensityOverTime() starts at T0 = Tin
+  // and reaches zero when T0 = repeatPeriod * numFlashes + 2.924.
+  return start + 5.0 * (repeatPeriod * numFlashes + 2.924);
 }
 
-// The light a strike puts out in a given iteration, exactly as the display shader
-// samples the curve: from the iteration the strike is booked, so its first unit is
-// the leader (there is one sampling now - every strike is drawn the same way).
+// The light a strike puts out in a given iteration, starting immediately at peak
+// on the iteration the strike is booked (zero fixed leader latency).
 function lightOf(strike, iter) {
   return lightningIntensityOverTime(calcLightningTime(strike.start, iter),
                                     [ strike.x, strike.y ], strike.intensity);
@@ -196,12 +195,8 @@ check('the slot count agrees between app.js, common.glsl and this test',
 /* --------------------------------- 1b. how long a strike takes to light up */
 
 {
-  // The wait the player sees is not only the slot: a strike that is booked and
-  // then emits almost nothing for its first iterations reads as "the lightning
-  // has not fired up yet". The intensity curve spends its first unit (five
-  // iterations) ramping a stepped leader down the channel - which is a
-  // cloud-to-ground idea. For an intra-cloud flash that unit was five iterations
-  // of near-dark output on every single flash.
+  // Neither IC flashes nor CG bolts may sit dark for five iterations (Tin <= 1.0)
+  // after triggering: both fire immediately at peak on the iteration they trigger.
   const sample = [];
   for (let i = 0; i < 400; i++)
     sample.push({
@@ -216,29 +211,29 @@ check('the slot count agrees between app.js, common.glsl and this test',
     return peak;
   };
 
-  // A strike is booked and the very next iteration is a lit one: the leader stage
-  // is drawn at leaderBrightness, so the wait between "the storm let go" and
-  // "there is a flash" is a single iteration for every kind of strike.
   let worstFirst = 1;
-  for (const strike of sample)
-    worstFirst = Math.min(worstFirst, lightOf(strike, strike.start) / peakOf(strike));
-  check('no strike spends its first iterations emitting nothing',
-    worstFirst >= 0,
-    'the dimmest first iteration of ' + sample.length + ' strikes is ' +
-    worstFirst.toFixed(3) + ' of that strike\'s peak (the channel is drawn at leaderBrightness there)');
+  let worstNext = 1;
+  for (const strike of sample) {
+    const peak = peakOf(strike);
+    worstFirst = Math.min(worstFirst, lightOf(strike, strike.start) / peak);
+    worstNext = Math.min(worstNext, lightOf(strike, strike.start + 1) / peak);
+  }
+  check('every strike emits peak light immediately on its start iteration (no fixed 5-iter latency)',
+    worstFirst >= 0.99 && worstNext > 0.35,
+    'first iter ' + worstFirst.toFixed(3) + ' of peak, next iter ' + worstNext.toFixed(3) + ' of peak');
 
-  // A cloud-to-ground stroke keeps its leader stage, because that stage is part of
-  // the look that was asked for back: the curve is sampled at the strike's own
-  // start, so the first unit is the ramp, and while it runs the channel is held at
-  // leaderBrightness and revealed down the tile from the top.
-  check('a cloud-to-ground stroke still has its leader stage',
-    /const float leaderBrightness = 50000\./.test(displayShader) &&
-    /if \(lightningTime > 1\.0\) \{ \/\/ main bolt/.test(displayShader) &&
-    /brightnessThreshold = 1\. - lightningTime \* branchShowFactor;/.test(displayShader),
-    'the bolt lands on a channel that is already lit from the cloud base down');
-  check('and its curve is sampled at the strike\'s start, so the leader is the first unit',
+  check('lightningIntensityOverTime does not subtract a 1.0-unit leader delay',
+    /float T0 = Tin;/.test(displayShader) && !/float T0 = Tin - 1\.;/.test(displayShader),
+    'Tin - 1.0 shifts every flash five iterations later and leaves cloud glow dark on trigger');
+
+  check('neither IC nor CG delays main bolt brightness behind a lightningTime > 1.0 gate',
+    !/if \(lightningTime > 1\.0\)/.test(displayShader) &&
+    !/currentLightningIntensity = leaderBrightness;/.test(displayShader),
+    'displayLightning and displayFlash must strike immediately when triggered');
+
+  check('both IC and CG sample the curve directly from the strike trigger iteration',
     /lightningIntensityOverTime\(lightningTime, lightningPos, lightningData\[INTENSITY\]\)/.test(displayShader),
-    'one unit in would start the bolt at its peak with no leader at all');
+    'no fixed offset between trigger and display');
   check('the rod corona follows the same instant as the bolt that hit it',
     /lightningIntensityOverTime\(calcLightningTime\(strikeData\[START_ITERNUM\]\), strikeData\.xy, strikeData\[INTENSITY\]\)/.test(displayShader),
     'a mast has to light up with the channel that struck it, not a unit later');
@@ -247,17 +242,13 @@ check('the slot count agrees between app.js, common.glsl and this test',
 /* ------------------------------------- 1c. the channel, as it shipped */
 
 {
-  // The channel is the shipped one: the artwork, multiplied by the intensity
-  // curve's own value at this iteration, times a hundred thousand HDR units. That
-  // is four decades over the point where the tonemap runs out of range, so the line
-  // is white for every iteration the curve has light in it and gone in the
-  // iteration the curve reaches zero. It is a switch, not a fade - that is what the
-  // app did before any of this was touched, and what was asked for back. These
-  // checks hold the source to it and then measure it iteration by iteration on
-  // three hundred seeded strokes, to the iteration after each strike's end.
+  // The channel is written at the original hundred thousand HDR units for CG
+  // strokes (and twenty-five thousand for IC flashes), straight through the curve
+  // with no pre-strike fixed delay and no easing of the tail.
   const HDR_CEILING = defineValue(common, 'HDR_CEILING');
-  const mainBoltBrightness = Number((displayShader.match(/const float mainBoltBrightness = ([\d.]+);/) || [])[1]);
-  const leaderBrightness = Number((displayShader.match(/const float leaderBrightness = ([\d.]+);/) || [])[1]);
+  const cgSection = displayShader.slice(displayShader.indexOf('vec3 displayLightning('),
+                                        displayShader.indexOf('vec3 displayFlash('));
+  const mainBoltBrightness = Number((cgSection.match(/const float mainBoltBrightness = ([\d.]+);/) || [])[1]);
 
   const softHdrClamp = (value) => Number.isNaN(value) ? 0 : HDR_CEILING * (1 - Math.exp(-Math.max(value, 0) / HDR_CEILING));
   const toneMap = (hdr) => {
@@ -266,20 +257,18 @@ check('the slot count agrees between app.js, common.glsl and this test',
     return 255 * Math.pow(aces, 1 / 2.2);
   };
 
-  check('the channel is written at the original hundred thousand HDR units',
-    mainBoltBrightness === 100000 && leaderBrightness === 50000,
-    'mainBoltBrightness ' + mainBoltBrightness + ', leaderBrightness ' + leaderBrightness);
+  check('the CG channel is written at the original hundred thousand HDR units',
+    mainBoltBrightness === 100000,
+    'mainBoltBrightness ' + mainBoltBrightness);
   check('the channel is the raw curve times that, with no easing',
     /pixVal \*= currentLightningIntensity;/.test(displayShader) &&
     !/cgChannelFalloff/.test(displayShader) && !/curveShare/.test(displayShader) &&
     !/channelBrightness/.test(displayShader) && !/lightningCurvePeak/.test(displayShader),
     'the curve goes straight into the gain, as it did in the shipped shader');
-  check('the leader stage is the original threshold, growing with lightningTime',
-    /brightnessThreshold = 1\. - lightningTime \* branchShowFactor;/.test(displayShader) &&
-    /if \(lightningTime > 1\.0\) \{ \/\/ main bolt/.test(displayShader) &&
-    /currentLightningIntensity = leaderBrightness;/.test(displayShader) &&
-    !/leaderReveal/.test(displayShader),
-    'the reveal is the shipped reveal, not a speed of our own');
+  check('CG channel threshold is active immediately on trigger without waiting for a leader crawl',
+    /const float brightnessThreshold = 0\.95;/.test(cgSection) &&
+    !/brightnessThreshold = 1\. - lightningTime \* branchShowFactor;/.test(displayShader),
+    'the full bolt reaches ground immediately when triggered');
 
   // the channel, iteration by iteration, from the strike's booking to one past its end
   const channelOverTime = (strike) => {
@@ -334,7 +323,7 @@ check('the slot count agrees between app.js, common.glsl and this test',
     'one white line, then black: the switch the app shipped with');
   check('the peak of every flicker is the full over-bright channel',
     toneMap(mainBoltBrightness) >= 254.5 && channels.every((seq) => seq[0] >= 254),
-    'channel(' + mainBoltBrightness + ' HDR) tonemaps to white, and so does the leader opening every strike');
+    'channel(' + mainBoltBrightness + ' HDR) tonemaps to white on the trigger iteration itself');
 
   // the wiring: the call site passes exactly what the shipped shader took, and the
   // gain is the curve, not an envelope built out of it
@@ -545,6 +534,16 @@ check('the strike count recovered from the summed feedback texel is not capped',
 check('evaporating droplets splatting vapor into (1, 0) cannot book phantom zero-intensity strikes',
   /bool hasNewStrike = incomingRaw\[START_ITERNUM\] >= 0\.5 && incomingRaw\[INTENSITY\] >= 0\.5;/.test(locationShader),
   'droplets write VAPOR into channel 2 (START_ITERNUM) with zero INTENSITY; checking START_ITERNUM > 0 alone steals slots');
+
+check('precipitation feedback is zero-initialized and lightning writes are not shifted by initial droplet vapor',
+  /feedback = vec4\(0\.0\);/.test(precipitationVert) &&
+  /if \(!lightningSpawned\)\s*\n\s*feedback\[VAPOR\] -= initalMass;/.test(precipitationVert),
+  'uninitialized feedback.w or subtracting initalMass from START_ITERNUM corrupts feedback at (1, 0)');
+
+check('soundThunder compensates for async audio decode time instead of stacking load delay onto soundDelay',
+  /const scheduledTime = this\.audioCtx\.currentTime \+ soundDelay;/.test(appSource) &&
+  /const remainingDelay = Math\.max\(0, scheduledTime - this\.audioCtx\.currentTime\);/.test(appSource),
+  'fetch/decode time should not stack onto acoustic soundDelay');
 
 check('a strike formed this iteration is recorded, however many droplets made it',
   (() => {
