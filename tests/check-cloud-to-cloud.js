@@ -99,13 +99,28 @@ check('displayCloudToCloudLightning keeps +CC 50% brighter (1.5x) and avoids fwi
     displayShader.indexOf('float saturate'))),
   '+CC must scale channel + cloud glow by exactly 1.5x without conditional quad derivatives');
 
-check('reworked CC renders organic cubic Bezier spine with fractal lightningTex branches on -CC and sparse main leader on +CC',
-  /vec2 evalCcCubic\(/.test(displayShader) &&
-  !/sampleCcBranch\(/.test(displayShader) &&
-  /const float mainThreshold = 0\.91;/.test(displayShader) &&
-  /const float branchThreshold = 0\.26;/.test(displayShader) &&
-  /float edgeFade = smoothstep\(0\.0, 0\.03, t\) \* smoothstep\(1\.0, 0\.97, t\);/.test(displayShader),
-  'expected reworked organic cubic Bezier + lightningTex fractal branching without artificial stick branches');
+check('reworked CC renders procedural fractal-displaced cubic spline with slope-corrected dendritic branches',
+  (() => {
+    const ccBody = displayShader.slice(
+      displayShader.indexOf('vec2 ccFractalDisp('),
+      displayShader.indexOf('float saturate')
+    );
+    return /vec2 evalCcCubic\(/.test(displayShader) &&
+      /vec2 ccFractalDisp\(/.test(ccBody) &&
+      /vec2 ccEvalBranch\(/.test(ccBody) &&
+      /inversesqrt\(1\.0 \+ clamp\(spineSlope \* spineSlope, 0\.0, 6\.25\)\)/.test(ccBody) &&
+      !/texture\w*\(\s*lightningTex/.test(ccBody) &&
+      /isPositiveCC && \(b == 0 \|\| b == 3\)/.test(ccBody) &&
+      /!isPositiveCC && \(b == 1 \|\| b == 2\)/.test(ccBody) &&
+      /ccMidDist/.test(displayShader);
+  })(),
+  'CC must draw a procedural slope-corrected tortuous channel with 2-level -CC forks, sparse +CC forks, and 3-lobe cloud lighting');
+
+check('selectCloudToCloudTarget skips solid terrain walls and searches 4 storm decks while protecting nearby rod CG strikes',
+  /if \(texture\(baseTex, vec2\(cx, cy\)\)\[TEMPERATURE\] >= 500\.0\)/.test(locationShader) &&
+  /float yList\[4\];/.test(locationShader) &&
+  /hasNearbyLightningRod\(originX, incoming\[INTENSITY\]\)/.test(locationShader),
+  'CC targeting must skip wall terrain, cover anvil altitude, and not divert CG triggers inside a rod reach');
 
 check('app.js reads both rows of lightningDataTextures for CC midpoint cc*.mp3 thunder',
   /new Float32Array\(numLightningSlots \* 2 \* 4\)/.test(appSource) &&
@@ -116,7 +131,7 @@ check('app.js reads both rows of lightningDataTextures for CC midpoint cc*.mp3 t
 
 /* --------------------------------------------- 2. targeting & rod isolation */
 
-function selectCloudToCloudTarget(originX, originY, iter, densityFn, resX = 2000, resY = 300) {
+function selectCloudToCloudTarget(originX, originY, iter, densityFn, wallFn = () => 0, resX = 2000, resY = 300) {
   const aspect = Math.max(resX / Math.max(resY, 1.0), 1.0);
   const w1 = mapRange(random2d(originX * 37.9, iter * 1.3), 0.0, 1.0, 0.28, 0.58);
   const w2 = mapRange(random2d(originY * 53.3, iter * 1.9), 0.0, 1.0, 0.62, 0.92);
@@ -130,8 +145,9 @@ function selectCloudToCloudTarget(originX, originY, iter, densityFn, resX = 2000
 
   const yList = [
     clamp(originY, 0.08, 0.80),
-    clamp(originY + 0.14, 0.14, 0.84),
-    clamp(originY - 0.14, 0.08, 0.72)
+    clamp(originY + 0.13, 0.14, 0.84),
+    clamp(originY + 0.22, 0.18, 0.88),
+    clamp(originY - 0.12, 0.08, 0.72)
   ];
   const dxList = [d1, -d1, d2, -d2, d3, -d3, d4, -d4];
 
@@ -144,8 +160,9 @@ function selectCloudToCloudTarget(originX, originY, iter, densityFn, resX = 2000
     const dx = dxList[k];
     const cx = fract(originX + dx);
     const mx = fract(originX + 0.5 * dx);
-    for (let yi = 0; yi < 3; yi++) {
+    for (let yi = 0; yi < 4; yi++) {
       const cy = yList[yi];
+      if (wallFn(cx, cy) >= 500.0) continue;
       const targetDensity = Math.max(densityFn(cx, cy), 0.0);
       if (targetDensity < 0.14) continue;
       const midDensity = Math.max(densityFn(mx, 0.5 * (originY + cy)), 0.0);
@@ -173,6 +190,17 @@ function selectCloudToCloudTarget(originX, originY, iter, densityFn, resX = 2000
   }
   check('cloud-to-cloud never strikes into empty sky around a small isolated cloud',
     spurious === 0, spurious + ' false targets');
+}
+
+// 2a-wall. Never terminates inside mountain terrain walls
+{
+  let mountainHits = 0;
+  for (let i = 0; i < 400; i++) {
+    const res = selectCloudToCloudTarget(0.50, 0.22, 200 + i, () => 2.5, (x, y) => (y < 0.30 ? 900.0 : 280.0));
+    if (res[2] > 0.5 && res[1] < 0.30) mountainHits++;
+  }
+  check('cloud-to-cloud skips terrain wall cells and only targets free-air storm decks',
+    mountainHits === 0, mountainHits + ' targets inside terrain');
 }
 
 // 2b. Bridges across a clear sky gap to a neighboring storm cell (including across seam)

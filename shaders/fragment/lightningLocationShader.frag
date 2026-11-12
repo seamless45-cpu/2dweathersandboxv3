@@ -30,7 +30,31 @@ uniform float dryLapse;
 // an intra-cloud flash keeps the place it formed in.
 uniform vec2 rodPositions[MAX_LIGHTNING_RODS];
 uniform int rodCount;
-uniform float rodAttractRadius; // horizontal reach, in normalized sim width
+uniform float rodHeight;        // mast height, in cells
+uniform float rodAttractRadius; // horizontal reach, normalized sim width
+
+float wrappedHorizontalDist(float a, float b)
+{
+  return abs(mod(a - b + 0.5, 1.0) - 0.5);
+}
+
+float rodEffectiveRadius(int rodIdx, float intensity)
+{
+  float heightFactor = 1.0 + clamp(rodPositions[rodIdx].y * 1.2 + (rodHeight / max(resolution.y, 1.0)) * 3.0, 0.0, 0.45);
+  float currentFactor = clamp(0.85 + 0.12 * intensity, 0.90, 1.45);
+  return rodAttractRadius * heightFactor * currentFactor;
+}
+
+bool hasNearbyLightningRod(float strikeX, float intensity)
+{
+  for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
+    if (i >= rodCount)
+      break;
+    if (wrappedHorizontalDist(strikeX, rodPositions[i].x) < rodEffectiveRadius(i, intensity))
+      return true;
+  }
+  return false;
+}
 
 // Lightning slot manager.
 //
@@ -55,31 +79,35 @@ bool slotBusy(vec4 data)
   return data[START_ITERNUM] > 0.0 && iterNum < strikeAnimEnd(data);
 }
 
-// Pull a newly formed CG strike onto the nearest rod it can reach. Strikes that
-// form close to a mast almost always land on it, far ones rarely do; this is
-// what makes a rod read as an attractor instead of a decoration.
+// Pull any CG strike (normal -CG or external +CG) onto the nearest reachable rod.
+// Uses an electrogeometric reach scaled by rod elevation/height and stroke current:
+// inside the inner protective cone (<= 35% reach) capture is guaranteed, tapering
+// smoothly toward the outer boundary across periodic seam wraps.
 vec4 attractToRod(vec4 strike)
 {
   if (strike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY)
     return strike; // intra-cloud: no ground contact, so nothing to attract
 
   int nearestRod = -1;
-  float nearestDist = rodAttractRadius;
+  float bestNormalizedDist = 1.0;
   for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
     if (i >= rodCount)
       break;
-    float dx = abs(strike.x - rodPositions[i].x);
-    if (dx < nearestDist) {
-      nearestDist = dx;
+    float effRadius = max(rodEffectiveRadius(i, strike[INTENSITY]), 1e-5);
+    float dx = wrappedHorizontalDist(strike.x, rodPositions[i].x);
+    float normDist = dx / effRadius;
+    if (normDist < bestNormalizedDist) {
+      bestNormalizedDist = normDist;
       nearestRod = i;
     }
   }
   if (nearestRod < 0)
     return strike;
 
-  // chance falls off linearly with distance from the mast
-  float pull = 1.0 - nearestDist / max(rodAttractRadius, 1e-5);
-  if (random2d(vec2(strike.y * 149.7, strike[START_ITERNUM] * 7.31)) > pull)
+  float pull = bestNormalizedDist <= 0.35
+    ? 1.0
+    : pow(clamp((1.0 - bestNormalizedDist) / 0.65, 0.0, 1.0), 1.35);
+  if (random2d(vec2(strike.y * 149.7 + fract(strike.x) * 31.3, strike[START_ITERNUM] * 7.31)) > pull)
     return strike;
 
   strike.x = rodPositions[nearestRod].x;
@@ -152,8 +180,9 @@ vec3 selectCloudToCloudTarget(vec2 originPos, float iter)
   float d4 = clamp(w4 / aspect, d3 + 0.04, 0.27);
 
   float ySame = clamp(originPos.y, 0.08, 0.80);
-  float yHigh = clamp(originPos.y + 0.14, 0.14, 0.84);
-  float yLow = clamp(originPos.y - 0.14, 0.08, 0.72);
+  float yHigh = clamp(originPos.y + 0.13, 0.14, 0.84);
+  float yAnvil = clamp(originPos.y + 0.22, 0.18, 0.88);
+  float yLow = clamp(originPos.y - 0.12, 0.08, 0.72);
 
   float dxList[8];
   dxList[0] = d1;
@@ -165,10 +194,11 @@ vec3 selectCloudToCloudTarget(vec2 originPos, float iter)
   dxList[6] = d4;
   dxList[7] = -d4;
 
-  float yList[3];
+  float yList[4];
   yList[0] = ySame;
   yList[1] = yHigh;
-  yList[2] = yLow;
+  yList[2] = yAnvil;
+  yList[3] = yLow;
 
   float bestX = originPos.x;
   float bestY = ySame;
@@ -179,8 +209,10 @@ vec3 selectCloudToCloudTarget(vec2 originPos, float iter)
     float dx = dxList[k];
     float cx = fract(originPos.x + dx);
     float mx = fract(originPos.x + 0.5 * dx);
-    for (int yi = 0; yi < 3; yi++) {
+    for (int yi = 0; yi < 4; yi++) {
       float cy = yList[yi];
+      if (texture(baseTex, vec2(cx, cy))[TEMPERATURE] >= 500.0)
+        continue; // never terminate inside terrain walls
       vec4 wTarget = texture(waterTex, vec2(cx, cy));
       float targetDensity = max(wTarget[CLOUD] + wTarget[PRECIPITATION], 0.0);
       if (targetDensity < 0.14)
@@ -275,10 +307,14 @@ void main()
       extStrike = attractToRod(extStrike);
       result = (row == 0) ? extStrike : vec4(originX, 1.0, 0.0, 0.0);
     } else {
-      vec3 ccTarget = incoming.y >= 0.08 ? selectCloudToCloudTarget(vec2(originX, incoming.y), iterNum) : vec3(0.0);
+      bool cgTriggerNearRod = incoming[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY &&
+                              hasNearbyLightningRod(originX, incoming[INTENSITY]);
+      vec3 ccTarget = (!cgTriggerNearRod && incoming.y >= 0.08)
+        ? selectCloudToCloudTarget(vec2(originX, incoming.y), iterNum)
+        : vec3(0.0);
       float ccRoll = random2d(vec2(originX * 47.3 + incoming.y * 83.1, iterNum * 1.37));
       float ccShare = (incoming[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY) ? 0.55 : 0.30;
-      if (ccTarget.z > 0.5 && ccRoll < ccShare) {
+      if (!cgTriggerNearRod && ccTarget.z > 0.5 && ccRoll < ccShare) {
         // Cloud-to-cloud (CC): meta.y = 2.0 for negative (-CC), 3.0 for positive (+CC).
         bool isPositiveCC = random2d(vec2(ccTarget.x * 71.9 + ccTarget.y * 31.1, iterNum * 2.19)) < 0.30;
         vec4 ccStrike = incoming;

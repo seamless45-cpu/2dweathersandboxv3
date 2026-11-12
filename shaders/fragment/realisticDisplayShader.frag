@@ -62,8 +62,9 @@ out vec4 fragmentColor;
 // tool. (Declared after common.glsl so MAX_LIGHTNING_RODS is known.)
 uniform vec2 rodPositions[MAX_LIGHTNING_RODS];
 uniform int rodCount;
-uniform float rodThickness; // half width of the mast, in cells
-uniform float rodHeight;    // height of the mast, in cells
+uniform float rodThickness;     // half width of the mast, in cells
+uniform float rodHeight;        // height of the mast, in cells
+uniform float lightningBottomU; // bottom trunk U coordinate of active bolt tile
 
 #include "commonDisplay.glsl"
 
@@ -141,26 +142,45 @@ float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
   return max((1. / (0.05 + pow(T * 2.0, 3.))) - 0.005, 0.) * pow(intensity, 2.0); // fading out curve
 }
 
+float findCapturedRodTipY(float strikeX)
+{
+  for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
+    if (i >= rodCount)
+      break;
+    if (abs(mod(strikeX - rodPositions[i].x + 0.5, 1.0) - 0.5) < 1e-5)
+      return rodPositions[i].y + rodHeight / max(resolution.y, 1.0);
+  }
+  return -1.0;
+}
+
 // The cloud-to-ground channel: fires immediately on trigger with no fixed
 // pre-strike latency, written at the stroke's own curve times mainBoltBrightness.
 // The light it throws is the bolt itself plus one tight lobe on the cloud around
 // it, and the bloom takes two percent of the frame as it always did. There is no
 // easing of the tail and no second, wide lobe: a stroke goes from white to gone
-// as fast as the curve does.
+// as fast as the curve does. When captured by a lightning rod, the channel
+// terminates squarely on the rod's copper tip instead of passing underground.
 vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity)
 {
-  vec2 lightningTexCoord = texCoord;
+  float rodTipY = findCapturedRodTipY(pos.x);
+  bool rodHit = rodTipY >= 0.0;
+  if (rodHit && texCoord.y < rodTipY)
+    return vec3(0);
 
-  lightningTexCoord.x -= mod(pos.x, 1.);
+  float topY = rodHit ? max(pos.y, rodTipY + 0.04) : pos.y;
+  float bottomY = rodHit ? rodTipY : 0.0;
+  float spanY = max(topY - bottomY, 0.04);
+  float scaleMult = 1. / spanY; // 1.0 means lightning is as tall as the simheight
 
-  lightningTexCoord.y -= pos.y;
-
-  float scaleMult = 1. / pos.y; // 1.0 means lightning is as tall as the simheight
+  vec2 lightningTexCoord;
+  lightningTexCoord.x = mod(texCoord.x - pos.x + 0.5, 1.0) - 0.5;
+  lightningTexCoord.y = texCoord.y - topY;
 
   lightningTexCoord.x *= scaleMult * aspectRatios[0] / lightningTexAspect;
   lightningTexCoord.y *= -scaleMult;
 
-  lightningTexCoord.x += 0.5;                                                                                               // center lightning bolt
+  float uShift = rodHit ? (lightningBottomU - 0.5) * pow(clamp(lightningTexCoord.y, 0.0, 1.0), 1.25) : 0.0;
+  lightningTexCoord.x += 0.5 + uShift;                                                                                    // center lightning bolt
 
   if (lightningTexCoord.x < 0.01 || lightningTexCoord.x > 1.01 || lightningTexCoord.y < 0.01 || lightningTexCoord.y > 1.01) // prevent edge effect when mipmapping
     return vec3(0);
@@ -304,15 +324,18 @@ vec2 evalExtArcDeriv(float t, float Hw, float V)
 
 // External positive CG ("bolt from the blue"): emerges from the upper storm
 // cloud at originX, arches laterally out into clear air far from the storm core,
-// and plunges down to groundPos.x.
+// and plunges down to groundPos.x (or squarely onto a capturing rod's tip).
 vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime, float currentLightningIntensity)
 {
+  float rodTipY = findCapturedRodTipY(groundPos.x);
+  float endY = rodTipY >= 0.0 ? rodTipY : 0.0;
   float relX = mod(texCoord.x - groundPos.x + 0.5, 1.0) - 0.5;
   float dxWrap = mod(originX - groundPos.x + 0.5, 1.0) - 0.5;
   float Hw = dxWrap * aspectRatios[0];
-  float V = max(groundPos.y, 0.05);
+  float topY = rodTipY >= 0.0 ? max(groundPos.y, endY + 0.04) : groundPos.y;
+  float V = max(topY - endY, 0.05);
   float pxw = relX * aspectRatios[0];
-  float pyw = texCoord.y;
+  float pyw = texCoord.y - endY;
   float pad = 0.35 * max(V, 0.35);
 
   if (pxw < min(0.0, Hw) - pad || pxw > max(0.0, Hw) + pad ||
@@ -402,19 +425,73 @@ vec2 evalCcCubicDeriv(float t, vec2 p0, vec2 p1, vec2 p2, vec2 p3)
          3.0 * t * t * (p3 - p2);
 }
 
-float ccJagOffset(float t, float jagPhase, float jagScale)
+vec2 ccRotate(vec2 v, float angle)
 {
-  float jagEnv = sin(PI * t);
-  return (0.62 * extTriWave(t * 4.2 + jagPhase) +
-          0.32 * extTriWave(t * 10.5 + jagPhase * 1.9) +
-          0.16 * extTriWave(t * 23.0 + jagPhase * 3.1)) * jagScale * jagEnv;
+  float c = cos(angle);
+  float s = sin(angle);
+  return vec2(c * v.x - s * v.y, s * v.x + c * v.y);
 }
 
-// Reworked organic cloud-to-cloud (CC) lightning: uses an asymmetric cubic
-// Bezier leader spine paired with lightningTex's built-in dendritic fractal
-// branches (without artificial geometric stick lines) so -CC discharges form
-// richly forked inter-cloud webs while +CC stays 50% brighter with a cleaner
-// high-current main leader and sparse branching.
+vec2 ccFractalDisp(float s, float span, float jagPhase, float jagScale)
+{
+  float normLen = max(span, 0.18);
+  float f1 = 2.3 / normLen;
+  float f2 = 6.1 / normLen;
+  float f3 = 14.8 / normLen;
+  float f4 = 33.5 / normLen;
+
+  float x1 = s * f1 + jagPhase;
+  float x2 = s * f2 + jagPhase * 1.73 + 0.31;
+  float x3 = s * f3 + jagPhase * 2.91 + 0.67;
+  float x4 = s * f4 + jagPhase * 4.37 + 0.19;
+
+  float d = (0.58 * extTriWave(x1) +
+             0.28 * extTriWave(x2) +
+             0.13 * extTriWave(x3) +
+             0.06 * extTriWave(x4)) * jagScale;
+
+  float sgn1 = fract(x1) < 0.5 ? 4.0 : -4.0;
+  float sgn2 = fract(x2) < 0.5 ? 4.0 : -4.0;
+  float sgn3 = fract(x3) < 0.5 ? 4.0 : -4.0;
+  float slope = (0.58 * sgn1 * f1 + 0.28 * sgn2 * f2 + 0.13 * sgn3 * f3) * jagScale;
+  return vec2(d, clamp(slope, -2.5, 2.5));
+}
+
+// Signed-distance core + sheath evaluation for a forked CC side branch.
+// Returns vec2(coreMask, combinedSignal).
+vec2 ccEvalBranch(vec2 target, vec2 bStart, vec2 bDir, float bLen, float curveSign,
+                  float seed, float coreW, float weight)
+{
+  vec2 bNorm = vec2(-bDir.y, bDir.x);
+  vec2 rel = target - bStart;
+  float along = dot(rel, bDir);
+  float perp = dot(rel, bNorm);
+  if (along < -0.015 || along > bLen + 0.025 || abs(perp) > bLen * 0.58)
+    return vec2(0.0);
+
+  float bt = clamp(along / max(bLen, 1e-4), 0.0, 1.0);
+  float arch = curveSign * 0.11 * bLen * sin(PI * bt);
+  float jagScale = clamp(bLen * 0.095, 0.008, 0.028);
+  vec2 jag = ccFractalDisp(along, max(bLen, 0.12), seed * 11.3, jagScale);
+  float rootPin = smoothstep(0.0, 0.08, bt) * (1.0 - 0.30 * bt);
+  float centerPerp = arch + jag.x * rootPin;
+  float slope = jag.y * rootPin + curveSign * 0.11 * PI * cos(PI * bt);
+  float dist = abs(perp - centerPerp) * inversesqrt(1.0 + clamp(slope * slope, 0.0, 6.25));
+
+  float endMask = smoothstep(-0.006, 0.004, along) * smoothstep(bLen + 0.008, bLen - 0.006, along);
+  float taper = mix(0.74, 0.26, bt);
+  float bw = max(coreW * taper, 0.0011);
+  float core = smoothstep(bw * 1.45, bw * 0.15, dist) * endMask;
+  float halo = exp(-dist / max(bw * 3.0, 0.0040)) * 0.20 * endMask;
+  float fade = smoothstep(1.0, 0.10, bt) * weight;
+  return vec2(core * fade, (core + halo) * fade);
+}
+
+// Reworked procedural cloud-to-cloud (CC) channel: draws a genuine tortuous,
+// slope-corrected fractured plasma leader between clouds with forward-diverging
+// dendritic branches (-CC forms rich 2-level forked bridges in electric violet;
+// +CC stays 50% brighter with a thicker incandescent white-peach trunk and sparse
+// high-current forks). Uses zero screen-space derivative calls.
 vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiveCC,
                                   float lightningTime, float ccCurve)
 {
@@ -442,7 +519,7 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
   p1.y = clamp(p1.y, 0.04, 0.94);
   p2.y = clamp(p2.y, 0.04, 0.94);
 
-  float pad = max(span * 0.48, 0.22);
+  float pad = max(span * 0.52, 0.26);
   vec2 boxMin = min(min(p0, p3), min(p1, p2)) - vec2(pad);
   vec2 boxMax = max(max(p0, p3), max(p1, p2)) + vec2(pad);
   if (target.x < boxMin.x || target.x > boxMax.x || target.y < boxMin.y || target.y > boxMax.y)
@@ -450,8 +527,8 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
 
   float bestT = 0.0;
   float bestD2 = 1e9;
-  for (int k = 0; k < 5; k++) {
-    float tc = float(k) / 4.0;
+  for (int k = 0; k < 6; k++) {
+    float tc = float(k) / 5.0;
     vec2 diff = evalCcCubic(tc, p0, p1, p2, p3) - target;
     float d2 = dot(diff, diff);
     if (d2 < bestD2) {
@@ -474,42 +551,70 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
   vec2 tanDir = dLen > 1e-5 ? dC / dLen : vec2(1.0, 0.0);
   vec2 normDir = vec2(-tanDir.y, tanDir.x);
 
-  float jagScale = clamp(span * 0.075, 0.016, 0.052);
+  float jagScale = clamp(span * 0.068, 0.015, 0.052);
   float jagPhase = seed * 7.0 + 0.5;
-  float dPerp = dot(target - c, normDir) + ccJagOffset(t, jagPhase, jagScale);
+  vec2 spineDisp = ccFractalDisp(t * span, span, jagPhase, jagScale);
+  float spineEnv = sin(PI * t);
+  float dPerp = dot(target - c, normDir) - spineDisp.x * spineEnv;
+  float spineSlope = spineDisp.y * spineEnv;
+  float distMain = abs(dPerp) * inversesqrt(1.0 + clamp(spineSlope * spineSlope, 0.0, 6.25));
 
-  float uFlip = (fract(seed * 7.3) < 0.5) ? 1.0 : -1.0;
-  float scaleLen = clamp(span * 0.62, 0.24, 0.52);
-  float u = 0.5 + (uFlip * dPerp) / (scaleLen * lightningTexAspect);
-  float v = clamp(0.02 + t * 0.96, 0.01, 0.99);
+  float worldPix = aspectRatios[0] / (1400.0 * max(view[2], 0.5));
+  float coreW = max(0.0018, worldPix * 0.90) * (isPositiveCC ? 1.28 : 1.0);
+  float edgeFade = smoothstep(0.0, 0.025, t) * smoothstep(1.0, 0.975, t);
+  float mainCore = smoothstep(coreW * 1.50, coreW * 0.15, distMain) * edgeFade;
+  float mainHalo = exp(-distMain / max(coreW * 3.2, 0.0045)) * 0.20 * edgeFade;
+  float mainOuter = exp(-distMain / max(coreW * 7.5, 0.011)) * 0.018 * edgeFade;
+  float mainSignal = mainCore + mainHalo + mainOuter;
 
-  float channelSignal = 0.0;
-  if (v > 0.005 && v < 0.998 && u > 0.01 && u < 0.99) {
-    float du = clamp(0.24 * aspectRatios[0] / (1400.0 * max(view[2], 0.5) * scaleLen * lightningTexAspect),
-                     0.0005, 0.0028);
-    float c0 = textureLod(lightningTex, vec2(u, v), 0.0).r;
-    float c1 = textureLod(lightningTex, vec2(clamp(u - du, 0.01, 0.99), v), 0.0).r;
-    float c2 = textureLod(lightningTex, vec2(clamp(u + du, 0.01, 0.99), v), 0.0).r;
-    float pixVal = max(c0, max(c1, c2) * 0.90);
+  float branchCore = 0.0;
+  float branchSignal = 0.0;
+  for (int b = 0; b < 4; b++) {
+    if (isPositiveCC && (b == 0 || b == 3))
+      continue;
+    float br1 = random2d(vec2(seed * 13.7 + float(b) * 5.3, originPos.y * 43.1));
+    float br2 = random2d(vec2(targetPos.x * 29.9 + float(b) * 7.9, seed * 17.3));
+    float tb = clamp(0.22 + float(b) * 0.18 + (br1 - 0.5) * 0.05, 0.14, 0.86);
 
-    if (isPositiveCC) {
-      const float mainThreshold = 0.91;
-      channelSignal = max(pixVal - mainThreshold, 0.0) / (1.0 - mainThreshold);
-    } else {
-      const float mainThreshold = 0.88;
-      const float branchThreshold = 0.26;
-      float trunkSignal = max(pixVal - mainThreshold, 0.0) / (1.0 - mainThreshold);
-      float branchSignal = (max(pixVal - branchThreshold, 0.0) / (mainThreshold - branchThreshold)) * 0.48;
-      channelSignal = max(trunkSignal, branchSignal);
+    vec2 rc = evalCcCubic(tb, p0, p1, p2, p3);
+    vec2 rdc = evalCcCubicDeriv(tb, p0, p1, p2, p3);
+    float rlen = length(rdc);
+    vec2 rtan = rlen > 1e-5 ? rdc / rlen : vec2(1.0, 0.0);
+    vec2 rnorm = vec2(-rtan.y, rtan.x);
+    vec2 rdisp = ccFractalDisp(tb * span, span, jagPhase, jagScale);
+    vec2 bStart = rc + rnorm * (rdisp.x * sin(PI * tb));
+
+    float sideSign = ((b % 2) == 0 ? 1.0 : -1.0) * (s2 < 0.5 ? 1.0 : -1.0);
+    float forkAngle = sideSign * mix(0.42, 0.78, br2);
+    vec2 bDir = ccRotate(rtan, forkAngle);
+    float bLen = span * mix(0.20, 0.42, br1) * (isPositiveCC ? 0.78 : 1.0);
+    float bWeight = isPositiveCC ? 0.62 : mix(0.68, 0.88, br2);
+    vec2 bVal = ccEvalBranch(target, bStart, bDir, bLen, sideSign, seed + float(b) * 1.37, coreW, bWeight);
+    branchCore = max(branchCore, bVal.x);
+    branchSignal = max(branchSignal, bVal.y);
+
+    if (!isPositiveCC && (b == 1 || b == 2)) {
+      float subAlong = 0.44 * bLen;
+      float subArch = sideSign * 0.11 * bLen * sin(PI * 0.44);
+      float subJagScale = clamp(bLen * 0.095, 0.008, 0.028);
+      vec2 subJag = ccFractalDisp(subAlong, max(bLen, 0.12), (seed + float(b) * 1.37) * 11.3, subJagScale);
+      vec2 bNorm = vec2(-bDir.y, bDir.x);
+      vec2 subStart = bStart + bDir * subAlong + bNorm * (subArch + subJag.x * 0.868);
+      vec2 subDir = ccRotate(bDir, -sideSign * mix(0.38, 0.68, br1));
+      vec2 subVal = ccEvalBranch(target, subStart, subDir, bLen * 0.50, -sideSign, seed + float(b) * 3.11,
+                                 coreW * 0.82, bWeight * 0.65);
+      branchCore = max(branchCore, subVal.x);
+      branchSignal = max(branchSignal, subVal.y);
     }
   }
 
-  float edgeFade = smoothstep(0.0, 0.03, t) * smoothstep(1.0, 0.97, t);
-  channelSignal *= edgeFade;
+  float totalSignal = max(mainSignal, branchSignal) + 0.18 * min(mainSignal, branchSignal);
 
-  const float ccBaseBrightness = 2200.;
-  vec3 ccCol = isPositiveCC ? vec3(1.0, 0.90, 0.84) : vec3(0.72, 0.58, 1.0);
-  return max(channelSignal * ccCurve * ccBaseBrightness * ccCol, vec3(0.0));
+  const float ccBaseBrightness = 2600.;
+  vec3 coreTint = vec3(1.0, 0.98, 1.0);
+  vec3 auraTint = isPositiveCC ? vec3(1.0, 0.86, 0.76) : vec3(0.66, 0.52, 1.0);
+  vec3 ccCol = mix(auraTint, coreTint, clamp(mainCore * 0.85 + branchCore * 0.55, 0.0, 1.0));
+  return max(totalSignal * ccCurve * ccBaseBrightness * ccCol, vec3(0.0));
 }
 
 
@@ -700,10 +805,14 @@ vec4 getAirColor(vec2 fragCoordIn)
       lightningOnLight = lightningOnLightBrightness * 1.4 / (pow(length(ccTargetDist) * 0.5, 2.) + 0.03) * ccIntensityGain * ccTailFade;
       float ccOriginDx = mod(lightningMeta.x - texCoord.x + 0.5, 1.0) - 0.5;
       vec2 ccOriginDist = vec2(ccOriginDx * aspectRatios[0], texCoord.y - lightningPos.y);
+      float ccMidDx = mod(lightningPos.x + 0.5 * (mod(lightningMeta.x - lightningPos.x + 0.5, 1.0) - 0.5) - texCoord.x + 0.5, 1.0) - 0.5;
+      vec2 ccMidDist = vec2(ccMidDx * aspectRatios[0], texCoord.y - 0.5 * (lightningPos.y + lightningMeta.z));
       onLight += vec3(lightningOnLightBrightness * 1.4 / (pow(length(ccOriginDist) * 0.5, 2.) + 0.03) * ccIntensityGain * ccTailFade * currentLightningIntensity);
+      onLight += vec3(lightningOnLightBrightness * 0.9 / (pow(length(ccMidDist) * 0.55, 2.) + 0.035) * ccIntensityGain * ccTailFade * currentLightningIntensity);
     } else {
-      // The one lobe the app shipped with, scaled by the strike's own intensity.
-      vec2 dist = vec2(lightningPos.x - texCoord.x, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1), 0.));
+      // The one lobe the app shipped with, wrapped horizontally across the periodic boundary.
+      float cgDx = mod(lightningPos.x - texCoord.x + 0.5, 1.0) - 0.5;
+      vec2 dist = vec2(cgDx, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1), 0.));
       dist.x *= aspectRatios[0];
       lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03);
     }
@@ -1052,58 +1161,76 @@ void main()
   //
   // Drawn last so the mast stands in front of the terrain it is planted on, and
   // lit by the same sunlight / lightning light as everything else.
-  const float rodBaseCells = 1.6;   // height of the pedestal above the ground
-  const float rodCoronaReach = 3.0; // how far the tip's own glow reaches, in cells
+  const float rodBaseCells = 1.9;   // height of the stepped grounding pedestal, in cells
+  const float rodCoronaReach = 3.8; // how far the tip's ionized corona reaches, in cells
   for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
     if (i >= rodCount)
       break;
     vec2 rod = rodPositions[i];
-    float dxCells = (texCoord.x - rod.x) * resolution.x; // horizontal offset in cells
-    float dyCells = (texCoord.y - rod.y) * resolution.y; // height above the surface, in cells
-    if (dyCells < -1.5 || dyCells > rodHeight + rodCoronaReach)
+    float dxCells = (mod(texCoord.x - rod.x + 0.5, 1.0) - 0.5) * resolution.x; // wrapped horizontal offset in cells
+    float dyCells = (texCoord.y - rod.y) * resolution.y;                       // height above surface, in cells
+    if (dyCells < -1.5 || dyCells > rodHeight + rodCoronaReach || abs(dxCells) > max(rodThickness * 3.2, rodCoronaReach + 1.0))
       continue;
 
-    // The current this mast is carrying, if it has taken a strike: the same curve
-    // the bolt itself is drawn with, from the same instant.
+    // The current this mast is carrying, if it has taken a strike (wrapped across periodic boundary).
     float strikeGlow = 0.0;
     for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
       vec4 strikeData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
-      if (strikeData[START_ITERNUM] <= 0.0 || abs(strikeData.x - rod.x) > 1e-6)
+      if (strikeData[START_ITERNUM] <= 0.0 || abs(mod(strikeData.x - rod.x + 0.5, 1.0) - 0.5) > 1e-5)
         continue;
       if (iterNum < strikeData[START_ITERNUM] || iterNum >= strikeAnimEnd(strikeData))
         continue; // this strike is not running
       strikeGlow = max(strikeGlow, lightningIntensityOverTime(calcLightningTime(strikeData[START_ITERNUM]), strikeData.xy, strikeData[INTENSITY]));
     }
 
-    float alongRod = clamp(dyCells / max(rodHeight, 1.), 0., 1.);                      // 0 base .. 1 tip
-    float mastWidth = max(rodThickness * mix(0.85, 0.10, pow(alongRod, 0.85)), 0.35);  // to a point at the top
-    float baseWidth = max(rodThickness * mix(2.6, 0.85, clamp(dyCells / rodBaseCells, 0., 1.)), 0.6);
+    float alongRod = clamp(dyCells / max(rodHeight, 1.0), 0.0, 1.0);
+    float mastWidth = max(rodThickness * mix(0.92, 0.08, pow(alongRod, 0.85)), 0.24);
+    if (alongRod >= 0.80 && alongRod <= 0.835)
+      mastWidth = max(mastWidth * 1.65, rodThickness * 0.72); // corona / arrester collar ring
+    float plinthT = clamp(dyCells / rodBaseCells, 0.0, 1.0);
+    float baseWidth = max(rodThickness * mix(2.75, 0.92, smoothstep(0.0, 1.0, plinthT)), 0.65);
     float halfWidth = dyCells < rodBaseCells ? baseWidth : mastWidth;
     bool onMetal = dyCells >= -0.75 && abs(dxCells) <= halfWidth;
 
     if (onMetal) {
-      float acrossRod = clamp(abs(dxCells) / halfWidth, 0., 1.);  // 0 centre .. 1 edge
-      // Dark steel with the light coming down one side of it, so the mast reads as
-      // round instead of as a flat strip, and a bright edge where it turns away.
-      vec3 steel = mix(vec3(0.62, 0.67, 0.76), vec3(0.10, 0.11, 0.13), pow(acrossRod, 0.75));
-      steel += vec3(0.30, 0.34, 0.42) * pow(acrossRod, 4.0);
-      color = mix(steel, vec3(1.0, 0.97, 0.88), clamp(strikeGlow * 0.5, 0.0, 1.0));
-      shadowLight = max(shadowLight, 0.35);                       // never fully black
+      float acrossRod = clamp(abs(dxCells) / max(halfWidth, 1e-4), 0.0, 1.0);
+      vec3 matCol;
+      if (dyCells < rodBaseCells * 0.72) {
+        // Grounded masonry/steel mounting plinth
+        matCol = mix(vec3(0.28, 0.30, 0.33), vec3(0.14, 0.15, 0.17), pow(acrossRod, 0.85));
+      } else if (alongRod >= 0.84) {
+        // Copper-bronze air terminal finial tip
+        matCol = mix(vec3(0.92, 0.64, 0.36), vec3(0.30, 0.16, 0.08), pow(acrossRod, 0.80));
+        matCol += vec3(0.32, 0.20, 0.10) * pow(acrossRod, 3.5);
+      } else {
+        // Brushed galvanized steel mast with subtle section bands
+        float band = 0.94 + 0.06 * cos(alongRod * 28.0);
+        matCol = mix(vec3(0.65, 0.71, 0.80), vec3(0.11, 0.12, 0.15), pow(acrossRod, 0.75)) * band;
+        matCol += vec3(0.30, 0.35, 0.44) * pow(acrossRod, 4.0);
+      }
+      color = mix(matCol, vec3(1.0, 0.97, 0.90), clamp(strikeGlow * 0.55, 0.0, 1.0));
+      shadowLight = max(shadowLight, 0.38);
       opacity = 1.0;
     }
 
-    // The corona at the tip. It is drawn as light rather than as metal, so it
-    // reaches past the mast into the air, and it is what makes a rod visible at all
-    // against a night sky.
+    // Dynamic tip ionization: subtle St. Elmo's fire intensifies under overhead
+    // storm clouds and erupts into a plasma arc when capturing a CG bolt.
     float tipDistance = length(vec2(dxCells, dyCells - rodHeight));
-    float corona = tipDistance < rodCoronaReach
-      ? exp(-tipDistance / max(rodThickness * 0.9, 1.2))
-      : 0.0;
-    emittedLight += vec3(0.35, 0.45, 0.85) * corona * (0.30 + strikeGlow * 40.0);
+    if (tipDistance < rodCoronaReach) {
+      float stormCloud = texture(waterTex, vec2(rod.x, clamp(rod.y + 0.16, 0.0, 0.96)))[CLOUD];
+      float ambientIon = clamp(stormCloud * 0.75, 0.0, 1.4) * (0.85 + 0.15 * sin(iterNum * 0.45 + rod.x * 40.0));
+      float corona = exp(-tipDistance / max(rodThickness * 1.05, 1.3));
+      emittedLight += vec3(0.38, 0.50, 0.96) * corona * (0.28 + 0.60 * ambientIon + strikeGlow * 55.0);
+    }
 
-    // A captured strike runs down the mast, brightest at the point it entered.
-    float tipCore = smoothstep(0.80, 1.0, alongRod);
-    emittedLight += vec3(0.55, 0.68, 1.0) * strikeGlow * (tipCore * 120.0 + 2500.0) * (onMetal ? 1.0 : 0.20);
+    // Captured return stroke conducts down the mast to the grounding plinth.
+    if (strikeGlow > 0.0) {
+      float surgeWave = 0.78 + 0.22 * sin(alongRod * 14.0 + iterNum * 2.1);
+      float tipCore = smoothstep(0.78, 1.0, alongRod);
+      float earthingFlash = smoothstep(0.18, 0.0, alongRod) * 0.35;
+      emittedLight += vec3(0.58, 0.72, 1.0) * strikeGlow * surgeWave *
+                      (tipCore * 200.0 + earthingFlash * 140.0 + 2600.0) * (onMetal ? 1.0 : 0.22);
+    }
   }
 
 
