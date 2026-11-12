@@ -286,9 +286,9 @@ check('and the trunk stays inside the sprite',
     '33% of 12.5 MB a tile, plus a generateMipmap over four megatexels, for nothing');
   check('the flash network is one small tile, asked for after the first bolt',
     /kind : 'network'/.test(workerBlock) &&
-    /kind : 'network', width : 1024, height : 256/.test(workerBlock) &&
+    /kind : 'network', width : 512, height : 256/.test(workerBlock) &&
     /if \(lightningTexturesReady < 1\)\s*\n\s*return \{kind : 'bolt', index : 0\};\s*\n\s*if \(!lightningNetworkReady\)/.test(workerBlock),
-    'both kinds need a picture early, and the network is a quarter of a megabyte, not twelve');
+    'both kinds need a picture early, and the compact network is ~128 KB, not twelve MB');
   check('the display never samples a tile that has not been drawn yet',
     /const lightningTexNum = Math\.min\(wantedLightningTexNum, Math\.max\(lightningTexturesReady - 1, 0\)\);/.test(app),
     'a missing tile must not mean an invisible bolt');
@@ -336,46 +336,41 @@ check('the trunk is bright enough to survive the display threshold',
   trunkPeaks.every((peak) => peak >= 245),
   'peaks ' + trunkPeaks.join(', ') + ' out of 255; the display subtracts 0.95 before it draws anything');
 
-const networkArtwork = gen.generateLightningNetwork(1024, 256);
+const networkArtwork = gen.generateLightningNetwork(512, 256);
 check('the flash network carries light too',
   networkArtwork.data.some((value) => value >= 245),
-  'the network is drawn at a 0.15 threshold, but a tile with no bright texel is not a channel');
+  'a tile with no bright texel is not a channel');
 
 /* ---------------------------------------- the network curves, it does not rake
  *
- * A flash is channels curling through a charge layer, not a rake of straight lines
- * lying on their side. What makes the difference is the *course*: the heading each
- * strand is pulled toward used to be one fixed number, so `straighten` returned the
- * heading to the same direction forever and every leader ran in a straight line with
- * noise on it. Now the course itself swings, at `waveAmp` either side of the heading
- * the strand opened on, one full S every `waveLength` pixels - so a channel sweeps up
- * through the layer, bends back, and sweeps down again.
- *
- * These run the real `makeIcStrand`/`icHeadingStep` out of the generator, over the
- * real tile, and measure two things per strand: how far the path bows away from the
- * straight line between its ends, and how much of its length it keeps (arcs that run
- * out of the tile are not curves, they are half a channel).
+ * A flash is fine curved channels arcing through a cloud cell, not a giant
+ * horizontal rake of straight lines. `makeIcStrand`/`icHeadingStep` sweeps
+ * continuously along C-arcs and S-bends (`sweepAmp`, `waveAmp`) rather than
+ * oscillating symmetrically back and forth around one straight line.
  */
 function traceNetwork(rand) {
   const S = gen.IC_SHAPE;
   let bow = 0, ratio = 0, reach = 0, n = 0;
   for (let r = 0; r < 200; r++) {
-    const strand = gen.makeIcStrand(0, 0, rand);
-    let x = 2, y = 128; // the left edge of the tile, mid height: where a leader starts
+    const axis = (r / 200) * Math.PI * 2;
+    const sign = r % 2 === 0 ? 1 : -1;
+    const steps = 140;
+    const strand = gen.makeIcStrand(axis, sign, steps, rand);
+    let x = 256, y = 128; // centered strike point on the 512 x 256 tile
     const pts = [[x, y]];
-    for (let i = 0; i < 500; i++) {
-      const angle = gen.icHeadingStep(strand, rand, y / 256);
+    for (let i = 0; i < steps; i++) {
+      const angle = gen.icHeadingStep(strand, rand, x / 512, y / 256, 0.5);
       const nextX = x + Math.cos(angle) * S.stepLength;
       const nextY = y + Math.sin(angle) * S.stepLength;
-      if (nextX < 1 || nextX > 1023 || nextY < 1 || nextY > 255) break;
+      if (nextX < 2 || nextX > 510 || nextY < 2 || nextY > 254) break;
       x = nextX; y = nextY; pts.push([x, y]);
     }
-    if (pts.length < 80) continue;
-    const length = Math.hypot(x - 2, y - 128) || 1;
-    const ux = (x - 2) / length, uy = (y - 128) / length;
+    if (pts.length < 40) continue;
+    const length = Math.hypot(x - 256, y - 128) || 1;
+    const ux = (x - 256) / length, uy = (y - 128) / length;
     let deviation = 0;
     for (const [px, py] of pts)
-      deviation = Math.max(deviation, Math.abs((px - 2) * uy - (py - 128) * ux));
+      deviation = Math.max(deviation, Math.abs((px - 256) * uy - (py - 128) * ux));
     bow += deviation; ratio += deviation / length; reach += length; n++;
   }
   return {bow : bow / n, ratio : ratio / n, reach : reach / n, strands : n};
@@ -384,34 +379,38 @@ function traceNetwork(rand) {
 const seeded = (seed) => () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
 const curvedNetwork = traceNetwork(seeded(4242));
 
-// The same walk with the course nailed down - what this was before: one heading per
-// strand, forever.
+// The same walk with curvature zeroed out - straight rays with jitter only.
+const savedSweep = gen.IC_SHAPE.sweepAmp;
+const savedSweepSpread = gen.IC_SHAPE.sweepSpread;
 const savedAmplitude = gen.IC_SHAPE.waveAmp;
 const savedSpread = gen.IC_SHAPE.waveAmpSpread;
+gen.IC_SHAPE.sweepAmp = 0;
+gen.IC_SHAPE.sweepSpread = 0;
 gen.IC_SHAPE.waveAmp = 0;
 gen.IC_SHAPE.waveAmpSpread = 0;
 const rakedNetwork = traceNetwork(seeded(4242));
+gen.IC_SHAPE.sweepAmp = savedSweep;
+gen.IC_SHAPE.sweepSpread = savedSweepSpread;
 gen.IC_SHAPE.waveAmp = savedAmplitude;
 gen.IC_SHAPE.waveAmpSpread = savedSpread;
 
 check('a channel sweeps through the layer instead of running in a straight line',
-  curvedNetwork.ratio > 0.095,
+  curvedNetwork.ratio > 0.11,
   'the paths bow ' + (curvedNetwork.ratio * 100).toFixed(1) + '% of their own chord; ' +
-  'under about a tenth they read as straight lines with noise on them');
+  'straight lines with noise bow under 4%');
 
-check('that bow is the course swinging, not the buzz',
-  curvedNetwork.bow > rakedNetwork.bow * 1.35,
-  'curved ' + curvedNetwork.bow.toFixed(0) + 'px against ' + rakedNetwork.bow.toFixed(0) +
-  'px with the course nailed down: the arc has to be bigger than the noise or it is not an arc');
+check('that bow is the course curving, not the buzz',
+  curvedNetwork.bow > rakedNetwork.bow * 3.0,
+  'curved ' + curvedNetwork.bow.toFixed(1) + 'px against ' + rakedNetwork.bow.toFixed(1) +
+  'px with curvature zeroed out: the arc must dominate the noise');
 
 check('the arcs stay inside the tile, so a channel keeps its length',
-  curvedNetwork.reach > 500,
-  'mean chord ' + curvedNetwork.reach.toFixed(0) + 'px of a 700px strand: strands that leave the ' +
-  'tile early make the network thinner, not curvier');
+  curvedNetwork.reach > 120,
+  'mean chord ' + curvedNetwork.reach.toFixed(0) + 'px on a 512 x 256 tile: strands should stay cleanly inside the tile');
 
 const curvedCoverage = [];
 for (let i = 0; i < 8; i++) {
-  const artwork = gen.generateLightningNetwork(1024, 256);
+  const artwork = gen.generateLightningNetwork(512, 256);
   let lit = 0;
   for (const value of artwork.data)
     if (value > 38) lit++;
@@ -419,23 +418,29 @@ for (let i = 0; i < 8; i++) {
 }
 const coverageMin = Math.min(...curvedCoverage);
 const coverageMax = Math.max(...curvedCoverage);
-check('the curved network is still a network: visible, and not a solid web',
-  coverageMin > 6 && coverageMax < 18,
+check('the curved network is fine and sparse, not a bloated white web',
+  coverageMin > 1.0 && coverageMax < 6.0,
   'coverage above the display threshold is ' + coverageMin.toFixed(1) + '-'
   + coverageMax.toFixed(1) + '% of the tile');
 
 {
   const displayShader = fs.readFileSync(path.join(ROOT, 'shaders/fragment/realisticDisplayShader.frag'), 'utf8');
   const app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  const flashHeight = Number((displayShader.match(/const float flashHeight = ([\d.]+);/) || [])[1]);
   const threshold = Number((displayShader.match(/const float flashThreshold = ([\d.]+);/) || [])[1]);
 
-  check('displayFlash keeps true 4:1 world aspect ratio so IC curves are not crushed vertically',
-    /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader),
-    'unscaled flashSpan in normalized texCoord crushes vertical curves by aspectRatios[0] * 0.5');
+  check('displayFlash keeps compact world scale instead of filling huge stretches of sky',
+    Number.isFinite(flashHeight) && flashHeight > 0.03 && flashHeight <= 0.10,
+    'flashHeight ' + flashHeight + ' (must stay compact inside a convective cell)');
 
-  check('displayFlash keeps flashThreshold low enough that mipmapped curved branches survive',
+  check('displayFlash keeps true 2:1 world aspect ratio so IC curves are not squashed',
+    /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader) &&
+    /const vec2 networkTexRes = vec2\(512\.0, 256\.0\);/.test(displayShader),
+    'flashSpan must match the 512 x 256 artwork aspect ratio via aspectRatios[0]');
+
+  check('displayFlash keeps flashThreshold low enough that mipmapped fine curved branches stay continuous',
     Number.isFinite(threshold) && threshold > 0 && threshold <= 0.05,
-    'flashThreshold ' + threshold + ' (high thresholds erase downsampled curved secondary/tertiary channels)');
+    'flashThreshold ' + threshold + ' (high thresholds break thin curved branches into dots under mipmapping)');
 
   check('app.js requests the IC network tile early even before iterNum >= 400 or on low tile budget',
     /if \(!lightningNetworkReady \|\| wantedLightningTexNum >= lightningTexturesReady\)/.test(app),

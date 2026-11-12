@@ -263,105 +263,96 @@ function generateLightningBolt(width, height)
  * read as channels curling inside a cloud rather than as a bundle of filaments shot
  * out of one point.
  *
- * The tile is wide and short (2048 x 512, four to one) because the volume a flash
- * occupies is wide and short: the display maps it onto 0.45 of the simulation's
- * width and 0.225 of its height, which is about ten kilometres by three, and at
- * that mapping one artwork pixel is about one screen pixel.
- *
- * Brightness is a ladder rather than a taper: pow(width, 2) would put a tendril at
- * 1.2 pixels under the display's 0.15 threshold and it would simply not be drawn,
- * and a flash whose tendrils are invisible is a bolt again.
+ * The tile is compact (512 x 256, 2:1) and centered on the strike point so
+ * thin curved leaders fan outward in sweeping arcs and dendritic forks across
+ * the cloud layer without overlapping into thick flat horizontal bands.
  */
-const IC_ARTWORK_SIZE = { width : 1024, height : 256 };
+const IC_ARTWORK_SIZE = { width : 512, height : 256 };
 
 const IC_SHAPE = {
-  leaders      : 7,      // strands fanning out from the strike point
-  trunkWidth   : 2.6,    // artwork pixels - the brightest channel
-  trunkRatio   : 0.92,   // every leader starts at this share of the trunk width
-  branchRatio  : 0.66,   // ... and a fork at this share of its parent's
-  minWidth     : 1.0,
-  stepLength   : 1.4,    // artwork pixels per step
-  jitter       : 0.58,   // heading noise per step, rad - electrical crackle on top of the curve
-  straighten   : 0.075,  // pull back toward the strand's curving course
-  forkChance   : 0.0045, // per step, per strand - a fork, not a thicket
-  maxLevel     : 2,      // trunk, fork, and one round of sub-forks
-  fanSpread    : 0.60,   // rad - leaders open into a sweeping fan instead of a narrow bundle
+  leaders      : 6,      // curved leaders radiating outward from the strike point
+  trunkWidth   : 1.25,   // artwork pixels - fine intra-cloud main channel
+  trunkRatio   : 0.84,   // secondary leaders start slightly finer than the main trunk
+  branchRatio  : 0.74,   // forks taper delicately without vanishing under mipmapping
+  minWidth     : 0.75,
+  stepLength   : 1.25,   // artwork pixels per step
+  jitter       : 0.32,   // electrical crackle riding on top of the curving spine
+  straighten   : 0.28,   // pull drawAngle gently toward the curving spine
+  forkChance   : 0.018,  // per step, per strand - curved dendritic forks
+  maxLevel     : 2,      // trunk, fork, and sub-forks
 
-  // The course a strand follows, not just the buzz around it.
-  //
-  // A leader propagates through a lumpy charge layer, so its target heading
-  // swings through two incommensurate harmonics (`waveAmp`/`waveLength` plus a
-  // slower meander) and knocks its phase now and then (`waveKink`) so the arcs
-  // sweep across the cloud organically instead of forming uniform sine ribbons.
-  waveAmp      : 0.72,   // rad - how far the course swings either side of the opening angle
-  waveAmpSpread : 0.28,  // per strand, +/-: some channels arc wider than others
-  waveLength   : 280.,   // artwork steps per primary arc cycle
-  waveLengthSpread : 110.,// per strand, +/- so the bends do not line up across the tile
-  waveKink     : 0.0024, // per step - random phase knocks so arcs stay irregular
-  layerEdge    : 0.36    // distance from mid-height beyond which channels smoothly curve back inward
+  // Continuous sweeping curvature along each channel: every leader and fork bends
+  // steadily across a C-arc or S-curve from start to tip rather than vibrating
+  // back and forth around a fixed straight line.
+  sweepAmp     : 1.35,   // rad - continuous sweep across each channel's reach
+  sweepSpread  : 0.50,   // per-strand variation in sweep angle
+  waveAmp      : 0.65,   // rad - secondary bend amplitude for organic S-curves
+  waveAmpSpread : 0.30,  // per-strand variation in wave amplitude
+  margin       : 0.16    // edge margin where channels curve gently inward
 };
 
-const IC_LEVELS = [1.0, 0.70, 0.46]; // channel radiance by fork depth, 0..1
+const IC_LEVELS = [1.0, 0.78, 0.58]; // channel radiance by fork depth, 0..1
 
 
 /*
  * The heading of one strand of the network, as a thing that can be watched.
  *
- * `makeIcStrand` opens a leader on a heading and a course; `icHeadingStep` advances
- * one artwork step and returns the heading to draw with. They are separate from
- * drawing so `tests/check-lightning-bolt.js` can run the real arithmetic and measure
- * how far a channel turns and how far it bows away from the straight line between its
- * ends - the two numbers that say "curving" rather than "straight with noise".
- *
- * `rand` is passed in rather than closed over, so a test can drive it.
+ * `makeIcStrand` opens a leader on an outward axis and continuous arc sweep;
+ * `icHeadingStep` advances one artwork step and returns the heading to draw with.
+ * They are separate from drawing so `tests/check-lightning-bolt.js` can run the
+ * real arithmetic and measure how far a channel bows away from the straight line
+ * between its ends.
  */
-function makeIcStrand(heading, target, rand)
+function makeIcStrand(axis, curveSign, steps, rand)
 {
-  const amplitude = (IC_SHAPE.waveAmp + (rand() - 0.5) * IC_SHAPE.waveAmpSpread) *
-                    (rand() < 0.5 ? -1. : 1.);
+  const r = rand || Math.random;
+  const nSteps = Math.max(steps || 120, 18);
+  const sign = curveSign || (r() < 0.5 ? 1 : -1);
+  const sweepMag = Math.max(0, IC_SHAPE.sweepAmp + (r() - 0.5) * IC_SHAPE.sweepSpread);
+  const waveMag = Math.max(0, IC_SHAPE.waveAmp + (r() - 0.5) * IC_SHAPE.waveAmpSpread);
   return {
-    angle : heading,
-    target : target,
-    opening : target,                                            // the heading it opened on
-    phase : rand() * Math.PI * 2.,                               // where in its arc it starts
-    phase2 : rand() * Math.PI * 2.,                              // secondary meander phase
-    ratio2 : 0.45 + rand() * 0.25,                               // secondary harmonic ratio
-    amplitude : amplitude,
-    wavelength : Math.max(120., IC_SHAPE.waveLength + (rand() - 0.5) * IC_SHAPE.waveLengthSpread)
+    axis : axis,
+    angle : axis,
+    drawAngle : axis,
+    curveSign : sign,
+    stepIndex : 0,
+    steps : nSteps,
+    sweepTotal : sign * sweepMag,
+    waveFreq : (Math.PI * (0.9 + r() * 0.8)) / nSteps,
+    waveAmp : sign * waveMag
   };
 }
 
-function icHeadingStep(strand, rand, heightFraction)
+function icHeadingStep(strand, rand, posXFraction, posYFraction, heightAspect)
 {
-  const stepPhase = (Math.PI * 2.) / strand.wavelength;
-  strand.phase += stepPhase;
-  strand.phase2 += stepPhase * strand.ratio2;
+  const r = rand || Math.random;
+  const t = strand.stepIndex / Math.max(strand.steps, 1);
+  strand.stepIndex++;
 
-  let desired = strand.opening +
-                Math.sin(strand.phase) * strand.amplitude * 0.78 +
-                Math.sin(strand.phase2) * strand.amplitude * 0.32;
+  const rawBend = strand.sweepTotal * t + strand.waveAmp * Math.sin(strand.stepIndex * strand.waveFreq);
+  const clampedBend = Math.max(-1.45, Math.min(1.45, rawBend));
+  let spineAngle = strand.axis + clampedBend;
 
-  if (rand() < IC_SHAPE.waveKink)
-    strand.phase += (rand() - 0.5) * 1.4;               // the course is knocked: not a clean sine
-
-  // Smoothly bend channels back into the charge layer when they approach the top
-  // or bottom edge of the tile, instead of clamping them into flat horizontal rails.
-  if (heightFraction !== undefined) {
-    const fromCentre = heightFraction - 0.5;
-    if (Math.abs(fromCentre) > IC_SHAPE.layerEdge) {
-      const inward = fromCentre > 0 ? -1. : 1.;
-      const excess = (Math.abs(fromCentre) - IC_SHAPE.layerEdge) / (0.5 - IC_SHAPE.layerEdge);
-      const steer = inward * (0.35 + 0.50 * Math.min(excess, 1.0));
-      strand.opening += (steer - strand.opening) * 0.07;
-      desired += (steer - desired) * Math.min(0.65, 0.25 + 0.40 * excess);
+  // Smoothly curve tangentially inward away from tile margins so channels stay
+  // curved inside the cloud slab instead of terminating abruptly on a border.
+  if (posXFraction !== undefined && posYFraction !== undefined) {
+    const mx = Math.max(0, Math.abs(posXFraction - 0.5) - (0.5 - IC_SHAPE.margin)) / IC_SHAPE.margin;
+    const my = Math.max(0, Math.abs(posYFraction - 0.5) - (0.5 - IC_SHAPE.margin)) / IC_SHAPE.margin;
+    if (mx > 0 || my > 0) {
+      const aspect = heightAspect || 0.5;
+      const toCenter = Math.atan2((0.5 - posYFraction) * aspect, 0.5 - posXFraction);
+      const tangent = toCenter + strand.curveSign * 0.95;
+      const diff = Math.atan2(Math.sin(tangent - spineAngle), Math.cos(tangent - spineAngle));
+      spineAngle += diff * Math.min(0.45, (mx * mx + my * my) * 0.25);
     }
   }
 
-  strand.target = Math.max(-1.2, Math.min(1.2, desired));
-  strand.angle += (rand() - 0.5) * IC_SHAPE.jitter;
-  strand.angle -= (strand.angle - strand.target) * IC_SHAPE.straighten;
+  strand.angle = spineAngle;
+  strand.drawAngle += (r() - 0.5) * IC_SHAPE.jitter;
+  const delta = Math.atan2(Math.sin(spineAngle - strand.drawAngle), Math.cos(spineAngle - strand.drawAngle));
+  strand.drawAngle += delta * IC_SHAPE.straighten;
 
-  return strand.angle;
+  return strand.drawAngle;
 }
 
 
@@ -383,18 +374,18 @@ function generateLightningNetwork(width, height)
     return `rgb(${v}, ${v}, ${v})`;
   }
 
-  const startX = 2.0;
+  const startX = width * 0.5;
   const startY = height * 0.5;
+  const heightAspect = height / width;
 
   /*
-   * One strand: a heading that buzzes, pulled back toward its curving target, forking
-   * as it goes. A fork is drawn first and the parent resumes from the same point,
-   * so the network stays connected whatever order the browser rasterises it in.
+   * One curved strand: opens cleanly along its outward axis, sweeps along a broad
+   * C-arc or S-bend with electrical crackle, and forks into finer curved tendrils.
    */
-  function drawStrand(startX, startY, heading, target, steps, lineWidth, level)
+  function drawStrand(sx, sy, axis, curveSign, steps, lineWidth, level)
   {
-    let x = startX, y = startY;
-    const strand = makeIcStrand(heading, target, Math.random);
+    let x = sx, y = sy;
+    const strand = makeIcStrand(axis, curveSign, steps, Math.random);
 
     ctx.beginPath();
     ctx.moveTo(x, y);
@@ -402,13 +393,13 @@ function generateLightningNetwork(width, height)
     ctx.lineWidth = lineWidth;
 
     for (let i = 0; i < steps; i++) {
-      const angle = icHeadingStep(strand, Math.random, y / height);
+      const angle = icHeadingStep(strand, Math.random, x / width, y / height, heightAspect);
 
       const nextX = x + Math.cos(angle) * IC_SHAPE.stepLength;
       const nextY = y + Math.sin(angle) * IC_SHAPE.stepLength;
 
-      if (nextX < 1. || nextX > width - 1. || nextY < 1. || nextY > height - 1.) {
-        ctx.lineTo(clamp(nextX, 1., width - 1.), clamp(nextY, 1., height - 1.));
+      if (nextX < 2. || nextX > width - 2. || nextY < 2. || nextY > height - 2.) {
+        ctx.lineTo(clamp(nextX, 2., width - 2.), clamp(nextY, 2., height - 2.));
         break;
       }
 
@@ -420,9 +411,9 @@ function generateLightningNetwork(width, height)
         ctx.stroke(); // commit the parent so far
 
         const side = Math.random() < 0.5 ? -1. : 1.;
-        const childTarget = clamp(angle + side * (0.35 + Math.random() * 0.55), -1.15, 1.15);
-        drawStrand(x, y, childTarget + (Math.random() - 0.5) * 0.4, childTarget,
-                   Math.max(8, Math.round(steps * (0.30 + Math.random() * 0.45))),
+        const forkAxis = strand.angle + side * (0.45 + Math.random() * 0.45);
+        drawStrand(x, y, forkAxis, side,
+                   Math.max(16, Math.round(steps * (0.42 + Math.random() * 0.35))),
                    Math.max(IC_SHAPE.minWidth, lineWidth * IC_SHAPE.branchRatio), level + 1);
 
         ctx.beginPath();
@@ -434,22 +425,18 @@ function generateLightningNetwork(width, height)
     ctx.stroke();
   }
 
-  // The trunk: one long curving channel, the spine of the network.
-  const trunkTarget = (Math.random() - 0.5) * 0.30;
-  drawStrand(startX, startY, (Math.random() - 0.5) * 0.25, trunkTarget,
-             Math.round(width / IC_SHAPE.stepLength), IC_SHAPE.trunkWidth, 0);
-
-  // The leaders: a fan that leaves the strike point and sweeps through the layer.
+  // Curved leaders fanning outward from the strike center in an organic cluster.
+  const rot = Math.random() * Math.PI * 2.;
+  const globalHand = Math.random() < 0.5 ? 1. : -1.;
   for (let i = 0; i < IC_SHAPE.leaders; i++) {
-    const fraction = (i + 0.5) / IC_SHAPE.leaders;                       // 0..1 across the fan
-    const side = i % 2 === 0 ? -1. : 1.;
-    const target = side * IC_SHAPE.fanSpread * (0.30 + Math.random() * 0.70);
-    const reach = fraction < 0.55 ? (0.35 + Math.random() * 0.30) : (0.65 + Math.random() * 0.28);
-    const steps = Math.round(width * reach / IC_SHAPE.stepLength);
+    const axis = rot + (i / IC_SHAPE.leaders) * Math.PI * 2. + (Math.random() - 0.5) * 0.18;
+    const curveSign = (i % 3 === 0 ? -globalHand : globalHand);
+    const dirWeight = Math.hypot(Math.cos(axis) * 0.42 * width, Math.sin(axis) * 0.38 * height);
+    const reach = dirWeight * (0.72 + Math.random() * 0.26);
+    const steps = Math.round(reach / IC_SHAPE.stepLength);
+    const lineWidth = i === 0 ? IC_SHAPE.trunkWidth : IC_SHAPE.trunkWidth * IC_SHAPE.trunkRatio;
 
-    drawStrand(startX + Math.random() * 4., startY + (Math.random() - 0.5) * 20.,
-               target * (0.5 + Math.random() * 0.5), target, steps,
-               IC_SHAPE.trunkWidth * IC_SHAPE.trunkRatio * (0.75 + Math.random() * 0.25), 1);
+    drawStrand(startX, startY, axis, curveSign, steps, lineWidth, i === 0 ? 0 : 1);
   }
 
   return readRedChannel(ctx, width, height);

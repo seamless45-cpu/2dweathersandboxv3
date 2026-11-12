@@ -83,7 +83,7 @@ check('a flash reads its own artwork, mip-filtered, over a slab of the sky at tr
   /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader) &&
   /texCoord\.x - mod\(pos\.x, 1\.\)\) \/ flashSpan\.x/.test(displayShader) &&
   /0\.5 \+ flashFlip \* \(texCoord\.y - pos\.y\) \/ flashSpan\.y/.test(displayShader),
-  'the network artwork must keep its 4:1 world aspect ratio via aspectRatios[0] instead of squashing vertically');
+  'the network artwork must keep its 2:1 world aspect ratio via aspectRatios[0] instead of squashing vertically');
 check('a flash lights the slab it lives in and a stroke lights the cloud under it',
   /if \(isFlash\) \{\s*\n\s*\/\/ A flash lights the whole slab/.test(displayShader) &&
   /vec2 flashDist = vec2\(\(lightningPos\.x - texCoord\.x\) \* aspectRatios\[0\], texCoord\.y - lightningPos\.y\);/.test(displayShader) &&
@@ -114,13 +114,13 @@ check('the generator draws the two kinds of channel',
   !/mode === 'IC'/.test(generatorSource) && !/generateIntraCloudBolt/.test(generatorSource) &&
   /function generateLightningBolt\(/.test(generatorSource) &&
   /function generateLightningNetwork\(/.test(generatorSource) &&
-  /const IC_ARTWORK_SIZE = \{ width : 1024, height : 256 \};/.test(generatorSource),
-  'the old filament mode stays gone; the network is the new one, on a wide short tile');
+  /const IC_ARTWORK_SIZE = \{ width : 512, height : 256 \};/.test(generatorSource),
+  'the old filament mode stays gone; the network is the compact 2:1 curved tile');
 check('the network forks, fans out from one strike point and never tapers to nothing',
-  /leaders      : 7,/.test(generatorSource) && /forkChance   : 0\.0045,/.test(generatorSource) &&
+  /leaders      : 6,/.test(generatorSource) && /forkChance   : 0\.018,/.test(generatorSource) &&
   /maxLevel     : 2,/.test(generatorSource) &&
-  /IC_LEVELS = \[1\.0, 0\.70, 0\.46\]/.test(generatorSource),
-  'a ladder of brightness, not pow(width, 2), and a fork rather than a thicket');
+  /IC_LEVELS = \[1\.0, 0\.78, 0\.58\]/.test(generatorSource),
+  'a ladder of brightness, not pow(width, 2), and delicate curved forks');
 check('the display shader has no intra-cloud pass left',
   !/computeICLight/.test(displayShader) && !/displayICLightning/.test(displayShader) &&
   !/icLightPass/.test(displayShader) && !/icLightningTex/.test(displayShader),
