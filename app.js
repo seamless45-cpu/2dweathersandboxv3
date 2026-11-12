@@ -561,8 +561,6 @@ const guiControls_default = {
   IR_rate : 1.0,
   tool : 'TOOL_NONE',
   brushSize : 20,
-  plantGrowth : true,
-  showPlants : true,
   wholeWidth : false,
   wholeWidthBrushWidth : 100,
   brushIntensity : 0.01,
@@ -705,11 +703,6 @@ var weatherStationSamplingBuffers = {
   cloudWalls : new Int8Array(0),
   rainRegions : []
 };
-var plantEnvironmentSamplingBuffers = {
-  walls : new Int8Array(0),
-  base : new Float32Array(0),
-  water : new Float32Array(0)
-};
 
 function readRgbaChannel(data, pixelOffset, channel)
 {
@@ -746,14 +739,29 @@ let bloomRenderScale = 0.5;
 
 function clamp(num, min, max) { return Math.min(Math.max(num, min), max); }
 
+function getCanvasDisplayRect()
+{
+  if (canvas) {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0)
+      return rect;
+    if (canvas.clientWidth > 0 && canvas.clientHeight > 0)
+      return {width : canvas.clientWidth, height : canvas.clientHeight};
+  }
+  return {
+    width : Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1),
+    height : Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1)
+  };
+}
+
 function getCanvasDisplayWidth()
 {
-  return Math.max(1, Math.floor(canvas.clientWidth || window.innerWidth));
+  return Math.max(1, getCanvasDisplayRect().width);
 }
 
 function getCanvasDisplayHeight()
 {
-  return Math.max(1, Math.floor(canvas.clientHeight || window.innerHeight));
+  return Math.max(1, getCanvasDisplayRect().height);
 }
 
 function getRenderPixelRatio()
@@ -2744,8 +2752,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         // zoom center at mouse position
         const displayWidth = getCanvasDisplayWidth();
         const displayHeight = getCanvasDisplayHeight();
-        var mousePositionZoomCorrectionX = (((mouseX - displayWidth / 2 + this.tarXpos) * delta) / cam.tarZoom / displayWidth) * 2.0;
-        var mousePositionZoomCorrectionY = ((((mouseY - displayHeight / 2 + this.tarYpos) * delta) / cam.tarZoom / displayHeight) * 2.0) / canvas_aspect;
+        var mousePositionZoomCorrectionX = (((mouseX - displayWidth / 2) * delta) / cam.tarZoom / displayWidth) * 2.0;
+        var mousePositionZoomCorrectionY = ((((mouseY - displayHeight / 2) * delta) / cam.tarZoom / displayHeight) * 2.0) / canvas_aspect;
         this.changeViewXpos(-mousePositionZoomCorrectionX);
         this.changeViewYpos(mousePositionZoomCorrectionY);
       }
@@ -4597,39 +4605,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   var airplane = new Airplane();
 
+  document.documentElement.style.overflow = 'hidden';
   document.body.style.overflow = 'hidden'; // prevent scrolling bar from apearing
-
-  const plantEcosystem = new PlantEcosystem();
-  const ecosystemStatus = {population : 'Waiting for simulation'};
-  const ecosystemCanvas = document.createElement('canvas');
-  ecosystemCanvas.style.position = 'fixed';
-  ecosystemCanvas.style.left = '0';
-  ecosystemCanvas.style.top = '0';
-  ecosystemCanvas.style.width = '100vw';
-  ecosystemCanvas.style.height = '100vh';
-  ecosystemCanvas.style.zIndex = '0';
-  ecosystemCanvas.style.pointerEvents = 'none';
-  ecosystemCanvas.style.display = 'none';
-  document.body.appendChild(ecosystemCanvas);
-  const ecosystemContext = ecosystemCanvas.getContext('2d');
-  const ecosystemTooltip = document.createElement('div');
-  ecosystemTooltip.style.position = 'fixed';
-  ecosystemTooltip.style.zIndex = '10';
-  ecosystemTooltip.style.display = 'none';
-  ecosystemTooltip.style.padding = '7px 10px';
-  ecosystemTooltip.style.borderRadius = '5px';
-  ecosystemTooltip.style.background = 'rgba(20, 27, 21, 0.94)';
-  ecosystemTooltip.style.border = '1px solid rgba(190, 210, 170, 0.55)';
-  ecosystemTooltip.style.color = '#f2f5e9';
-  ecosystemTooltip.style.font = '12px/1.45 Arial, sans-serif';
-  ecosystemTooltip.style.whiteSpace = 'pre-line';
-  ecosystemTooltip.style.pointerEvents = 'none';
-  document.body.appendChild(ecosystemTooltip);
-  const ecosystemPointer = {x : -1, y : -1};
-  let ecosystemLastIteration = 0;
-  let ecosystemLastPhysicsTime = 0;
-  let ecosystemHoursAccumulator = 0;
-  let ecosystemSampleCursor = 0;
 
   canvas = document.getElementById('mainCanvas');
 
@@ -5320,11 +5297,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     display_folder.add(guiControls, 'realDewPoint').name('Show Real Dew Point');
 
     const exclusiveFeaturesFolder = datGui.addFolder('Exclusive Features');
-    exclusiveFeaturesFolder.add(guiControls, 'plantGrowth').name('Plant Growth & Reproduction');
-    const ecosystemStatusController = exclusiveFeaturesFolder.add(ecosystemStatus, 'population').name('Living Plants').listen();
-    const ecosystemStatusInput = ecosystemStatusController.domElement.querySelector('input');
-    if (ecosystemStatusInput)
-      ecosystemStatusInput.readOnly = true;
     exclusiveFeaturesFolder.add(guiControls, 'shareWeatherDataToLan')
       .name('Share Weather Data to LAN')
       .onChange(function(enabled) {
@@ -5450,7 +5422,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     const renderTechnologyControllers = renderTechnologySettings.map(([setting, label]) =>
       performanceFolder.add(guiControls, setting).name(label).onChange(updateRenderPresetLabel));
     const superSharpDetailWarning =
-      'Warning: Super Sharp Detail Mode increases the rendering pixel ratio by 2x (4x more total pixels rendered in HDR, bloom, post-processing, and plant overlays).\n\n' +
+      'Warning: Super Sharp Detail Mode increases the rendering pixel ratio by 2x (4x more total pixels rendered in HDR, bloom, and post-processing).\n\n' +
       'This substantially increases GPU load and graphics memory usage, which may lower frame rates or cause instability on weaker GPUs.\n\n' +
       'Turn on Super Sharp Detail Mode?';
     const superSharpDetailController = performanceFolder.add(guiControls, 'superSharpDetail')
@@ -5464,9 +5436,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         temporalHistoryValid = false;
         applySuperSharpDetail();
       });
-    performanceFolder.add(guiControls, 'showPlants')
-      .name('Render Plants')
-      .listen();
     performanceFolder.add(guiControls, 'showDrops')
       .name('Render Precipitation Particles')
       .listen();
@@ -5525,8 +5494,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       'FXAA Anti-Aliasing': ['Smooths jagged edges in the final image with a screen-space filter. It adds a small post-processing cost and can slightly soften fine details.', 'Low', 'low'],
       'Volumetric Cloud Lighting': ['Adds cloud self-shadowing, cool shaded interiors, sun-warmed edges, and a richer altitude- and time-of-day sky gradient. The extra lighting samples are most costly in scenes with widespread clouds.', 'High', 'high'],
       'Temporal Anti-Aliasing': ['Blends a small amount of the previous frame into the current frame to reduce flicker and jagged edges. History is neighborhood-clamped and reset on camera or display-mode changes; this is screen-space smoothing, not motion-reprojected TAA.', 'Low to medium', 'medium'],
-      'Super Sharp Detail Mode': ['Increases the rendering pixel ratio by 2x (4x total rendered pixels across HDR, bloom, post-processing, and plant overlays) for razor-sharp details. Shows a warning before turning on.', 'Very high (4x pixel load & VRAM)', 'high'],
-      'Render Plants': ['Hides or draws the plant layer. Hiding plants reduces per-frame 2D rendering work; plant growth and weather simulation continue.', 'Low to medium', 'low'],
+      'Super Sharp Detail Mode': ['Increases the rendering pixel ratio by 2x (4x total rendered pixels across HDR, bloom, and post-processing) for razor-sharp details. Shows a warning before turning on.', 'Very high (4x pixel load & VRAM)', 'high'],
       'Render Precipitation Particles': ['Shows or hides individual falling-particle markers. Hiding them skips their display draw; precipitation simulation and deposition continue.', 'Low to medium', 'medium'],
       'Weather Station Overlays': ['Hides or updates station cards and charts. Hiding them can reduce browser rendering overhead; weather station measurements continue.', 'Low to medium', 'low'],
       'Iterations / Frame': ['Controls how many weather simulation steps run per rendered frame. Fewer steps reduce GPU work per frame but slow simulated-time progress; higher values can reduce frame rate.', 'High, with simulation-speed tradeoff', 'high'],
@@ -5746,175 +5714,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     } else {
       updateSunlight('MANUAL_ANGLE'); // set angle from savefile
     }
-
-    initializePlantEcosystem();
-  }
-
-  function readPlantSurfaceSites()
-  {
-    const sampleCount = Math.min(1800, Math.max(120, Math.ceil(sim_res_x / 5)));
-    const wallData = initialWallTex || new Int8Array(sim_res_x * sim_res_y * 4);
-    if (!initialWallTex) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_0);
-      gl.readBuffer(gl.COLOR_ATTACHMENT2);
-      gl.readPixels(0, 0, sim_res_x, sim_res_y, gl.RGBA_INTEGER, gl.BYTE, wallData);
-    }
-
-    const sites = [];
-    for (let i = 0; i < sampleCount; i++) {
-      const x = Math.min(sim_res_x - 1, Math.floor((i + 0.5) * sim_res_x / sampleCount));
-      let surfaceY = -1;
-      let vegetation = 0;
-      let surfaceType = 0;
-      for (let y = 0; y < sim_res_y; y++) {
-        const offset = (y * sim_res_x + x) * 4;
-        if (wallData[offset + 1] == 0) {
-          surfaceY = y;
-          surfaceType = wallData[offset];
-          vegetation = wallData[offset + 3];
-        }
-      }
-      if (surfaceY >= 0 && surfaceType == 1)
-        sites.push({x, y : surfaceY, vegetation});
-    }
-    return sites;
-  }
-
-  function samplePlantEnvironment(sites, startIndex, sampleCount, surfacesKnown = false)
-  {
-    const samples = [];
-    if (!sites.length || sim_res_x <= 0 || sim_res_y <= 0)
-      return samples;
-
-    const count = Number.isFinite(sampleCount) ?
-      Math.min(sites.length, Math.max(0, Math.floor(sampleCount))) : 0;
-    if (count === 0)
-      return samples;
-    const normalizedStart = Number.isFinite(startIndex) ? Math.floor(startIndex) : 0;
-    const firstIndex = ((normalizedStart % sites.length) + sites.length) % sites.length;
-    const selectedSites = [];
-    let wallXStart = sim_res_x - 1;
-    let wallXEnd = 0;
-    for (let i = 0; i < count; i++) {
-      const siteIndex = (firstIndex + i) % sites.length;
-      const site = sites[siteIndex];
-      const x = Number.isFinite(site.x) ? clamp(Math.floor(site.x), 0, sim_res_x - 1) : 0;
-      selectedSites.push({siteIndex, site, x});
-      wallXStart = Math.min(wallXStart, x);
-      wallXEnd = Math.max(wallXEnd, x);
-    }
-
-    let wallWidth = 0;
-    let wallData = plantEnvironmentSamplingBuffers.walls;
-    if (!surfacesKnown) {
-      wallWidth = wallXEnd - wallXStart + 1;
-      const wallDataLength = wallWidth * sim_res_y * 4;
-      if (wallData.length < wallDataLength) {
-        wallData = new Int8Array(wallDataLength);
-        plantEnvironmentSamplingBuffers.walls = wallData;
-      }
-    }
-    gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_0);
-    if (!surfacesKnown) {
-      gl.readBuffer(gl.COLOR_ATTACHMENT2);
-      gl.readPixels(wallXStart, 0, wallWidth, sim_res_y, gl.RGBA_INTEGER, gl.BYTE, wallData);
-    }
-
-    const activeSites = [];
-    for (const {siteIndex, site, x} of selectedSites) {
-      if (surfacesKnown) {
-        activeSites.push({siteIndex, site, x});
-        continue;
-      }
-      let surfaceY = -1;
-      let wallType = 0;
-      for (let y = 0; y < sim_res_y; y++) {
-        const offset = (y * wallWidth + x - wallXStart) * 4;
-        if (wallData[offset + 1] == 0) {
-          surfaceY = y;
-          wallType = wallData[offset];
-        }
-      }
-
-      if (surfaceY >= 0 && wallType == 1) {
-        site.y = surfaceY;
-        site.x = x;
-        site.vegetation = wallData[(surfaceY * wallWidth + x - wallXStart) * 4 + 3];
-        activeSites.push({siteIndex, site, x});
-      } else {
-        samples.push({
-          siteIndex,
-          wallType : surfaceY >= 0 ? wallType : 0,
-          temperature : site.temperature,
-          moisture : site.moisture,
-          airMoisture : site.airMoisture || 0,
-          wind : site.wind || 0,
-          snow : site.snow
-        });
-      }
-    }
-
-    if (!activeSites.length)
-      return samples;
-    let dataXStart = sim_res_x - 1;
-    let dataXEnd = 0;
-    let dataYStart = sim_res_y - 1;
-    let dataYEnd = 0;
-    for (const {site, x} of activeSites) {
-      dataXStart = Math.min(dataXStart, x);
-      dataXEnd = Math.max(dataXEnd, x);
-      dataYStart = Math.min(dataYStart, site.y);
-      dataYEnd = Math.max(dataYEnd, Math.min(site.y + 1, sim_res_y - 1));
-    }
-    const dataWidth = dataXEnd - dataXStart + 1;
-    const dataHeight = dataYEnd - dataYStart + 1;
-    const dataLength = dataWidth * dataHeight * 4;
-    if (plantEnvironmentSamplingBuffers.base.length < dataLength)
-      plantEnvironmentSamplingBuffers.base = new Float32Array(dataLength);
-    if (plantEnvironmentSamplingBuffers.water.length < dataLength)
-      plantEnvironmentSamplingBuffers.water = new Float32Array(dataLength);
-    const baseData = plantEnvironmentSamplingBuffers.base;
-    const waterData = plantEnvironmentSamplingBuffers.water;
-
-    gl.readBuffer(gl.COLOR_ATTACHMENT0);
-    gl.readPixels(dataXStart, dataYStart, dataWidth, dataHeight, gl.RGBA, gl.FLOAT, baseData);
-    gl.readBuffer(gl.COLOR_ATTACHMENT1);
-    gl.readPixels(dataXStart, dataYStart, dataWidth, dataHeight, gl.RGBA, gl.FLOAT, waterData);
-
-    for (const {siteIndex, site, x} of activeSites) {
-      const airY = Math.min(site.y + 1, sim_res_y - 1);
-      const baseOffset = ((airY - dataYStart) * dataWidth + x - dataXStart) * 4;
-      const surfaceOffset = ((site.y - dataYStart) * dataWidth + x - dataXStart) * 4;
-      const temperatureK = potentialToRealT(baseData[baseOffset + 3], airY);
-      const humidity = relativeHumd(temperatureK, waterData[baseOffset]) / 100;
-      const wind = rawVelocityTo_ms(baseData[baseOffset]);
-      samples.push({
-        siteIndex,
-        wallType : 1,
-        temperature : Number.isFinite(temperatureK) ? KtoC(temperatureK) : guiControls.waterTemperature,
-        moisture : Number.isFinite(waterData[surfaceOffset + 2]) ?
-          clamp(waterData[surfaceOffset + 2] / 50, 0, 1) : 0,
-        airMoisture : Number.isFinite(humidity) ? clamp(humidity, 0, 1) : 0,
-        wind : Number.isFinite(wind) ? wind : 0,
-        snow : Number.isFinite(waterData[surfaceOffset + 3]) ? Math.max(0, waterData[surfaceOffset + 3]) : 0
-      });
-    }
-    return samples;
-  }
-
-  function initializePlantEcosystem()
-  {
-    const sites = readPlantSurfaceSites();
-    const environments = samplePlantEnvironment(sites, 0, sites.length, true);
-    const seed = (sim_res_x * 73856093) ^ (sim_res_y * 19349663) ^ simDateTime.getTime();
-    plantEcosystem.initialize(sites, environments, seed, guiControls.latitude, cellHeight);
-    ecosystemStatus.population = plantEcosystem.getStatus();
-    ecosystemCanvas.width = canvas.width;
-    ecosystemCanvas.height = canvas.height;
-    ecosystemCanvas.style.display = 'block';
-    ecosystemLastIteration = iterNum;
-    ecosystemHoursAccumulator = 0;
-    ecosystemSampleCursor = 0;
   }
 
   var soundingGraph = {
@@ -6209,23 +6008,32 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   var canvas_aspect;
 
+  function syncCanvasAspect()
+  {
+    const displayWidth = getCanvasDisplayWidth();
+    const displayHeight = getCanvasDisplayHeight();
+    canvas_aspect = displayWidth / displayHeight;
+    return {displayWidth, displayHeight};
+  }
+
   const initialPixelRatio = getRenderPixelRatio();
   canvas.style.width = '100vw';
   canvas.style.height = '100vh';
-  canvas.width = Math.max(1, Math.floor(getCanvasDisplayWidth() * initialPixelRatio));
-  canvas.height = Math.max(1, Math.floor(getCanvasDisplayHeight() * initialPixelRatio));
   canvas.style.display = 'block';
-  canvas_aspect = canvas.width / canvas.height;
+  const {displayWidth : initialDisplayWidth, displayHeight : initialDisplayHeight} = syncCanvasAspect();
+  canvas.width = Math.max(1, Math.floor(initialDisplayWidth * initialPixelRatio));
+  canvas.height = Math.max(1, Math.floor(initialDisplayHeight * initialPixelRatio));
+  soundingGraph.graphCanvas.height = Math.max(1, Math.floor(initialDisplayHeight));
+  soundingGraph.graphCanvas.width = soundingGraph.graphCanvas.height;
 
   var mouseXinSim, mouseYinSim;
   var prevMouseXinSim, prevMouseYinSim;
-  let resizeTimeout;
+  let resizeAnimationFrame;
 
   function resizeSimulationCanvases(force = false)
   {
-    resizeTimeout = null;
-    const displayWidth = getCanvasDisplayWidth();
-    const displayHeight = getCanvasDisplayHeight();
+    resizeAnimationFrame = undefined;
+    const {displayWidth, displayHeight} = syncCanvasAspect();
     const pixelRatio = getRenderPixelRatio();
     const width = Math.max(1, Math.floor(displayWidth * pixelRatio));
     const height = Math.max(1, Math.floor(displayHeight * pixelRatio));
@@ -6234,12 +6042,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     canvas.width = width;
     canvas.height = height;
-    ecosystemCanvas.width = width;
-    ecosystemCanvas.height = height;
-    canvas_aspect = width / height;
 
-    soundingGraph.graphCanvas.height = displayHeight;
-    soundingGraph.graphCanvas.width = displayHeight;
+    soundingGraph.graphCanvas.height = Math.max(1, Math.floor(displayHeight));
+    soundingGraph.graphCanvas.width = Math.max(1, Math.floor(displayHeight));
 
     if (gl.isContextLost())
       return;
@@ -6249,15 +6054,21 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     createTemporalHistoryTexture();
   }
 
+  function scheduleCanvasResize()
+  {
+    syncCanvasAspect();
+    if (resizeAnimationFrame === undefined)
+      resizeAnimationFrame = requestAnimationFrame(() => resizeSimulationCanvases());
+  }
+
   applySuperSharpDetail = function() {
     resizeSimulationCanvases(true);
   };
 
-  window.addEventListener('resize', function() {
-    if (resizeTimeout !== undefined)
-      clearTimeout(resizeTimeout);
-    resizeTimeout = setTimeout(resizeSimulationCanvases, 250);
-  });
+  window.addEventListener('resize', scheduleCanvasResize);
+  window.visualViewport?.addEventListener('resize', scheduleCanvasResize);
+  if (typeof ResizeObserver !== 'undefined')
+    new ResizeObserver(scheduleCanvasResize).observe(canvas);
 
   function logSample()
   {
@@ -6377,8 +6188,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   window.addEventListener('mousemove', function(event) {
     var rect = canvas.getBoundingClientRect();
     mouseX = event.clientX - rect.left;
-    ecosystemPointer.x = event.clientX;
-    ecosystemPointer.y = event.clientY;
 
     if (!(guiControls.tool == 'TOOL_WALL_SEA' && leftMousePressed)) // lock y pos while drawing lake / sea
       mouseY = event.clientY - rect.top;
@@ -6562,8 +6371,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         cam.zoomAtMousePos((curSep / prevSep) - 1.0);
 
         if (wasTwoFingerTouchBefore) {
-          cam.changeViewYpos(((mouseX - prevMouseX) / cam.curZoom / canvas.width) * 2.0);
-          cam.changeViewYpos(((mouseY - prevMouseY) / cam.curZoom / canvas.width) * 2.0);
+          const displayWidth = getCanvasDisplayWidth();
+          cam.changeViewXpos(((mouseX - prevMouseX) / cam.curZoom / displayWidth) * 2.0);
+          cam.changeViewYpos(-((mouseY - prevMouseY) / cam.curZoom / displayWidth) * 2.0);
         }
         wasTwoFingerTouchBefore = true;
         prevMouseX = mouseX;
@@ -6800,8 +6610,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.28'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.28')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.29'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.29')
   ]);
 
   const [
@@ -7724,7 +7534,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.28');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.29');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8145,17 +7955,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  await loadingBar.set(86, 'Generating procedural plant sprites');
-  try {
-    await plantEcosystem.generateSprites();
-  } catch (error) {
-    console.error('Plant sprites could not be generated.', error);
-    alert('Plant sprites could not be generated. The weather simulation will continue without plants.');
-    guiControls.showPlants = false;
-    guiControls.plantGrowth = false;
-    ecosystemStatus.population = 'Plant sprites failed to generate';
-  }
-
   if (!SETUP_MODE) {
     startSimulation();
   }
@@ -8189,6 +7988,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   await loadingBar.set(100, 'Simulation ready');
   await new Promise(resolve => setTimeout(resolve, 350));
   await loadingBar.remove(true);
+  resizeSimulationCanvases();
 
   function draw()
   { // Runs for every frame
@@ -9132,77 +8932,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to canvas
     }
 
-    const ecosystemIterationDelta = iterNum - ecosystemLastIteration;
-    ecosystemLastIteration = iterNum;
-    if (ecosystemIterationDelta > 0) {
-      ecosystemHoursAccumulator += ecosystemIterationDelta * timePerIteration;
-      if (ecosystemHoursAccumulator >= 1) {
-        const elapsedHours = ecosystemHoursAccumulator;
-        ecosystemHoursAccumulator = 0;
-        const sites = plantEcosystem.sites;
-        const sampleCount = Math.min(120, sites.length);
-        const environments = samplePlantEnvironment(sites, ecosystemSampleCursor, sampleCount);
-        if (guiControls.plantGrowth) {
-          plantEcosystem.update(
-            elapsedHours,
-            environments,
-            guiControls.latitude,
-            Math.max(0, Math.sin(guiControls.sunAngle * degToRad)) * guiControls.sunIntensity,
-            cellHeight,
-            guiControls.wrapHorizontally
-          );
-        } else {
-          plantEcosystem.updateWind(environments);
-        }
-        ecosystemSampleCursor = sites.length ? (ecosystemSampleCursor + sampleCount) % sites.length : 0;
-        if (guiControls.plantGrowth)
-          ecosystemStatus.population = plantEcosystem.getStatus();
-      }
-    }
-
-    const physicsTime = performance.now();
-    if (ecosystemLastPhysicsTime > 0)
-      plantEcosystem.stepWindPhysics((physicsTime - ecosystemLastPhysicsTime) / 1000);
-    ecosystemLastPhysicsTime = physicsTime;
-
-    ecosystemContext.setTransform(1, 0, 0, 1, 0, 0);
-    ecosystemContext.clearRect(0, 0, ecosystemCanvas.width, ecosystemCanvas.height);
-    if (guiControls.showPlants && !SETUP_MODE) {
-      const displayWidth = getCanvasDisplayWidth();
-      const pixelScale = canvas.width / displayWidth;
-      ecosystemContext.setTransform(pixelScale, 0, 0, pixelScale, 0, 0);
-      const cellPixels = displayWidth / sim_res_x * cam.curZoom;
-      const hoveredPlant = plantEcosystem.draw(
-        ecosystemContext,
-        simToScreenX,
-        simToScreenY,
-        cellPixels,
-        sim_res_x,
-        guiControls.wrapHorizontally,
-        ecosystemPointer.x,
-        ecosystemPointer.y,
-        performance.now() / 1000
-      );
-      if (hoveredPlant) {
-        const health = Math.round(hoveredPlant.plant.health * 100);
-        const damage = Math.round(hoveredPlant.plant.windDamage * 100);
-        const airHumidity = Math.round(hoveredPlant.site.airMoisture * 100);
-        const groundMoisture = Math.round(hoveredPlant.site.moisture * 100);
-        ecosystemTooltip.textContent = hoveredPlant.plant.species.name +
-          '\nHealth: ' + health + '% | Wind damage: ' + damage + '%' +
-          '\nWind force: ' + hoveredPlant.plant.windForceN.toFixed(1) + ' N' +
-          '\nAir humidity: ' + airHumidity + '% RH | Soil moisture: ' + groundMoisture + '%' +
-          '\nTemperature: ' + hoveredPlant.site.temperature.toFixed(1) + ' °C' +
-          '\nBiome: ' + hoveredPlant.site.biome.replace(/-/g, ' ');
-        ecosystemTooltip.style.display = 'block';
-        ecosystemTooltip.style.left = Math.min(ecosystemPointer.x + 14, window.innerWidth - 210) + 'px';
-        ecosystemTooltip.style.top = Math.min(ecosystemPointer.y + 14, window.innerHeight - 76) + 'px';
-      } else {
-        ecosystemTooltip.style.display = 'none';
-      }
-    } else {
-      ecosystemTooltip.style.display = 'none';
-    }
     if (displayWeatherStations) {
       for (let i = 0; i < weatherStations.length; i++) {
         weatherStations[i].updateCanvas(); // update weather stations
@@ -9678,7 +9407,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.28');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.29');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

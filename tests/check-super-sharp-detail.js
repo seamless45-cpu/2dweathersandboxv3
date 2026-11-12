@@ -5,11 +5,11 @@
 //      Performance folder with a performanceHelp entry and Render Quality readout.
 //   2. Shows a confirmation warning dialog before enabling, and reverts cleanly
 //      to false without resizing if the user cancels.
-//   3. Multiplies the rendering pixel ratio by 2x across canvas, ecosystemCanvas,
+//   3. Multiplies the rendering pixel ratio by 2x across canvas
 //      and dependent FBO sizes (HDR, Bloom, Temporal AA) while keeping CSS layout
 //      pinned to 100vw x 100vh.
-//   4. Keeps pointer, camera pan/zoom, weather station, and plant coordinate math
-//      in CSS display pixels while drawing plants at 2x backing transform.
+//   4. Keeps pointer, camera pan/zoom, and weather station coordinate math
+//      in CSS display pixels while matching canvas_aspect to the rendered CSS rect.
 //
 // Usage: node tests/check-super-sharp-detail.js
 
@@ -61,18 +61,17 @@ check('#mainCanvas keeps 100vw x 100vh CSS display size while backing buffer sca
   /canvas\.style\.height = '100vh';/.test(appSource) &&
   /const width = Math\.max\(1, Math\.floor\(displayWidth \* pixelRatio\)\);/.test(appSource) &&
   /const height = Math\.max\(1, Math\.floor\(displayHeight \* pixelRatio\)\);/.test(appSource) &&
-  /ecosystemCanvas\.width = width;\s*\n\s*ecosystemCanvas\.height = height;/.test(appSource),
-  'backing canvas & ecosystemCanvas double resolution while viewport stays 100vw x 100vh');
+  /canvas\.width = width;\s*\n\s*canvas\.height = height;/.test(appSource),
+  'backing canvas doubles resolution while viewport stays 100vw x 100vh');
 
-check('mouse/camera/tooltip/ecosystem coordinates separate CSS display pixels from 2x backing pixels',
+check('mouse/camera/tooltip coordinates separate CSS display pixels from 2x backing pixels without plant overlay',
   /function getCanvasDisplayWidth\(\)/.test(appSource) &&
   /function getCanvasDisplayHeight\(\)/.test(appSource) &&
   /screenToSimX[\s\S]{0,220}getCanvasDisplayWidth\(\)/.test(appSource) &&
   /simToScreenY[\s\S]{0,220}getCanvasDisplayHeight\(\)/.test(appSource) &&
   /zoomAtMousePos[\s\S]{0,260}getCanvasDisplayWidth\(\)/.test(appSource) &&
-  /ecosystemContext\.setTransform\(pixelScale, 0, 0, pixelScale, 0, 0\)/.test(appSource) &&
-  /const cellPixels = displayWidth \/ sim_res_x \* cam\.curZoom;/.test(appSource),
-  'pointer tools, pan/zoom, weather stations, and plants must stay aligned at 2x pixel ratio');
+  !/ecosystemCanvas|plantEcosystem|initializePlantEcosystem|showPlants|plantGrowth/.test(appSource),
+  'pointer tools, pan/zoom, and weather stations must stay aligned at 2x pixel ratio and plant overlay must be removed');
 
 check('resetSettings reapplies pixel ratio after resetting defaults',
   /guiControls\.resetSettings[\s\S]{0,450}applySuperSharpDetail\(\);/.test(appSource),
