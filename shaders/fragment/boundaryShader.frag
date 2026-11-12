@@ -332,17 +332,31 @@ void main()
         if (wall[TYPE] == WALLTYPE_INDUSTRIAL) { // exclude WALLTYPE_FIRE
           int texFragX = int(fragCoord.x) % 80;
 
-          if (wall[VERT_DISTANCE] == 5 && (texFragX == 18 || texFragX == 22)) { // cooling towers
-            water[TOTAL] += 2.5; // 0.25 before the vapor output was raised 10x
-            // base[TEMPERATURE] += 0.02;
-            base.xy *= 0.5;
-            base.y += 0.05;
+          float coolingSpotWeight = 0.0;
+          if (wall[VERT_DISTANCE] == 5) {
+            if (texFragX == 18 || texFragX == 22)
+              coolingSpotWeight = 1.0;
+            else if (texFragX == 17 || texFragX == 19 || texFragX == 21 || texFragX == 23)
+              coolingSpotWeight = 0.15; // +30% bigger emitting spot per cooling tower (1.0 -> 1.30)
           }
-
-          else if (wall[VERT_DISTANCE] == 6 && texFragX == 29) { // smoke stack
-            water[SMOKE] += 0.01;
-            base[TEMPERATURE] += 0.02;
-            base.xy *= 0.5;
+          if (coolingSpotWeight > 0.0) { // cooling towers
+            water[TOTAL] += 25.0 * coolingSpotWeight; // 10x previous 2.5 vapor output
+            // base[TEMPERATURE] += 0.02;
+            base.xy *= mix(1.0, 0.5, coolingSpotWeight);
+            base.y += 0.05 * coolingSpotWeight;
+          } else {
+            float stackSpotWeight = 0.0;
+            if (wall[VERT_DISTANCE] == 6) {
+              if (texFragX == 29)
+                stackSpotWeight = 1.0;
+              else if (texFragX == 28 || texFragX == 30)
+                stackSpotWeight = 0.15; // +30% bigger emitting spot on smoke stack (1.0 -> 1.30)
+            }
+            if (stackSpotWeight > 0.0) { // smoke stack
+              water[SMOKE] += 0.01 * stackSpotWeight;
+              base[TEMPERATURE] += 0.02 * stackSpotWeight;
+              base.xy *= mix(1.0, 0.5, stackSpotWeight);
+            }
           }
         }
         // nobreak!

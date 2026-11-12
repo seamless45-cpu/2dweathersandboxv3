@@ -306,9 +306,12 @@ check('the tool is handled by the click handler',
 check('rod placement validates against the terrain surface',
   appSource.includes('findTerrainSurfaceCell') && appSource.includes('surfaceCell + maxAirCells'));
 
-// industrial cooling towers emit 10x the water vapour they used to
-check('industrial vapour output was raised 10x',
-  /water\[TOTAL\] \+= 2\.5;/.test(boundaryShader) && !/water\[TOTAL\] \+= 0\.25;/.test(boundaryShader));
+// industrial cooling towers emit 10x the previous 2.5 water vapour output with a 30% bigger emitting spot
+check('industrial vapour output was raised 10x with 30% bigger emitting spot',
+  /water\[TOTAL\] \+= 25\.0 \* coolingSpotWeight;/.test(boundaryShader) &&
+  /coolingSpotWeight = 0\.15;/.test(boundaryShader) &&
+  /stackSpotWeight = 0\.15;/.test(boundaryShader) &&
+  !/water\[TOTAL\] \+= 0\.25;/.test(boundaryShader));
 
 /* ------------------------------------------------------- GLSL hash port */
 
