@@ -77,7 +77,7 @@ function displayMemoryMB() {
 }
 
 const SURFACE_MAP = (2048 * 1280 * 4) / MB;                 // half of the 4096 x 2560 file
-const NETWORK_TILE = (1024 * 256) / MB;
+const NETWORK_TILE = (512 * 256) / MB;
 
 console.log('Graphics memory at the default resolution\n');
 const DEFAULTS = { x : 2000, y : 300 };
@@ -87,7 +87,7 @@ const boltTiles = boltBudget * (2500 * 5000) / MB;          // R8, no mip chain
 const rows = [
   ['simulation textures, ' + DEFAULTS.x + ' x ' + DEFAULTS.y + ' cells', simMemoryMB(DEFAULTS.x, DEFAULTS.y)],
   ['bolt artwork, ' + boltBudget + ' x 2500 x 5000 R8', boltTiles],
-  ['intra-cloud network, 1024 x 256 R8', NETWORK_TILE],
+  ['intra-cloud network, 512 x 256 R8', NETWORK_TILE],
   ['surface texture map, uploaded at 2048 x 1280', SURFACE_MAP],
   ['HDR + bloom at a ' + WINDOW_W + ' x ' + WINDOW_H + ' window', displayMemoryMB()]
 ];

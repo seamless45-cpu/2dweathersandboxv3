@@ -193,63 +193,37 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
  * The intra-cloud channel, and it is a different picture from the bolt because it
  * is a different thing.
  *
- * A stroke is one channel going one way; a flash is a network of leaders spreading
- * through a charge layer, forking down to fine tendrils, filling a wide flat
- * volume. Drawn with the bolt artwork it could only ever be one channel - the
- * earlier rounds settled that the hard way: down the picture it was a stroke that
- * stopped early, and across the picture it was a bolt lying on its side. So a
- * flash reads its own artwork now, generated once at load by the same generator,
- * on a 1024 x 256 tile (see generateLightningNetwork in lightningGenerator.js).
+ * A stroke is one channel going one way; a flash is a compact network of curved
+ * leaders spreading outward around the strike point, forking into fine curved
+ * tendrils inside the cloud. So a flash reads its own artwork tile (512 x 256,
+ * 2:1, see generateLightningNetwork in lightningGenerator.js).
  *
- * Where it goes: 0.28 of the simulation's height (84 cells, ~3.4 km) and
- * `flashHeight * networkTexAspect / aspectRatios[0]` of its width (~336 cells at
- * 2000 x 300), matching the 1024 x 256 (4:1) artwork tile's true aspect ratio in
- * physical world coordinates so vertical curves are never squashed flat on screen.
- * It is mirrored per strike in both axes off the strike's own position, so two
- * flashes never draw the same network the same way round, and it always starts at
- * the strike itself, because the network artwork starts at its own left edge.
+ * Where it goes: 0.075 of the simulation's height (~22.5 cells, ~0.9 km) and
+ * `flashHeight * networkTexAspect / aspectRatios[0]` of its width (~45 cells,
+ * ~1.8 km at 2000 x 300), keeping the 512 x 256 (2:1) artwork tile's true world
+ * aspect ratio so curved tendrils stay compact inside a convective cell instead
+ * of stretching into a large horizontal bar across the sky.
  *
- * It is not masked by the cloud it is born in. A channel that leaves one deck and
- * runs through the clear air to the next is cloud-to-cloud lightning, which is what
- * most intra-cloud light actually is: masking it to its own cloud cut every channel
- * off at the cloud's edge, and cut the connections to the neighbouring turret that
- * are the point of the thing. Only the stroke's cloud attenuation applies, which is
- * a filter on the light, not a mask on the channel.
- *
- * How it plays out: immediately on trigger with zero fixed delay, lighting the
- * full curved network across the sky and pulsing with the intensity curve as it
- * decays.
- *
- * The threshold is 0.03 rather than the stroke's 0.95 because the network's
- * channels are a ladder of brightnesses (1.0 trunk, 0.70, 0.46 for the tendrils)
- * and the tile is read mip-filtered: a higher threshold wipes out downsampled
- * secondary branches and leaves only the brightest core.
+ * The threshold is 0.02 so mip-filtered curved secondary and tertiary tendrils
+ * remain continuous and crisp at any zoom without bloating into thick ribbons.
  */
 vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity)
 {
-  const vec2 networkTexRes = vec2(1024.0, 256.0);
-  const float networkTexAspect = networkTexRes.x / networkTexRes.y; // 4.0
-  const float flashHeight = 0.28;                                   // 84 sim cells tall (~3.4 km) at 300-row sim height
+  const vec2 networkTexRes = vec2(512.0, 256.0);
+  const float networkTexAspect = networkTexRes.x / networkTexRes.y; // 2.0
+  const float flashHeight = 0.075;                                  // ~22.5 sim cells tall (~0.9 km) at 300-row sim height
   vec2 flashSpan = vec2(flashHeight * networkTexAspect / aspectRatios[0], flashHeight);
-  const float flashThreshold = 0.03;             // preserve mip-filtered curved branches and forks
+  const float flashThreshold = 0.02;             // preserve thin mip-filtered curved branches and forks
 
-  // A stroke is written at a hundred thousand because it is only ever seen
-  // *through* a cloud column, which divides it by a thousand. A flash is not: with
-  // the mask gone its channels run through clear air as well, where nothing
-  // divides them, and the stroke's budget there would write four hundred thousand
-  // over the white point and take the frame with it in bloom. A flash is written
-  // at a fortieth of that - white in a cloud, where the column divides it down to
-  // about a hundred and twenty, and a few times a stroke's own light in the clear
-  // air between two decks.
-  const float mainBoltBrightness = 25000.;
+  const float mainBoltBrightness = 7000.;
 
   float flashDir = random2d(vec2(pos.y * 3.77, 1.23)) < 0.5 ? -1. : 1.;
   float flashFlip = random2d(vec2(pos.x * 5.11, 7.77)) < 0.5 ? -1. : 1.;
 
-  vec2 flashCoord = vec2(flashDir * (texCoord.x - mod(pos.x, 1.)) / flashSpan.x,
+  vec2 flashCoord = vec2(0.5 + flashDir * (texCoord.x - mod(pos.x, 1.)) / flashSpan.x,
                          0.5 + flashFlip * (texCoord.y - pos.y) / flashSpan.y);
 
-  if (flashCoord.x < 0.004 || flashCoord.x > 1. || flashCoord.y < 0. || flashCoord.y > 1.)
+  if (flashCoord.x < 0.004 || flashCoord.x > 0.996 || flashCoord.y < 0.004 || flashCoord.y > 0.996)
     return vec3(0);
 
   float pixVal = texture(lightningNetworkTex, flashCoord).r; // mip-filtered: a network of fine channels
