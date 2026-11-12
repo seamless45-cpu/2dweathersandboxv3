@@ -6800,8 +6800,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.23'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.23')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.24'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.24')
   ]);
 
   const [
@@ -7724,7 +7724,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.23');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.24');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8169,7 +8169,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   let lastLightningSoundIteration = 0;
   let lastLightningSoundCheckIteration = 0;
   let lightningSoundFrame = 0;
-  const lightningDataValues = new Float32Array(numLightningSlots * 4);
+  const lightningDataValues = new Float32Array(numLightningSlots * 2 * 4);
 
   // preload uniform locations for tiny performance gain
   var uniformLocation_boundaryProgram_iterNum = gl.getUniformLocation(boundaryProgram, 'iterNum');
@@ -8556,7 +8556,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           lastLightningSoundCheckIteration = iterNum;
           gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuffs[lightningDataSrc]);
           gl.readBuffer(gl.COLOR_ATTACHMENT0);
-          gl.readPixels(0, 0, numLightningSlots, 1, gl.RGBA, gl.FLOAT, lightningDataValues);
+          gl.readPixels(0, 0, numLightningSlots, 2, gl.RGBA, gl.FLOAT, lightningDataValues);
 
           // thunder belongs to the newest strike in the slot array that we have
           // not heard yet (several strikes can be in flight at once now)
@@ -8570,11 +8570,23 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             }
           }
           if (newestSlot >= 0) {
-            soundSystem.soundThunder(
-              lightningDataValues[newestSlot * 4 + 0],
-              lightningDataValues[newestSlot * 4 + 1],
-              Math.pow(lightningDataValues[newestSlot * 4 + 3], 2.0)
-            );
+            const targetX = lightningDataValues[newestSlot * 4 + 0];
+            const originY = lightningDataValues[newestSlot * 4 + 1];
+            const strikeIntensity = lightningDataValues[newestSlot * 4 + 3];
+            const metaOffset = (numLightningSlots + newestSlot) * 4;
+            const originX = lightningDataValues[metaOffset + 0];
+            const metaType = lightningDataValues[metaOffset + 1];
+            const targetY = lightningDataValues[metaOffset + 2];
+            if (metaType >= 1.5) {
+              // Cloud-to-cloud: use midpoint across the periodic seam and cc*.mp3 thunder.
+              const dxWrap = mod(originX - targetX + 0.5, 1.0) - 0.5;
+              const midX = mod(targetX + 0.5 * dxWrap, 1.0);
+              const midY = 0.5 * (originY + targetY);
+              const ccThunderGain = metaType >= 2.5 ? 1.0 : 0.67; // +CC ~50% stronger than -CC while staying in cc*.mp3
+              soundSystem.soundThunder(midX, midY, ccThunderGain);
+            } else {
+              soundSystem.soundThunder(targetX, originY, Math.pow(strikeIntensity, 2.0));
+            }
             lastLightningSoundIteration = newestIteration;
           }
         } else if (!guiControls.sound || !guiControls.enablePrecipitation) {
@@ -9655,7 +9667,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.23');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.24');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

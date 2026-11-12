@@ -102,7 +102,7 @@ check('lightningLocationShader.frag reads row 1 metadata and selects clear-air p
 check('realisticDisplayShader.frag draws external positive CG via displayExternalLightning and illuminates origin + ground',
   /vec3 displayExternalLightning\(/.test(displayShader) &&
   /vec4 lightningMeta = texelFetch\(lightningDataTex, ivec2\(slot, 1\), 0\);/.test(displayShader) &&
-  /bool isExternalPositive = !isFlash && lightningMeta\.y > 0\.5;/.test(displayShader) &&
+  /bool isExternalPositive = !isFlash && abs\(lightningMeta\.y - 1\.0\) < 0\.25;/.test(displayShader) &&
   /if \(isExternalPositive\) \{/.test(displayShader) &&
   /originDist/.test(displayShader),
   'external positive CG must arch from storm origin to distant ground and light both ends');
@@ -242,14 +242,14 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
   const extMatch = displayShader.match(/const float extBoltBrightness = ([\d.]+);/);
   const mainB = mainMatch ? Number(mainMatch[1]) : NaN;
   const extB = extMatch ? Number(extMatch[1]) : NaN;
-  check('displayExternalLightning uses 20x normal CG brightness (2000000 vs 100000)',
-    Number.isFinite(mainB) && Number.isFinite(extB) && extB === mainB * 20,
+  check('displayExternalLightning uses 200000 brightness (2x normal CG 100000)',
+    Number.isFinite(mainB) && Number.isFinite(extB) && extB === 200000 && extB === mainB * 2,
     'main=' + mainB + ', ext=' + extB);
 
-  check('external positive CG illuminates ground and storm origin 20x brighter than normal CG',
-    /onLight \+= vec3\(lightningOnLight \* 19\.0\);/.test(displayShader) &&
-    /onLight \+= vec3\(lightningOnLightBrightness \* 20\.0 \//.test(displayShader),
-    'expected 20x total ground (1 + 19) and 20x origin cloud onLight');
+  check('external positive CG illuminates ground and storm origin 2x normal CG',
+    /if \(isExternalPositive\) \{\s*\n\s*onLight \+= vec3\(lightningOnLight\);/.test(displayShader) &&
+    /onLight \+= vec3\(lightningOnLightBrightness \* 2\.0 \//.test(displayShader),
+    'expected 2x ground (1 + 1) and 2x origin cloud onLight');
 
   const LIGHTNING_ANIM_ITERS = defineValue(common, 'LIGHTNING_ANIM_ITERS');
   const flickersExt = (x, y, intensity) => {
