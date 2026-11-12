@@ -6800,8 +6800,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.25'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.25')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.26'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.26')
   ]);
 
   const [
@@ -7724,7 +7724,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.25');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.26');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8577,7 +8577,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             const originX = lightningDataValues[metaOffset + 0];
             const metaType = lightningDataValues[metaOffset + 1];
             const targetY = lightningDataValues[metaOffset + 2];
-            if (metaType >= 1.5) {
+            if (metaType >= 3.5) {
+              // Positive intra-cloud flash: strong cloud rumble at the origin cell via cc*.mp3.
+              soundSystem.soundThunder(targetX, originY, Math.min(Math.pow(strikeIntensity, 2.0), 1.0));
+            } else if (metaType >= 1.5) {
               // Cloud-to-cloud: use midpoint across the periodic seam and cc*.mp3 thunder.
               const dxWrap = mod(originX - targetX + 0.5, 1.0) - 0.5;
               const midX = mod(targetX + 0.5 * dxWrap, 1.0);
@@ -9671,7 +9674,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.25');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.26');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

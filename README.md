@@ -370,8 +370,9 @@ node tests/check-shaders.js    # glslangValidator on every shader
 node tests/check-lightning-rods.js
 node tests/check-lightning-bolt.js # the channel's shape, drawn and measured
 node tests/check-lightning-strikes.js # how often lightning may strike, and when
-node tests/check-external-cg.js # positive external CG targeting, 200000 brightness, single-stroke timing, and arc geometry
-node tests/check-cloud-to-cloud.js # negative & positive CC targeting, +CC 50% brighter, single-stroke, fewer branches
+node tests/check-external-cg.js # positive external CG far clear-air targeting, 200000 brightness, smooth fade, single-stroke timing, and arc geometry
+node tests/check-cloud-to-cloud.js # reworked organic cubic/fractal CC targeting & polarity (-CC vs +CC)
+node tests/check-positive-ic.js # positive intra-cloud (+IC) anvil flash triggering, brightness, and rod isolation
 node tests/check-super-sharp-detail.js # 2x pixel ratio toggle, warning confirmation, and CSS/backing coordinate alignment
 node tests/check-memory.js     # the graphics-memory bill, recounted from the source
 ```

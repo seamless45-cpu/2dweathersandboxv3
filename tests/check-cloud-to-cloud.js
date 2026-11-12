@@ -99,52 +99,60 @@ check('displayCloudToCloudLightning keeps +CC 50% brighter (1.5x) and avoids fwi
     displayShader.indexOf('float saturate'))),
   '+CC must scale channel + cloud glow by exactly 1.5x without conditional quad derivatives');
 
-check('negative CC generates multiple branches while positive CC keeps fewer branches',
-  /if \(!isPositiveCC\) \{/.test(displayShader) &&
-  (displayShader.match(/sampleCcBranch\(/g) || []).length >= 5 &&
-  /float mainThreshold = isPositiveCC \? 0\.90 : 0\.78;/.test(displayShader),
-  'expected 4 branches on -CC vs 0-1 sparse branch on +CC');
+check('reworked CC renders organic cubic Bezier spine with fractal lightningTex branches on -CC and sparse main leader on +CC',
+  /vec2 evalCcCubic\(/.test(displayShader) &&
+  !/sampleCcBranch\(/.test(displayShader) &&
+  /const float mainThreshold = 0\.91;/.test(displayShader) &&
+  /const float branchThreshold = 0\.26;/.test(displayShader) &&
+  /float edgeFade = smoothstep\(0\.0, 0\.03, t\) \* smoothstep\(1\.0, 0\.97, t\);/.test(displayShader),
+  'expected reworked organic cubic Bezier + lightningTex fractal branching without artificial stick branches');
 
 check('app.js reads both rows of lightningDataTextures for CC midpoint cc*.mp3 thunder',
   /new Float32Array\(numLightningSlots \* 2 \* 4\)/.test(appSource) &&
   /gl\.readPixels\(0, 0, numLightningSlots, 2, gl\.RGBA, gl\.FLOAT, lightningDataValues\);/.test(appSource) &&
-  /metaType >= 1\.5/.test(appSource) &&
+  /else if \(metaType >= 1\.5\)/.test(appSource) &&
   /metaType >= 2\.5/.test(appSource),
   'CC strikes should trigger midpoint cloud-to-cloud thunder with +CC 50% stronger than -CC');
 
 /* --------------------------------------------- 2. targeting & rod isolation */
 
 function selectCloudToCloudTarget(originX, originY, iter, densityFn, resX = 2000, resY = 300) {
-  const aspect = resX / Math.max(resY, 1.0);
-  const nearWorld = mapRange(random2d(originX * 37.9, iter * 1.3), 0.0, 1.0, 0.30, 0.68);
-  const farWorld = mapRange(random2d(originY * 43.1, iter * 2.7), 0.0, 1.0, 0.72, 1.35);
-  const dNear = clamp(nearWorld / Math.max(aspect, 1.0), 0.04, 0.11);
-  const dFar = clamp(farWorld / Math.max(aspect, 1.0), dNear + 0.04, 0.22);
-  const dMid = 0.5 * (dNear + dFar);
+  const aspect = Math.max(resX / Math.max(resY, 1.0), 1.0);
+  const w1 = mapRange(random2d(originX * 37.9, iter * 1.3), 0.0, 1.0, 0.28, 0.58);
+  const w2 = mapRange(random2d(originY * 53.3, iter * 1.9), 0.0, 1.0, 0.62, 0.92);
+  const w3 = mapRange(random2d(originX * 41.1, iter * 2.3), 0.0, 1.0, 0.96, 1.32);
+  const w4 = mapRange(random2d(originY * 43.1, iter * 2.7), 0.0, 1.0, 1.36, 1.76);
+
+  const d1 = clamp(w1 / aspect, 0.04, 0.09);
+  const d2 = clamp(w2 / aspect, d1 + 0.03, 0.14);
+  const d3 = clamp(w3 / aspect, d2 + 0.03, 0.20);
+  const d4 = clamp(w4 / aspect, d3 + 0.04, 0.27);
 
   const yList = [
-    clamp(originY, 0.08, 0.78),
-    clamp(originY + 0.08, 0.12, 0.82),
-    clamp(originY - 0.08, 0.08, 0.72)
+    clamp(originY, 0.08, 0.80),
+    clamp(originY + 0.14, 0.14, 0.84),
+    clamp(originY - 0.14, 0.08, 0.72)
   ];
-  const dxList = [dNear, -dNear, dMid, -dMid, dFar, -dFar];
+  const dxList = [d1, -d1, d2, -d2, d3, -d3, d4, -d4];
 
   let bestX = originX;
   let bestY = yList[0];
   let bestScore = -1e9;
   let found = false;
 
-  for (let k = 0; k < 6; k++) {
+  for (let k = 0; k < 8; k++) {
     const dx = dxList[k];
     const cx = fract(originX + dx);
     const mx = fract(originX + 0.5 * dx);
     for (let yi = 0; yi < 3; yi++) {
       const cy = yList[yi];
       const targetDensity = Math.max(densityFn(cx, cy), 0.0);
-      if (targetDensity < 0.12) continue;
+      if (targetDensity < 0.14) continue;
       const midDensity = Math.max(densityFn(mx, 0.5 * (originY + cy)), 0.0);
+      const separationBonus = Math.max(targetDensity - midDensity, 0.0) * 0.55;
+      const spanBonus = 0.18 * (Math.abs(dx) / Math.max(d4, 1e-4));
       const tieBias = 0.05 * random2d(originX * 29.3 + k * 7.1, iter * 3.1 + yi);
-      const score = targetDensity - 0.45 * midDensity + tieBias;
+      const score = targetDensity - 0.45 * midDensity + separationBonus + spanBonus + tieBias;
       if (!found || score > bestScore) {
         bestScore = score;
         bestX = cx;
@@ -246,17 +254,17 @@ function flickersCC(x, y, intensity) {
 /* ------------------------------------------- 4. Bezier curve endpoint check */
 
 {
-  const evalCc = (t, p0, pc, p1) => {
+  const evalCcCubic = (t, p0, p1, p2, p3) => {
     const om = 1 - t;
-    return [om * om * p0[0] + 2 * om * t * pc[0] + t * t * p1[0],
-            om * om * p0[1] + 2 * om * t * pc[1] + t * t * p1[1]];
+    return [om * om * om * p0[0] + 3 * om * om * t * p1[0] + 3 * om * t * t * p2[0] + t * t * t * p3[0],
+            om * om * om * p0[1] + 3 * om * om * t * p1[1] + 3 * om * t * t * p2[1] + t * t * t * p3[1]];
   };
-  const p0 = [-0.8, 0.32], pc = [-0.4, 0.44], p1 = [0.0, 0.25];
-  const s = evalCc(0, p0, pc, p1);
-  const e = evalCc(1, p0, pc, p1);
-  check('cloud-to-cloud quadratic spine starts at origin cloud and lands at target cloud',
+  const p0 = [-0.8, 0.32], p1 = [-0.55, 0.44], p2 = [-0.25, 0.21], p3 = [0.0, 0.28];
+  const s = evalCcCubic(0, p0, p1, p2, p3);
+  const e = evalCcCubic(1, p0, p1, p2, p3);
+  check('cloud-to-cloud cubic S-curve starts at origin cloud and lands at target cloud',
     Math.abs(s[0] - p0[0]) < 1e-6 && Math.abs(s[1] - p0[1]) < 1e-6 &&
-    Math.abs(e[0] - p1[0]) < 1e-6 && Math.abs(e[1] - p1[1]) < 1e-6);
+    Math.abs(e[0] - p3[0]) < 1e-6 && Math.abs(e[1] - p3[1]) < 1e-6);
 }
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
