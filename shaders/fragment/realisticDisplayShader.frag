@@ -642,20 +642,8 @@ vec3 spectral_zucconi(float w)
 }
 
 
-vec4 getAirColor(vec2 fragCoordIn)
+vec4 computeAirColor(vec2 bndFragCoord)
 {
-  vec2 bndFragCoord = vec2(fragCoordIn.x, clamp(fragCoordIn.y, 0., resolution.y)); // bound y within range
-  base = bilerpWallVis(baseTex, wallTex, bndFragCoord);
-  wall = texture(wallTex, bndFragCoord * texelSize);                               // texCoord
-  water = bilerpWallVis(waterTex, wallTex, bndFragCoord);
-  lightIntensity = texture(lightTex, bndFragCoord * texelSize)[0] / standardSunBrightness;
-
-  ivec4 wallX0Ym = texture(wallTex, texCoordX0Ym);
-
-  float realTemp = potentialToRealT(base[TEMPERATURE]);
-
-  bool nightTime = abs(sunAngle) > 85.0 * deg2rad; // false = day time
-
   shadowLight = minShadowLight;
 
   // fragmentColor = vec4(vec3(light),1); return; // View light texture for debugging
@@ -765,8 +753,22 @@ vec4 getAirColor(vec2 fragCoordIn)
     bool isExternalPositive = !isFlash && abs(lightningMeta.y - 1.0) < 0.25;
     bool isCloudToCloud = !isFlash && lightningMeta.y >= 1.5;
     bool isPositiveCC = isCloudToCloud && lightningMeta.y >= 2.5;
+    bool isSuperbolt = !isFlash && !isCloudToCloud && lightningMeta.w >= 0.5;
+    const float superboltBrightnessMult = 12.0;
+    const float superboltDurationShorten = 0.1;
+    const vec3 positiveLightningCol = vec3(1.0, 0.90, 0.82);
     float repeatPeriod = map_range(random2d(lightningPos), 0., 1., 1.5, 3.0);
-    float tailT = max(lightningTime - repeatPeriod * lightningFlickers(lightningData), 0.0);
+    if (isSuperbolt && lightningTime >= repeatPeriod * lightningFlickers(lightningData) + (2.924 - superboltDurationShorten))
+      continue;
+    float effectiveLightningTime = isSuperbolt && lightningTime > 0.0
+      ? lightningTime + superboltDurationShorten * smoothstep(0.0, 0.35, lightningTime)
+      : lightningTime;
+    if (isSuperbolt) {
+      currentLightningIntensity = lightningIntensityOverTime(effectiveLightningTime, lightningPos, lightningData[INTENSITY]);
+      if (currentLightningIntensity <= 0.0)
+        continue;
+    }
+    float tailT = max(effectiveLightningTime - repeatPeriod * lightningFlickers(lightningData), 0.0);
     float extTailFade = pow(smoothstep(2.924, 1.15, tailT), 2.4);
     float ccTailFade = pow(smoothstep(2.924, 1.25, tailT), 2.2);
     float ccIntensityGain = (isPositiveCC ? 1.5 : 1.0) * (1.8 / max(pow(lightningData[INTENSITY], 2.0), 0.1));
@@ -774,7 +776,10 @@ vec4 getAirColor(vec2 fragCoordIn)
     float extIntensityGain = pow(extBaseIntensity / max(lightningData[INTENSITY], 1.0), 2.0);
     float extCurve = currentLightningIntensity * extIntensityGain * extTailFade;
     if (isExternalPositive) {
-      lightningBoltLight += displayExternalLightning(lightningPos, lightningMeta.x, lightningTime, extCurve);
+      vec3 prevBoltLight = lightningBoltLight;
+      lightningBoltLight += displayExternalLightning(lightningPos, lightningMeta.x, effectiveLightningTime, extCurve);
+      if (isSuperbolt)
+        lightningBoltLight = prevBoltLight + (lightningBoltLight - prevBoltLight) * superboltBrightnessMult;
     } else if (isCloudToCloud) {
       lightningBoltLight += displayCloudToCloudLightning(vec2(lightningPos.x, lightningMeta.z),
                                                          vec2(lightningMeta.x, lightningPos.y),
@@ -784,8 +789,13 @@ vec4 getAirColor(vec2 fragCoordIn)
     } else if (isPositiveIC) {
       lightningBoltLight += displayPositiveFlash(lightningPos, lightningTime, currentLightningIntensity);
     } else {
+      vec3 prevBoltLight = lightningBoltLight;
       lightningBoltLight += isFlash ? displayFlash(lightningPos, lightningTime, currentLightningIntensity)
                                     : displayLightning(lightningPos, lightningTime, currentLightningIntensity);
+      if (isSuperbolt) {
+        vec3 boltDelta = lightningBoltLight - prevBoltLight;
+        lightningBoltLight = prevBoltLight + boltDelta * superboltBrightnessMult * (positiveLightningCol / vec3(0.70, 0.57, 1.0));
+      }
     }
 
     // The light a strike throws on the clouds around it.
@@ -819,18 +829,32 @@ vec4 getAirColor(vec2 fragCoordIn)
     if (isExternalPositive)
       lightningOnLight *= extIntensityGain * extTailFade;
     lightningOnLight *= currentLightningIntensity;
+    if (isSuperbolt)
+      lightningOnLight *= superboltBrightnessMult;
     onLight += vec3(lightningOnLight);
     if (isExternalPositive) {
       onLight += vec3(lightningOnLight);
       float originDx = mod(lightningMeta.x - texCoord.x + 0.5, 1.0) - 0.5;
       vec2 originDist = vec2(originDx * aspectRatios[0], texCoord.y - lightningPos.y);
       onLight += vec3(lightningOnLightBrightness * 2.0 / (pow(length(originDist) * 0.7, 2.) + 0.03) * extCurve);
+      if (isSuperbolt)
+        onLight += vec3(lightningOnLightBrightness * 2.0 / (pow(length(originDist) * 0.7, 2.) + 0.03) * extCurve * (superboltBrightnessMult - 1.0));
     }
   }
 
   emittedLight += lightningBoltLight / (1. + cloudDensity * 100.0);
 
   return vec4(color, opacity);
+}
+
+vec4 getAirColor(vec2 fragCoordIn)
+{
+  vec2 bndFragCoord = vec2(fragCoordIn.x, clamp(fragCoordIn.y, 0., resolution.y)); // bound y within range
+  base = bilerpWallVis(baseTex, wallTex, bndFragCoord);
+  wall = texture(wallTex, bndFragCoord * texelSize);                               // texCoord
+  water = bilerpWallVis(waterTex, wallTex, bndFragCoord);
+  lightIntensity = texture(lightTex, bndFragCoord * texelSize)[0] / standardSunBrightness;
+  return computeAirColor(bndFragCoord);
 }
 
 float rand(float n) { return fract(sin(n) * 43758.5453123); }
@@ -842,25 +866,20 @@ void main()
   emittedLight = vec3(0.0);
   onLight = vec3(0.0);
 
-  vec2 bndFragCoord = vec2(fragCoord.x, clamp(fragCoord.y, 0., resolution.y)); // bound y within range
-  base = bilerpWallVis(baseTex, wallTex, bndFragCoord);
-  wall = texture(wallTex, bndFragCoord * texelSize);                           // texCoord
-  water = bilerpWallVis(waterTex, wallTex, bndFragCoord);
-  lightIntensity = texture(lightTex, bndFragCoord * texelSize)[0] / standardSunBrightness;
-
-  ivec4 wallX0Ym = texture(wallTex, texCoordX0Ym);
-
-  float realTemp = potentialToRealT(base[TEMPERATURE]);
-
-  bool nightTime = abs(sunAngle) > 85.0 * deg2rad; // false = day time
-
-  shadowLight = minShadowLight;
-
-  // fragmentColor = vec4(vec3(light),1); return; // View light texture for debugging
-
-  float cloudwater = water[CLOUD];
-
-  if (texCoord.y < 0.) {                                     // < texelSize.y below simulation area
+  if (texCoord.y > 1.0) { // above simulation area
+    if (rodCount == 0) {
+      fragmentColor = vec4(0.0);
+      drawCursor(cursor, view);
+      return;
+    }
+    opacity = 0.0;
+    lightIntensity = 0.0;
+    shadowLight = minShadowLight;
+  } else if (texCoord.y < 0.) { // < texelSize.y below simulation area
+    vec2 bndFragCoord = vec2(fragCoord.x, clamp(fragCoord.y, 0., resolution.y)); // bound y within range
+    wall = texture(wallTex, bndFragCoord * texelSize);                           // texCoord
+    water = bilerpWallVis(waterTex, wallTex, bndFragCoord);
+    shadowLight = minShadowLight;
 
     float depth = float(-wall[VERT_DISTANCE]) - fragCoord.y; // -1.0?
 
@@ -869,16 +888,20 @@ void main()
     lightIntensity = texture(lightTex, vec2(texCoord.x, texelSize.y))[0] / standardSunBrightness; // sample lowest part of sim area
     lightIntensity *= pow(0.5, -fragCoord.y);                                                     // 0.5 should be same as in lightingshader deeper is darker
 
-  } else if (texCoord.y > 1.0) {                                                                  // above simulation area
-    // color = vec3(0); // no need to set
-    opacity = 0.0;                  // completely transparent
-  } else if (wall[DISTANCE] == 0) { // is wall
-                                    // color = getWallColor(texCoord);
+  } else {
+    vec2 bndFragCoord = vec2(fragCoord.x, clamp(fragCoord.y, 0., resolution.y)); // bound y within range
+    base = bilerpWallVis(baseTex, wallTex, bndFragCoord);
+    wall = texture(wallTex, bndFragCoord * texelSize);                           // texCoord
+    water = bilerpWallVis(waterTex, wallTex, bndFragCoord);
+    lightIntensity = texture(lightTex, bndFragCoord * texelSize)[0] / standardSunBrightness;
 
-    ivec4 wallXmY0 = texture(wallTex, texCoordXmY0);
-    ivec4 wallXpY0 = texture(wallTex, texCoordXpY0);
+    shadowLight = minShadowLight;
 
-    switch (wall[TYPE]) {
+    if (wall[DISTANCE] == 0) { // is wall
+      ivec4 wallXmY0 = texture(wallTex, texCoordXmY0);
+      ivec4 wallXpY0 = texture(wallTex, texCoordXpY0);
+
+      switch (wall[TYPE]) {
       // case WALLTYPE_INERT:
       //   color = vec3(0, 0, 0);
       //   break;
@@ -955,6 +978,7 @@ void main()
 
       float localX = fract(fragCoord.x);
       float localY = fract(fragCoord.y);
+      ivec4 wallX0Ym = texture(wallTex, texCoordX0Ym);
 
       if (wallXmY0[DISTANCE] == 0 && wallXmY0[TYPE] != WALLTYPE_WATER && (fragCoord.y < 1. || wallX0Ym[TYPE] != WALLTYPE_WATER)) { // wall to the left and below
         if (localX + localY < 1.0) {
@@ -977,7 +1001,7 @@ void main()
     }
   } else { // air
 
-    vec4 airColor = getAirColor(fragCoord);
+    vec4 airColor = computeAirColor(bndFragCoord);
 
     opacity = airColor.a;
     color = airColor.rgb;
@@ -993,6 +1017,7 @@ void main()
 
     float waveLength = map_range(angle, 40.0, 42.0, 400., 700.);
 
+    float realTemp = potentialToRealT(base[TEMPERATURE]);
     float rainSnowFactor = map_rangeC(KtoC(realTemp), 0.0, 5.0, 0.0, 1.0); // only rain if above freezing
 
     vec3 rainbowCol = spectral_zucconi(waveLength) * min(pow(lightIntensity, 2.0) * 1.9, 1.0) * min(water[PRECIPITATION] * 3.0, 1.0) * rainSnowFactor * 0.7;
@@ -1004,7 +1029,8 @@ void main()
     if (wall[VERT_DISTANCE] >= 0 && wall[VERT_DISTANCE] < 10) { // near surface
       float localX = fract(fragCoord.x);
       float localY = fract(fragCoord.y);
-      // ivec4 wallX0Ym = texture(wallTex, texCoordX0Ym);
+      ivec4 wallX0Ym = texture(wallTex, texCoordX0Ym);
+      bool nightTime = abs(sunAngle) > 85.0 * deg2rad; // false = day time
 
 #define texAspect 2560. / 4096. // height / width of tree texture
 #define maxTreeHeight 40.       // height in meters when vegetation max = 127
@@ -1147,6 +1173,7 @@ void main()
     // color.b -= arrow;
     // opacity += arrow;
     // lightIntensity += arrow;
+    }
   }
 
 
@@ -1180,7 +1207,18 @@ void main()
         continue;
       if (iterNum < strikeData[START_ITERNUM] || iterNum >= strikeAnimEnd(strikeData))
         continue; // this strike is not running
-      strikeGlow = max(strikeGlow, lightningIntensityOverTime(calcLightningTime(strikeData[START_ITERNUM]), strikeData.xy, strikeData[INTENSITY]));
+      float rodStrikeT = calcLightningTime(strikeData[START_ITERNUM]);
+      float slotGlow = lightningIntensityOverTime(calcLightningTime(strikeData[START_ITERNUM]), strikeData.xy, strikeData[INTENSITY]);
+      vec4 strikeMeta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
+      if (strikeData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY && strikeMeta.y < 1.5 && strikeMeta.w >= 0.5) {
+        float rodRepeatPeriod = map_range(random2d(strikeData.xy), 0., 1., 1.5, 3.0);
+        if (rodStrikeT >= rodRepeatPeriod * lightningFlickers(strikeData) + 2.824)
+          slotGlow = 0.0;
+        else
+          slotGlow = lightningIntensityOverTime(rodStrikeT > 0.0 ? rodStrikeT + 0.1 * smoothstep(0.0, 0.35, rodStrikeT) : 0.0,
+                                                strikeData.xy, strikeData[INTENSITY]) * 12.0;
+      }
+      strikeGlow = max(strikeGlow, slotGlow);
     }
 
     float alongRod = clamp(dyCells / max(rodHeight, 1.0), 0.0, 1.0);

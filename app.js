@@ -588,6 +588,7 @@ const guiControls_default = {
   volumetricCloudLighting : true,
   temporalAAEnabled : false,
   superSharpDetail : false,
+  fullscreenMode : false,
   showWeatherStations : true,
   shareWeatherDataToLan : false,
   sound : true,
@@ -609,11 +610,11 @@ function setBrushCursor(program, cursorType, cursorX, cursorY)
 {
   cursorX = guiControls.wrapHorizontally ? mod(cursorX, 1.0) : clamp(cursorX, 0.0, 1.0);
   const cursorRadius = cursorType >= 4.0 ? LIGHTNING_ROD_ATTRACT_RADIUS : guiControls.brushSize * 0.5;
-  gl.uniform4f(gl.getUniformLocation(program, 'cursor'), cursorX, cursorY, cursorRadius, cursorType);
-  gl.uniform1f(gl.getUniformLocation(program, 'wholeWidthBrushWidth'), guiControls.wholeWidthBrushWidth * 0.01);
-  gl.uniform1f(gl.getUniformLocation(program, 'windPushWidth'), guiControls.wholeWidthBrushWidth * 0.01);
-  gl.uniform1f(gl.getUniformLocation(program, 'windPushDepth'), guiControls.brushSize / sim_res_y);
-  gl.uniform1i(gl.getUniformLocation(program, 'cursorWrapHorizontally'), guiControls.wrapHorizontally);
+  gl.uniform4f(getUniformLoc(program, 'cursor'), cursorX, cursorY, cursorRadius, cursorType);
+  gl.uniform1f(getUniformLoc(program, 'wholeWidthBrushWidth'), guiControls.wholeWidthBrushWidth * 0.01);
+  gl.uniform1f(getUniformLoc(program, 'windPushWidth'), guiControls.wholeWidthBrushWidth * 0.01);
+  gl.uniform1f(getUniformLoc(program, 'windPushDepth'), guiControls.brushSize / sim_res_y);
+  gl.uniform1i(getUniformLoc(program, 'cursorWrapHorizontally'), guiControls.wrapHorizontally);
 }
 
 var displayVectorField = false;
@@ -734,8 +735,24 @@ let bloomFBOs = [];
 
 let ambientLightFBOs = [];
 let emittedLightFBO;
+let ambientLightDirty = true;
 let hdrRenderScale = 0.75;
 let bloomRenderScale = 0.5;
+
+const uniformLocationCache = new WeakMap();
+function getUniformLoc(program, name)
+{
+  let programMap = uniformLocationCache.get(program);
+  if (!programMap) {
+    programMap = new Map();
+    uniformLocationCache.set(program, programMap);
+  }
+  if (programMap.has(name))
+    return programMap.get(name);
+  const loc = gl.getUniformLocation(program, name);
+  programMap.set(name, loc);
+  return loc;
+}
 
 
 function clamp(num, min, max) { return Math.min(Math.max(num, min), max); }
@@ -1192,6 +1209,7 @@ function createTemporalHistoryTexture()
 function createAmbientLightFBOs()
 {
   emittedLightFBO = new FBO(sim_res_x, sim_res_y, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, gl.LINEAR);
+  ambientLightDirty = true;
 
   let res = new Vec2D(sim_res_x, sim_res_y);
 
@@ -2060,6 +2078,7 @@ let weatherStations = []; // array holding all weather stations
 // shaders/common.glsl. Rods belong to the running simulation, so they are
 // cleared whenever a new simulation (or a save file) is loaded.
 let lightningRods = [];
+let lightningRodsVersion = 0;
 let lightningRodCaptures = 0;
 const MAX_LIGHTNING_RODS = 12;
 const LIGHTNING_ROD_ATTRACT_RADIUS = 0.11;
@@ -2341,6 +2360,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   // A rod belongs to the terrain it was planted on, so a new simulation (or a
   // loaded save file) starts without any.
   lightningRods = [];
+  lightningRodsVersion++;
   lightningRodCaptures = 0;
   updateLightningRodStatus();
 
@@ -2370,6 +2390,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   let currentPerformanceReadoutControllers;
   let currentPerformanceScoreIcon;
   let displayModeController;
+  let fullscreenModeController;
   let previousDisplayMode = guiControls_default.displayMode;
   let displayModeOverlay;
   let displayModeToast;
@@ -2595,12 +2616,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     diagnosticLegend.classList.toggle('diagnostic-legend-cape', capeMode);
     diagnosticLegend.classList.toggle('diagnostic-legend-reflectivity', reflectivityMode);
 
+    if (!capeMode || mouseXinSim == null || mouseYinSim == null || SETUP_MODE) {
+      capeHoverTooltip.hidden = true;
+      return;
+    }
+
     const canvasBounds = canvas.getBoundingClientRect();
-    const displayWidth = getCanvasDisplayWidth();
-    const displayHeight = getCanvasDisplayHeight();
+    const displayWidth = Math.max(1, canvasBounds.width);
+    const displayHeight = Math.max(1, canvasBounds.height);
     const pointerOverCanvas = canvas.matches(':hover') && mouseX >= 0 && mouseX <= displayWidth &&
       mouseY >= 0 && mouseY <= displayHeight;
-    if (!capeMode || !pointerOverCanvas || mouseXinSim == null || mouseYinSim == null || SETUP_MODE) {
+    if (!pointerOverCanvas) {
       capeHoverTooltip.hidden = true;
       return;
     }
@@ -4407,7 +4433,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       let gearPos = clamp(-(heightAboveGround - gearTouchAlt), 0.0, 5.0) + this.#gearExtPos; // 0 is all the way down, positive is up into the airplane
 
       gl.useProgram(skyBackgroundDisplayProgram);
-      gl.uniform2f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'planeDirectionAndGearPos'), this.directionIsLeft, gearPos);
+      gl.uniform2f(getUniformLoc(skyBackgroundDisplayProgram, 'planeDirectionAndGearPos'), this.directionIsLeft, gearPos);
 
       if (wallTextureValues[0] != 2 && (heightAboveObstacles < 6.0 || radarAltL < 6.0 || (heightAboveObstacles < 10.0 && Math.abs(this.phys.angle) > 0.25))) { // crash into the surface
         guiControls.IterPerFrame = 1;
@@ -4589,9 +4615,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       // console.log(normXpos, normYpos);
       gl.useProgram(skyBackgroundDisplayProgram);
-      gl.uniform3f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'planePos'), normXpos, normYpos, this.directionIsLeft ? this.phys.angle : -this.phys.angle);
+      gl.uniform3f(getUniformLoc(skyBackgroundDisplayProgram, 'planePos'), normXpos, normYpos, this.directionIsLeft ? this.phys.angle : -this.phys.angle);
       gl.useProgram(advectionProgram);
-      gl.uniform4f(gl.getUniformLocation(advectionProgram, 'airplaneValues'), normXpos, normYpos, this.throttle, this.#framesSinceCrash > 0 ? 1.0 : (zPressed ? -1.0 : 0.0));
+      gl.uniform4f(getUniformLoc(advectionProgram, 'airplaneValues'), normXpos, normYpos, this.throttle, this.#framesSinceCrash > 0 ? 1.0 : (zPressed ? -1.0 : 0.0));
       gl.useProgram(skyBackgroundDisplayProgram);
 
       if (this.#camFollow) {
@@ -4821,6 +4847,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       guiControls.performancePreset = 'Balanced';
     for (const setting of ['filmicToneMapping', 'fxaaEnabled', 'volumetricCloudLighting', 'temporalAAEnabled', 'superSharpDetail'])
       guiControls[setting] = guiControls[setting] === true;
+    guiControls.fullscreenMode = isDocumentFullscreen();
     if (!['Unlocked', '30', '60', '90', '120', '144', '165', '240'].includes(guiControls.autoFpsTarget))
       guiControls.autoFpsTarget = '120';
 
@@ -4845,6 +4872,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     guiControls.resetSettings = function() {
       if (confirm('Are you sure you want to reset all settings to default?')) {
+        if (isDocumentFullscreen())
+          void setFullscreenMode(false);
         datGui.destroy();                                 // remove datGui completely
         setupDatGui(JSON.stringify(guiControls_default)); // generate new one with new settings
         setGuiUniforms();
@@ -4964,6 +4993,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
     UI_folder.add({ clearLightningRods : function() {
                       lightningRods = [];
+                      lightningRodsVersion++;
                       lightningRodCaptures = 0;
                       updateLightningRodStatus();
                     } }, 'clearLightningRods')
@@ -5297,6 +5327,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       .name('Wrap Horizontally');
 
     display_folder.add(guiControls, 'SmoothCam').onChange(function() { cam.smooth = guiControls.SmoothCam; }).name('Smooth Camera');
+
+    fullscreenModeController = display_folder.add(guiControls, 'fullscreenMode')
+      .name('Fullscreen Mode')
+      .listen()
+      .onChange(function(enabled) {
+        void setFullscreenMode(enabled);
+      });
 
     display_folder.add(guiControls, 'showGraph').onChange(hideOrShowGraph).name('Show Sounding Graph').listen();
     display_folder.add(guiControls, 'realDewPoint').name('Show Real Dew Point');
@@ -6059,6 +6096,42 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     createTemporalHistoryTexture();
   }
 
+  function isDocumentFullscreen()
+  {
+    return Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+  }
+
+  function syncFullscreenControl()
+  {
+    const active = isDocumentFullscreen();
+    if (guiControls)
+      guiControls.fullscreenMode = active;
+    if (fullscreenModeController)
+      fullscreenModeController.updateDisplay();
+    scheduleCanvasResize();
+  }
+
+  async function setFullscreenMode(enabled)
+  {
+    const target = document.documentElement;
+    try {
+      if (enabled) {
+        if (!isDocumentFullscreen()) {
+          const requestFullscreen = target.requestFullscreen || target.webkitRequestFullscreen;
+          if (requestFullscreen)
+            await requestFullscreen.call(target);
+        }
+      } else if (isDocumentFullscreen()) {
+        const exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
+        if (exitFullscreen)
+          await exitFullscreen.call(document);
+      }
+    } catch (err) {
+      console.warn('Fullscreen request failed:', err);
+    }
+    syncFullscreenControl();
+  }
+
   function scheduleCanvasResize()
   {
     syncCanvasAspect();
@@ -6072,6 +6145,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   window.addEventListener('resize', scheduleCanvasResize);
   window.visualViewport?.addEventListener('resize', scheduleCanvasResize);
+  document.addEventListener('fullscreenchange', syncFullscreenControl);
+  document.addEventListener('webkitfullscreenchange', syncFullscreenControl);
   if (typeof ResizeObserver !== 'undefined')
     new ResizeObserver(scheduleCanvasResize).observe(canvas);
 
@@ -6279,6 +6354,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     if (lightningRods.length >= MAX_LIGHTNING_RODS)
       lightningRods.shift(); // the oldest mast makes way for the new one
     lightningRods.push({ x : rodX, y : (surfaceCell + 1) / sim_res_y });
+    lightningRodsVersion++;
     updateLightningRodStatus();
     return true;
   }
@@ -6307,6 +6383,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     if (bestIdx < 0)
       return false;
     lightningRods.splice(bestIdx, 1);
+    lightningRodsVersion++;
     updateLightningRodStatus();
     return true;
   }
@@ -6658,8 +6735,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.30'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.30')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.31'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.31')
   ]);
 
   const [
@@ -7225,9 +7302,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   precipitationFeedbackFrameBuff = gl.createFramebuffer();
   const lightningDataFrameBuffs = [gl.createFramebuffer(), gl.createFramebuffer()];
 
+  let lastSuperboltCheckIteration = 0;
+  let superboltCheckFrame = 0;
+  let lastSuperboltShakeIteration = 0;
+  let superboltShakeStartTimeMs = -1;
+  let superboltShakePhaseSeed = 0;
+
   // Set up Textures
   async function setupTextures()
   {
+    ambientLightDirty = true;
+    superboltShakeStartTimeMs = -1;
     gl.bindTexture(gl.TEXTURE_2D, baseTexture_0);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, initialBaseTex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -7606,7 +7691,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.30');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.31');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -7962,6 +8047,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   // every frame because the Lightning Rod tool can add one at any time.
   const rodPositionData = new Float32Array(MAX_LIGHTNING_RODS * 2);
   const rodUniformLocations = new Map();
+  const rodUploadedVersion = new WeakMap();
   const rodThickness = clamp(sim_res_x * 0.0022, 2.2, 24.0); // half width, in cells
   const rodHeight = clamp(720.0 / cellHeight, 8.0, 70.0);    // mast height, in cells
   const rodAttractRadius = LIGHTNING_ROD_ATTRACT_RADIUS;     // reach, normalized sim width
@@ -7984,6 +8070,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   function uploadLightningRodUniforms(program)
   {
+    if (rodUploadedVersion.get(program) === lightningRodsVersion)
+      return;
     const locations = lightningRodUniforms(program);
     gl.useProgram(program); // uniform locations are only valid for the active program
     const count = Math.min(lightningRods.length, MAX_LIGHTNING_RODS);
@@ -8002,6 +8090,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.uniform1f(locations.height, rodHeight);
     if (locations.attractRadius != null)
       gl.uniform1f(locations.attractRadius, rodAttractRadius);
+    rodUploadedVersion.set(program, lightningRodsVersion);
   }
 
   uploadLightningRodUniforms(lightningLocationProgram);
@@ -8044,8 +8133,47 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   let lightningSoundFrame = 0;
   let lastRodCaptureCheckIteration = 0;
   let rodCaptureFrame = 0;
+  const SUPERBOLT_SHAKE_HZ = 40.0;
+  const SUPERBOLT_SHAKE_DECAY_PER_SEC = 7.5;
+  const SUPERBOLT_SHAKE_DURATION_MS = 650.0;
+  const SUPERBOLT_SHAKE_PEAK_AMP = 0.024;
+  const precipSampleValues = new Float32Array(4);
   const countedSlotStartIter = new Float64Array(numLightningSlots);
   const lightningDataValues = new Float32Array(numLightningSlots * 2 * 4);
+
+  function hashShakeStep(seed, step)
+  {
+    const s = Math.sin(seed * 12.9898 + step * 78.233) * 43758.5453123;
+    return s - Math.floor(s);
+  }
+
+  function triggerSuperboltCameraShake()
+  {
+    superboltShakeStartTimeMs = performance.now();
+    superboltShakePhaseSeed = Math.random() * 1000.0;
+  }
+
+  function getSuperboltShakeOffset(nowMs)
+  {
+    if (superboltShakeStartTimeMs < 0 || SETUP_MODE)
+      return { x : 0, y : 0 };
+    const elapsedSec = (nowMs - superboltShakeStartTimeMs) * 0.001;
+    if (elapsedSec < 0 || elapsedSec * 1000.0 >= SUPERBOLT_SHAKE_DURATION_MS) {
+      superboltShakeStartTimeMs = -1;
+      return { x : 0, y : 0 };
+    }
+    const decay = Math.exp(-SUPERBOLT_SHAKE_DECAY_PER_SEC * elapsedSec);
+    const phaseCycles = elapsedSec * SUPERBOLT_SHAKE_HZ;
+    const wave = Math.sin(2.0 * Math.PI * phaseCycles);
+    const cycleIndex = Math.floor(phaseCycles);
+    const angle = hashShakeStep(superboltShakePhaseSeed, cycleIndex) * Math.PI * 2.0;
+    const amp = SUPERBOLT_SHAKE_PEAK_AMP * decay * wave;
+    const denom = Math.max(canvas_aspect, 0.1) * Math.max(cam.curZoom, 0.5);
+    return {
+      x : (amp * Math.cos(angle)) / denom,
+      y : (amp * Math.sin(angle)) / denom
+    };
+  }
 
   // preload uniform locations for tiny performance gain
   var uniformLocation_boundaryProgram_iterNum = gl.getUniformLocation(boundaryProgram, 'iterNum');
@@ -8115,9 +8243,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.disable(gl.BLEND);
       gl.viewport(0, 0, sim_res_x, sim_res_y);
       gl.useProgram(setupProgram);
-      gl.uniform1f(gl.getUniformLocation(setupProgram, 'seed'), mouseXinSim);
+      gl.uniform1f(getUniformLoc(setupProgram, 'seed'), mouseXinSim);
       const displayHeight = getCanvasDisplayHeight();
-      gl.uniform1f(gl.getUniformLocation(setupProgram, 'heightMult'), ((displayHeight - mouseY) / displayHeight) * 2.0);
+      gl.uniform1f(getUniformLoc(setupProgram, 'heightMult'), ((displayHeight - mouseY) / displayHeight) * 2.0);
       // Render to both framebuffers
       gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_0);
       gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2 ]);
@@ -8187,21 +8315,21 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         let moveX = mouseXinSim - prevMouseXinSim;
         let moveY = mouseYinSim - prevMouseYinSim;
 
-        gl.uniform4f(gl.getUniformLocation(advectionProgram, 'userInputValues'), posXinSim, mouseYinSim, intensity, guiControls.brushSize * 0.5);
-        gl.uniform1i(gl.getUniformLocation(advectionProgram, 'wholeWidthBrush'), guiControls.wholeWidth);
-        gl.uniform1f(gl.getUniformLocation(advectionProgram, 'wholeWidthBrushWidth'), guiControls.wholeWidthBrushWidth * 0.01);
-        gl.uniform1f(gl.getUniformLocation(advectionProgram, 'windPushVelocity'), msToRawVelocity(guiControls.windPushStrengthMph * 0.44704));
-        gl.uniform1f(gl.getUniformLocation(advectionProgram, 'windPushDirection'), guiControls.windPushDirection == 'left' ? -1.0 : 1.0);
-        gl.uniform1i(gl.getUniformLocation(advectionProgram, 'windPushSetTemperature'), guiControls.windPushSetTemperature);
-        gl.uniform1f(gl.getUniformLocation(advectionProgram, 'windPushAirTemperatureC'), guiControls.windPushAirTemperatureC);
-        gl.uniform1i(gl.getUniformLocation(advectionProgram, 'windPushSetHumidity'), guiControls.windPushSetHumidity);
-        gl.uniform1f(gl.getUniformLocation(advectionProgram, 'windPushRelativeHumidity'), guiControls.windPushRelativeHumidity * 0.01);
-        gl.uniform1f(gl.getUniformLocation(advectionProgram, 'windPushWidth'), guiControls.wholeWidthBrushWidth * 0.01);
-        gl.uniform1f(gl.getUniformLocation(advectionProgram, 'windPushDepth'), guiControls.brushSize / sim_res_y);
-        gl.uniform2f(gl.getUniformLocation(advectionProgram, 'userInputMove'), moveX, moveY);
-        gl.uniform1i(gl.getUniformLocation(advectionProgram, 'wrapHorizontally'), guiControls.wrapHorizontally);
+        gl.uniform4f(getUniformLoc(advectionProgram, 'userInputValues'), posXinSim, mouseYinSim, intensity, guiControls.brushSize * 0.5);
+        gl.uniform1i(getUniformLoc(advectionProgram, 'wholeWidthBrush'), guiControls.wholeWidth);
+        gl.uniform1f(getUniformLoc(advectionProgram, 'wholeWidthBrushWidth'), guiControls.wholeWidthBrushWidth * 0.01);
+        gl.uniform1f(getUniformLoc(advectionProgram, 'windPushVelocity'), msToRawVelocity(guiControls.windPushStrengthMph * 0.44704));
+        gl.uniform1f(getUniformLoc(advectionProgram, 'windPushDirection'), guiControls.windPushDirection == 'left' ? -1.0 : 1.0);
+        gl.uniform1i(getUniformLoc(advectionProgram, 'windPushSetTemperature'), guiControls.windPushSetTemperature);
+        gl.uniform1f(getUniformLoc(advectionProgram, 'windPushAirTemperatureC'), guiControls.windPushAirTemperatureC);
+        gl.uniform1i(getUniformLoc(advectionProgram, 'windPushSetHumidity'), guiControls.windPushSetHumidity);
+        gl.uniform1f(getUniformLoc(advectionProgram, 'windPushRelativeHumidity'), guiControls.windPushRelativeHumidity * 0.01);
+        gl.uniform1f(getUniformLoc(advectionProgram, 'windPushWidth'), guiControls.wholeWidthBrushWidth * 0.01);
+        gl.uniform1f(getUniformLoc(advectionProgram, 'windPushDepth'), guiControls.brushSize / sim_res_y);
+        gl.uniform2f(getUniformLoc(advectionProgram, 'userInputMove'), moveX, moveY);
+        gl.uniform1i(getUniformLoc(advectionProgram, 'wrapHorizontally'), guiControls.wrapHorizontally);
       }
-      gl.uniform1i(gl.getUniformLocation(advectionProgram, 'userInputType'), inputType);
+      gl.uniform1i(getUniformLoc(advectionProgram, 'userInputType'), inputType);
 
 
       // guiControls.IterPerFrame = 1.0 / timePerIteration * 3600 / 60.0;
@@ -8221,7 +8349,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         }
 
         gl.useProgram(lightingProgram);
-        gl.uniform1f(gl.getUniformLocation(lightingProgram, 'IR_rate'), guiControls.IR_rate * (nightAccelerationActive ? 10.0 : 1.0));
+        gl.uniform1f(getUniformLoc(lightingProgram, 'IR_rate'), guiControls.IR_rate * (nightAccelerationActive ? 10.0 : 1.0));
 
         gl.viewport(0, 0, sim_res_x, sim_res_y);
         gl.clearColor(0.0, 0.0, 0.0, 0.0);
@@ -8323,6 +8451,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
             gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1 ]); // calc light
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            ambientLightDirty = true;
 
 
             gl.bindFramebuffer(gl.FRAMEBUFFER, precipitationFeedbackFrameBuff);
@@ -8340,10 +8469,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               }
 
               gl.useProgram(precipitationProgram);
-              gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'iterNum'), iterNum);
+              gl.uniform1f(getUniformLoc(precipitationProgram, 'iterNum'), iterNum);
               // cloud-density lightning is owned by the precipitation shader
               // (lightningCloudDensityThreshold / lightningChanceMultiplier)
-              gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'legacyLightningGate'), 1.0);
+              gl.uniform1f(getUniformLoc(precipitationProgram, 'legacyLightningGate'), 1.0);
               gl.enable(gl.BLEND);
               gl.blendFunc(gl.ONE, gl.ONE); // add everything together
               gl.activeTexture(gl.TEXTURE0);
@@ -8363,14 +8492,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               // sample to count number of inactive droplets
               if (iterNum % 600 == 0) {
                 gl.readBuffer(gl.COLOR_ATTACHMENT0);
-                var sampleValues = new Float32Array(4);
                 // console.time('cnt');
-                gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, sampleValues);
+                gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, precipSampleValues);
                 // console.timeEnd('cnt')         // 1 - 100 ms huge variation
-                // console.log(sampleValues[0]);  // number of inactive droplets
-                guiControls.inactiveDroplets = sampleValues[0];
+                // console.log(precipSampleValues[0]);  // number of inactive droplets
+                guiControls.inactiveDroplets = precipSampleValues[0];
                 // gl.useProgram(precipitationProgram); // already set
-                gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'inactiveDroplets'), sampleValues[0]);
+                gl.uniform1f(getUniformLoc(precipitationProgram, 'inactiveDroplets'), precipSampleValues[0]);
               }
 
               gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
@@ -8384,7 +8512,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               // strikes never cut each other short. Ping-pong the slot array.
               const lightningDst = 1 - lightningDataSrc;
               gl.useProgram(lightningLocationProgram);
-              gl.uniform1f(gl.getUniformLocation(lightningLocationProgram, 'iterNum'), iterNum);
+              gl.uniform1f(getUniformLoc(lightningLocationProgram, 'iterNum'), iterNum);
               uploadLightningRodUniforms(lightningLocationProgram); // rods capture CG strikes
 
               gl.activeTexture(gl.TEXTURE0);
@@ -8428,19 +8556,39 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         // hearing thunder - and no strike is missed, because a strike is found by
         // comparing its start iteration against the last one we heard, not against
         // the previous frame.
-        const lightningSoundDue = guiControls.sound && guiControls.enablePrecipitation &&
-                                  iterNum != lastLightningSoundCheckIteration &&
-                                  (lightningSoundFrame++ % 3) === 0;
+        const lightningReadbackTick = guiControls.enablePrecipitation &&
+                                      iterNum != lastSuperboltCheckIteration &&
+                                      (superboltCheckFrame++ % 3) === 0;
+        const lightningSoundDue = guiControls.sound && lightningReadbackTick;
+        const superboltCheckDue = lightningReadbackTick;
         const rodCaptureCheckDue = lightningRods.length > 0 && guiControls.enablePrecipitation &&
                                    iterNum != lastRodCaptureCheckIteration &&
                                    (rodCaptureFrame++ % 12) === 0;
-        if (lightningSoundDue || rodCaptureCheckDue) {
+        if (lightningSoundDue || rodCaptureCheckDue || superboltCheckDue) {
           if (lightningSoundDue)
             lastLightningSoundCheckIteration = iterNum;
+          if (superboltCheckDue)
+            lastSuperboltCheckIteration = iterNum;
           lastRodCaptureCheckIteration = iterNum;
           gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuffs[lightningDataSrc]);
           gl.readBuffer(gl.COLOR_ATTACHMENT0);
           gl.readPixels(0, 0, numLightningSlots, 2, gl.RGBA, gl.FLOAT, lightningDataValues);
+
+          if (superboltCheckDue) {
+            let newestSuperboltIter = lastSuperboltShakeIteration;
+            for (let slot = 0; slot < numLightningSlots; slot++) {
+              const start = Math.round(lightningDataValues[slot * 4 + START_ITERNUM_INDEX]);
+              if (start <= newestSuperboltIter || start > iterNum)
+                continue;
+              const metaOffset = (numLightningSlots + slot) * 4;
+              if (lightningDataValues[metaOffset + 3] >= 0.5)
+                newestSuperboltIter = start;
+            }
+            if (newestSuperboltIter > lastSuperboltShakeIteration) {
+              lastSuperboltShakeIteration = newestSuperboltIter;
+              triggerSuperboltCameraShake();
+            }
+          }
 
           if (lightningRods.length > 0) {
             let capturesUpdated = false;
@@ -8482,6 +8630,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               const originX = lightningDataValues[metaOffset + 0];
               const metaType = lightningDataValues[metaOffset + 1];
               const targetY = lightningDataValues[metaOffset + 2];
+              const isSuperbolt = lightningDataValues[metaOffset + 3] >= 0.5;
+              const superboltSoundMult = isSuperbolt ? 1.5 : 1.0;
               if (metaType >= 3.5) {
                 // Positive intra-cloud flash: strong cloud rumble at the origin cell via cc*.mp3.
                 soundSystem.soundThunder(targetX, originY, Math.min(Math.pow(strikeIntensity, 2.0), 1.0));
@@ -8495,9 +8645,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               } else if (Math.abs(metaType - 1.0) < 0.25) {
                 // External positive CG: normalize [4.6, 5.4] slot tag back to normal-CG thunder scale.
                 const extBaseIntensity = clamp(1.8 + (strikeIntensity - 4.6) * 2.0, 1.8, 3.4);
-                soundSystem.soundThunder(targetX, originY, Math.pow(extBaseIntensity, 2.0) * 1.5);
+                soundSystem.soundThunder(targetX, originY, Math.pow(extBaseIntensity, 2.0) * 1.5 * superboltSoundMult);
               } else {
-                soundSystem.soundThunder(targetX, originY, Math.pow(strikeIntensity, 2.0));
+                soundSystem.soundThunder(targetX, originY, Math.pow(strikeIntensity, 2.0) * superboltSoundMult);
               }
               lastLightningSoundIteration = newestIteration;
             }
@@ -8532,9 +8682,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     if (cursorType != 0 && cursorType < 4.0 && !sunIsUp) {
       // working at night
-      gl.uniform1f(gl.getUniformLocation(postProcessingProgram, 'exposure'), 2.0);
+      gl.uniform1f(getUniformLoc(postProcessingProgram, 'exposure'), 2.0);
     } else {
-      gl.uniform1f(gl.getUniformLocation(postProcessingProgram, 'exposure'), guiControls.exposure);
+      gl.uniform1f(getUniformLoc(postProcessingProgram, 'exposure'), guiControls.exposure);
     }
 
     if (inputType == 0) {
@@ -8605,7 +8755,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       lastCapeColumnUpdateFrame = frameNum;
     }
 
-    const currentTemporalView = [cam.curXpos, cam.curYpos, cam.curZoom];
+    const shakeOffset = getSuperboltShakeOffset(performance.now());
+    const renderViewX = cam.curXpos + shakeOffset.x;
+    const renderViewY = cam.curYpos + shakeOffset.y;
+
+    const currentTemporalView = [renderViewX, renderViewY, cam.curZoom];
     if (!guiControls.temporalAAEnabled || SETUP_MODE || guiControls.displayMode != 'DISP_REAL' ||
         temporalPreviousDisplayMode != guiControls.displayMode ||
         !temporalPreviousView ||
@@ -8617,7 +8771,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     if (guiControls.displayMode == 'DISP_REAL') {
 
-      { //  Abient Light Calculation
+      if (ambientLightDirty) { //  Ambient Light Calculation
         gl.bindVertexArray(postProcessingVao);
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, ambientLightFBOs[0].frameBuffer);
@@ -8628,14 +8782,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         let prevFBO = emittedLightFBO; // the previous FBO
 
         gl.useProgram(bloomBlurProgram);
-        gl.uniform1i(gl.getUniformLocation(bloomBlurProgram, 'bloomTexture'), 0);
+        gl.uniform1i(getUniformLoc(bloomBlurProgram, 'bloomTexture'), 0);
 
         for (let blurTimes = 0; blurTimes < 2; blurTimes++) { // blur twice for smoother result
 
           // downsample
           for (let i = 1; i < ambientLightFBOs.length; i++) {
             let destFBO = ambientLightFBOs[i];
-            gl.uniform2f(gl.getUniformLocation(bloomBlurProgram, 'texelSize'), prevFBO.texelSizeX, prevFBO.texelSizeY);
+            gl.uniform2f(getUniformLoc(bloomBlurProgram, 'texelSize'), prevFBO.texelSizeX, prevFBO.texelSizeY);
 
             gl.viewport(0, 0, destFBO.width, destFBO.height);
 
@@ -8657,7 +8811,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           for (let i = ambientLightFBOs.length - 2; i >= 0; i--) {
             let destFBO = ambientLightFBOs[i];
 
-            gl.uniform2f(gl.getUniformLocation(bloomBlurProgram, 'texelSize'), prevFBO.texelSizeX, prevFBO.texelSizeY);
+            gl.uniform2f(getUniformLoc(bloomBlurProgram, 'texelSize'), prevFBO.texelSizeX, prevFBO.texelSizeY);
 
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, prevFBO.texture);
@@ -8672,6 +8826,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           gl.disable(gl.BLEND);
         }
         gl.bindVertexArray(fluidVao);
+        ambientLightDirty = false;
       }
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, hdrFBO.frameBuffer); // render to hdr framebuffer
@@ -8707,12 +8862,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.bindTexture(gl.TEXTURE_2D, A380GearTexture);
 
       gl.useProgram(skyBackgroundDisplayProgram);
-      gl.uniform2f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
-      gl.uniform3f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
-      gl.uniform1f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'Xmult'), horizontalDisplayMult);
-      gl.uniform1f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'iterNum'), iterNum);
-      gl.uniform1f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'sunAngle'), (guiControls.sunAngle - 90.0) * degToRad);
-      gl.uniform1i(gl.getUniformLocation(skyBackgroundDisplayProgram, 'extremeAtmosphere'), guiControls.volumetricCloudLighting);
+      gl.uniform2f(getUniformLoc(skyBackgroundDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+      gl.uniform3f(getUniformLoc(skyBackgroundDisplayProgram, 'view'), renderViewX, renderViewY, cam.curZoom);
+      gl.uniform1f(getUniformLoc(skyBackgroundDisplayProgram, 'Xmult'), horizontalDisplayMult);
+      gl.uniform1f(getUniformLoc(skyBackgroundDisplayProgram, 'iterNum'), iterNum);
+      gl.uniform1f(getUniformLoc(skyBackgroundDisplayProgram, 'sunAngle'), (guiControls.sunAngle - 90.0) * degToRad);
+      gl.uniform1i(getUniformLoc(skyBackgroundDisplayProgram, 'extremeAtmosphere'), guiControls.volumetricCloudLighting);
 
       gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
 
@@ -8724,19 +8879,19 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       // draw clouds and terrain
       gl.useProgram(realisticDisplayProgram);
-      gl.uniform2f(gl.getUniformLocation(realisticDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
-      gl.uniform3f(gl.getUniformLocation(realisticDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+      gl.uniform2f(getUniformLoc(realisticDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+      gl.uniform3f(getUniformLoc(realisticDisplayProgram, 'view'), renderViewX, renderViewY, cam.curZoom);
       setBrushCursor(realisticDisplayProgram, cursorType, mouseXinSim, mouseYinSim);
-      gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'Xmult'), horizontalDisplayMult);
-      gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'iterNum'), iterNum);
+      gl.uniform1f(getUniformLoc(realisticDisplayProgram, 'Xmult'), horizontalDisplayMult);
+      gl.uniform1f(getUniformLoc(realisticDisplayProgram, 'iterNum'), iterNum);
 
       // Don't display vectors when zoomed out because you would just see noise
       if (cam.curZoom / sim_res_x > 0.003) {
-        gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'displayVectorField'), displayVectorField);
+        gl.uniform1f(getUniformLoc(realisticDisplayProgram, 'displayVectorField'), displayVectorField);
       } else {
-        gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'displayVectorField'), 0.0);
+        gl.uniform1f(getUniformLoc(realisticDisplayProgram, 'displayVectorField'), 0.0);
       }
-      gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'volumetricCloudLighting'), guiControls.volumetricCloudLighting);
+      gl.uniform1i(getUniformLoc(realisticDisplayProgram, 'volumetricCloudLighting'), guiControls.volumetricCloudLighting);
 
 
       // Which bolt artwork this window uses, clamped to the ones that exist. The
@@ -8751,7 +8906,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       gl.activeTexture(gl.TEXTURE7);
       gl.bindTexture(gl.TEXTURE_2D, lightningTextures[lightningTexNum]);
-      gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'lightningBottomU'), lightningBoltBottomUs[lightningTexNum]);
+      gl.uniform1f(getUniformLoc(realisticDisplayProgram, 'lightningBottomU'), lightningBoltBottomUs[lightningTexNum]);
       gl.activeTexture(gl.TEXTURE10);
       gl.bindTexture(gl.TEXTURE_2D, lightningNetworkTexture);
       gl.activeTexture(gl.TEXTURE8);
@@ -8771,14 +8926,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.bindVertexArray(postProcessingVao);
 
       if (guiControls.bloomEnabled) {
-      gl.useProgram(isolateBrightPartsProgram);
+        gl.useProgram(isolateBrightPartsProgram);
 
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFBOs[0].frameBuffer); // brightPartsFrameBuffer
-      gl.viewport(0, 0, bloomFBOs[0].width, bloomFBOs[0].height);
-      gl.clearColor(0.0, 0.0, 0.0, 1.0);                            // background color
-      gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFBOs[0].frameBuffer); // brightPartsFrameBuffer
+        gl.viewport(0, 0, bloomFBOs[0].width, bloomFBOs[0].height);
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);                            // background color
+        gl.clear(gl.COLOR_BUFFER_BIT);
 
       gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // render bright parts to seperate texture
@@ -8789,13 +8944,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       let prevFBO = bloomFBOs[0]; // the previous FBO
 
       gl.useProgram(bloomBlurProgram);
-      gl.uniform1i(gl.getUniformLocation(bloomBlurProgram, 'bloomTexture'), 0);
+      gl.uniform1i(getUniformLoc(bloomBlurProgram, 'bloomTexture'), 0);
 
 
       // downsample
       for (let i = 1; i < bloomFBOs.length; i++) {
         let destFBO = bloomFBOs[i];
-        gl.uniform2f(gl.getUniformLocation(bloomBlurProgram, 'texelSize'), prevFBO.texelSizeX, prevFBO.texelSizeY);
+        gl.uniform2f(getUniformLoc(bloomBlurProgram, 'texelSize'), prevFBO.texelSizeX, prevFBO.texelSizeY);
 
         gl.viewport(0, 0, destFBO.width, destFBO.height);
 
@@ -8817,7 +8972,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       for (let i = bloomFBOs.length - 2; i >= 0; i--) {
         let destFBO = bloomFBOs[i];
 
-        gl.uniform2f(gl.getUniformLocation(bloomBlurProgram, 'texelSize'), prevFBO.texelSizeX, prevFBO.texelSizeY);
+        gl.uniform2f(getUniformLoc(bloomBlurProgram, 'texelSize'), prevFBO.texelSizeX, prevFBO.texelSizeY);
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, prevFBO.texture);
@@ -8838,19 +8993,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, bloomFBOs[0].texture);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.activeTexture(gl.TEXTURE2);
       gl.bindTexture(gl.TEXTURE_2D, temporalHistoryTexture);
-      gl.uniform1i(gl.getUniformLocation(postProcessingProgram, 'bloomEnabled'), guiControls.bloomEnabled);
-      gl.uniform1i(gl.getUniformLocation(postProcessingProgram, 'toneMappingEnabled'), guiControls.filmicToneMapping);
-      gl.uniform1i(gl.getUniformLocation(postProcessingProgram, 'fxaaEnabled'), guiControls.fxaaEnabled);
-      gl.uniform1i(gl.getUniformLocation(postProcessingProgram, 'temporalAAEnabled'), guiControls.temporalAAEnabled);
-      gl.uniform1i(gl.getUniformLocation(postProcessingProgram, 'temporalHistoryValid'), temporalHistoryValid);
-      gl.uniform2f(gl.getUniformLocation(postProcessingProgram, 'outputTexelSize'), 1.0 / canvas.width, 1.0 / canvas.height);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'bloomEnabled'), guiControls.bloomEnabled);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'toneMappingEnabled'), guiControls.filmicToneMapping);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'fxaaEnabled'), guiControls.fxaaEnabled);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'temporalAAEnabled'), guiControls.temporalAAEnabled);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'temporalHistoryValid'), temporalHistoryValid);
+      gl.uniform2f(getUniformLoc(postProcessingProgram, 'outputTexelSize'), 1.0 / canvas.width, 1.0 / canvas.height);
 
       if (SETUP_MODE) {
-        gl.uniform1f(gl.getUniformLocation(postProcessingProgram, 'exposure'), 50.0);
+        gl.uniform1f(getUniformLoc(postProcessingProgram, 'exposure'), 50.0);
       }
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, null); // null is canvas
@@ -8878,8 +9031,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         // draw drops over clouds
         // draw precipitation
         gl.useProgram(precipDisplayProgram);
-        gl.uniform2f(gl.getUniformLocation(precipDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
-        gl.uniform3f(gl.getUniformLocation(precipDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform2f(getUniformLoc(precipDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(getUniformLoc(precipDisplayProgram, 'view'), renderViewX, renderViewY, cam.curZoom);
         gl.bindVertexArray(precipitationEven ? precipitationVao_0 : precipitationVao_1);
         gl.drawArrays(gl.POINTS, 0, NUM_DROPLETS);
         gl.bindVertexArray(fluidVao); // set screenfilling rect again
@@ -8899,137 +9052,137 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       if (guiControls.displayMode == 'DISP_REFLECTIVITY') {
         gl.useProgram(reflectivityDisplayProgram);
-        gl.uniform2f(gl.getUniformLocation(reflectivityDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
-        gl.uniform3f(gl.getUniformLocation(reflectivityDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
-        gl.uniform1f(gl.getUniformLocation(reflectivityDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform2f(getUniformLoc(reflectivityDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(getUniformLoc(reflectivityDisplayProgram, 'view'), renderViewX, renderViewY, cam.curZoom);
+        gl.uniform1f(getUniformLoc(reflectivityDisplayProgram, 'Xmult'), horizontalDisplayMult);
         setBrushCursor(reflectivityDisplayProgram, cursorType, mouseXinSim, mouseYinSim);
       } else if (guiControls.displayMode == 'DISP_CAPE') {
         gl.useProgram(capeDisplayProgram);
-        gl.uniform2f(gl.getUniformLocation(capeDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
-        gl.uniform3f(gl.getUniformLocation(capeDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
-        gl.uniform1f(gl.getUniformLocation(capeDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform2f(getUniformLoc(capeDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(getUniformLoc(capeDisplayProgram, 'view'), renderViewX, renderViewY, cam.curZoom);
+        gl.uniform1f(getUniformLoc(capeDisplayProgram, 'Xmult'), horizontalDisplayMult);
         setBrushCursor(capeDisplayProgram, cursorType, mouseXinSim, mouseYinSim);
         gl.activeTexture(gl.TEXTURE3);
         gl.bindTexture(gl.TEXTURE_2D, capeColumnFBO.texture);
       } else if (guiControls.displayMode == 'DISP_TEMPERATURE') {
         gl.useProgram(temperatureDisplayProgram);
-        gl.uniform2f(gl.getUniformLocation(temperatureDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
-        gl.uniform3f(gl.getUniformLocation(temperatureDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform2f(getUniformLoc(temperatureDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(getUniformLoc(temperatureDisplayProgram, 'view'), renderViewX, renderViewY, cam.curZoom);
         setBrushCursor(temperatureDisplayProgram, cursorType, mouseXinSim, mouseYinSim);
-        gl.uniform1f(gl.getUniformLocation(temperatureDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform1f(getUniformLoc(temperatureDisplayProgram, 'Xmult'), horizontalDisplayMult);
 
 
         // Don't display vectors when zoomed out because you would just see
         // noise
         if (cam.curZoom / sim_res_x > 0.003) {
-          gl.uniform1f(gl.getUniformLocation(temperatureDisplayProgram, 'displayVectorField'), displayVectorField);
+          gl.uniform1f(getUniformLoc(temperatureDisplayProgram, 'displayVectorField'), displayVectorField);
         } else {
-          gl.uniform1f(gl.getUniformLocation(temperatureDisplayProgram, 'displayVectorField'), 0.0);
+          gl.uniform1f(getUniformLoc(temperatureDisplayProgram, 'displayVectorField'), 0.0);
         }
 
       } else if (guiControls.displayMode == 'DISP_AIRQUALITY') {
         gl.useProgram(airQualityDisplayProgram);
-        gl.uniform2f(gl.getUniformLocation(airQualityDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
-        gl.uniform3f(gl.getUniformLocation(airQualityDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform2f(getUniformLoc(airQualityDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(getUniformLoc(airQualityDisplayProgram, 'view'), renderViewX, renderViewY, cam.curZoom);
         setBrushCursor(airQualityDisplayProgram, cursorType, mouseXinSim, mouseYinSim);
-        gl.uniform1f(gl.getUniformLocation(airQualityDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform1f(getUniformLoc(airQualityDisplayProgram, 'Xmult'), horizontalDisplayMult);
 
       } else if (guiControls.displayMode == 'DISP_HUMD') {
         gl.useProgram(humidityDisplayProgram);
-        gl.uniform2f(gl.getUniformLocation(humidityDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
-        gl.uniform3f(gl.getUniformLocation(humidityDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform2f(getUniformLoc(humidityDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(getUniformLoc(humidityDisplayProgram, 'view'), renderViewX, renderViewY, cam.curZoom);
         setBrushCursor(humidityDisplayProgram, cursorType, mouseXinSim, mouseYinSim);
-        gl.uniform1f(gl.getUniformLocation(humidityDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform1f(getUniformLoc(humidityDisplayProgram, 'Xmult'), horizontalDisplayMult);
 
       } else if (guiControls.displayMode == 'DISP_IRDOWNTEMP') {
         gl.useProgram(IRtempDisplayProgram);
-        gl.uniform2f(gl.getUniformLocation(IRtempDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
-        gl.uniform3f(gl.getUniformLocation(IRtempDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform2f(getUniformLoc(IRtempDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(getUniformLoc(IRtempDisplayProgram, 'view'), renderViewX, renderViewY, cam.curZoom);
         setBrushCursor(IRtempDisplayProgram, cursorType, mouseXinSim, mouseYinSim);
-        gl.uniform1i(gl.getUniformLocation(IRtempDisplayProgram, 'upOrDown'), 0);
-        gl.uniform1f(gl.getUniformLocation(IRtempDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform1i(getUniformLoc(IRtempDisplayProgram, 'upOrDown'), 0);
+        gl.uniform1f(getUniformLoc(IRtempDisplayProgram, 'Xmult'), horizontalDisplayMult);
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, lightTexture_0);
       } else if (guiControls.displayMode == 'DISP_IRUPTEMP') {
         gl.useProgram(IRtempDisplayProgram);
-        gl.uniform2f(gl.getUniformLocation(IRtempDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
-        gl.uniform3f(gl.getUniformLocation(IRtempDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform2f(getUniformLoc(IRtempDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(getUniformLoc(IRtempDisplayProgram, 'view'), renderViewX, renderViewY, cam.curZoom);
         setBrushCursor(IRtempDisplayProgram, cursorType, mouseXinSim, mouseYinSim);
-        gl.uniform1i(gl.getUniformLocation(IRtempDisplayProgram, 'upOrDown'), 1);
-        gl.uniform1f(gl.getUniformLocation(IRtempDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform1i(getUniformLoc(IRtempDisplayProgram, 'upOrDown'), 1);
+        gl.uniform1f(getUniformLoc(IRtempDisplayProgram, 'Xmult'), horizontalDisplayMult);
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, lightTexture_0);
       } else {
         gl.useProgram(universalDisplayProgram);
-        gl.uniform2f(gl.getUniformLocation(universalDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
-        gl.uniform3f(gl.getUniformLocation(universalDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform2f(getUniformLoc(universalDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(getUniformLoc(universalDisplayProgram, 'view'), renderViewX, renderViewY, cam.curZoom);
         setBrushCursor(universalDisplayProgram, cursorType, mouseXinSim, mouseYinSim);
-        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform1f(getUniformLoc(universalDisplayProgram, 'Xmult'), horizontalDisplayMult);
 
         switch (guiControls.displayMode) {
         case 'DISP_HORIVEL':
-          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 0);
-          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 10.0); // 20.0
+          gl.uniform1i(getUniformLoc(universalDisplayProgram, 'quantityIndex'), 0);
+          gl.uniform1f(getUniformLoc(universalDisplayProgram, 'dispMultiplier'), 10.0); // 20.0
           break;
         case 'DISP_VERTVEL':
-          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 1);
-          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 10.0); // 20.0
+          gl.uniform1i(getUniformLoc(universalDisplayProgram, 'quantityIndex'), 1);
+          gl.uniform1f(getUniformLoc(universalDisplayProgram, 'dispMultiplier'), 10.0); // 20.0
           break;
         case 'DISP_WATER':
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
-          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 0);
-          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), -0.06); // negative number so positive amount is blue
+          gl.uniform1i(getUniformLoc(universalDisplayProgram, 'quantityIndex'), 0);
+          gl.uniform1f(getUniformLoc(universalDisplayProgram, 'dispMultiplier'), -0.06); // negative number so positive amount is blue
           break;
         case 'DISP_IRHEATING':
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, lightTexture_0);
-          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 1);
-          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 50000.0);
+          gl.uniform1i(getUniformLoc(universalDisplayProgram, 'quantityIndex'), 1);
+          gl.uniform1f(getUniformLoc(universalDisplayProgram, 'dispMultiplier'), 50000.0);
           break;
         case 'DISP_PRECIPFEEDBACK_MASS':
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, precipitationFeedbackTexture);
-          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 0);
-          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 0.3);
+          gl.uniform1i(getUniformLoc(universalDisplayProgram, 'quantityIndex'), 0);
+          gl.uniform1f(getUniformLoc(universalDisplayProgram, 'dispMultiplier'), 0.3);
           break;
         case 'DISP_PRECIPFEEDBACK_HEAT':
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, precipitationFeedbackTexture);
-          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 1);
-          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 500.0);
+          gl.uniform1i(getUniformLoc(universalDisplayProgram, 'quantityIndex'), 1);
+          gl.uniform1f(getUniformLoc(universalDisplayProgram, 'dispMultiplier'), 500.0);
           break;
         case 'DISP_PRECIPFEEDBACK_VAPOR':
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, precipitationFeedbackTexture);
-          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2);
-          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 500.0);
+          gl.uniform1i(getUniformLoc(universalDisplayProgram, 'quantityIndex'), 2);
+          gl.uniform1f(getUniformLoc(universalDisplayProgram, 'dispMultiplier'), 500.0);
           break;
         case 'DISP_PRECIPFEEDBACK_RAIN':
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, precipitationDepositionTexture);
-          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 0);
-          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
+          gl.uniform1i(getUniformLoc(universalDisplayProgram, 'quantityIndex'), 0);
+          gl.uniform1f(getUniformLoc(universalDisplayProgram, 'dispMultiplier'), 1.0);
           break;
         case 'DISP_PRECIPFEEDBACK_SNOW':
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, precipitationDepositionTexture);
-          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 1);
-          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
+          gl.uniform1i(getUniformLoc(universalDisplayProgram, 'quantityIndex'), 1);
+          gl.uniform1f(getUniformLoc(universalDisplayProgram, 'dispMultiplier'), 1.0);
           break;
         case 'DISP_SOIL_MOISTURE':
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, waterTexture_0);
-          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2);
-          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 0.02);
+          gl.uniform1i(getUniformLoc(universalDisplayProgram, 'quantityIndex'), 2);
+          gl.uniform1f(getUniformLoc(universalDisplayProgram, 'dispMultiplier'), 0.02);
           break;
         case 'DISP_CURL':
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, curlTexture);
-          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 0);
-          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 7.0);
+          gl.uniform1i(getUniformLoc(universalDisplayProgram, 'quantityIndex'), 0);
+          gl.uniform1f(getUniformLoc(universalDisplayProgram, 'dispMultiplier'), 7.0);
           break;
         }
       }
@@ -9385,15 +9538,15 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     minShadowLight = map_range_C(Math.abs(solarZenithAngleDeg), 100.0, 85.0, 0.005, 0.040); // decrease until the sun goes 10 deg below the horizon
 
     gl.useProgram(boundaryProgram);
-    gl.uniform1f(gl.getUniformLocation(boundaryProgram, 'sunAngle'), solarZenithAngle);
+    gl.uniform1f(getUniformLoc(boundaryProgram, 'sunAngle'), solarZenithAngle);
     gl.useProgram(lightingProgram);
-    gl.uniform1f(gl.getUniformLocation(lightingProgram, 'sunIntensity'), sunIntensity);
-    gl.uniform1f(gl.getUniformLocation(lightingProgram, 'sunAngle'), solarZenithAngle);
+    gl.uniform1f(getUniformLoc(lightingProgram, 'sunIntensity'), sunIntensity);
+    gl.uniform1f(getUniformLoc(lightingProgram, 'sunAngle'), solarZenithAngle);
     gl.useProgram(realisticDisplayProgram);
-    gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'sunAngle'), solarZenithAngle);
-    gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'minShadowLight'), minShadowLight);
+    gl.uniform1f(getUniformLoc(realisticDisplayProgram, 'sunAngle'), solarZenithAngle);
+    gl.uniform1f(getUniformLoc(realisticDisplayProgram, 'minShadowLight'), minShadowLight);
     gl.useProgram(skyBackgroundDisplayProgram);
-    gl.uniform1f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'minShadowLight'), minShadowLight);
+    gl.uniform1f(getUniformLoc(skyBackgroundDisplayProgram, 'minShadowLight'), minShadowLight);
 
     updateClockDisplay();
   }
@@ -9512,7 +9665,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.30');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.31');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
