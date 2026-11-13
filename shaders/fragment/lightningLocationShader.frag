@@ -305,7 +305,8 @@ void main()
       // while remaining bounded well inside the maximum slot lifetime.
       extStrike[INTENSITY] = clamp(4.6 + (incoming[INTENSITY] - 0.75) * 0.25, 4.6, 5.4);
       extStrike = attractToRod(extStrike);
-      result = (row == 0) ? extStrike : vec4(originX, 1.0, 0.0, 0.0);
+      bool isSuperboltExt = random2d(vec2(extStrike.x * 89.3 + incoming.y * 47.1, iterNum * 1.13)) < 0.072;
+      result = (row == 0) ? extStrike : vec4(originX, 1.0, 0.0, isSuperboltExt ? 1.0 : 0.0);
     } else {
       bool cgTriggerNearRod = incoming[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY &&
                               hasNearbyLightningRod(originX, incoming[INTENSITY]);
@@ -338,7 +339,10 @@ void main()
           normalStrike[INTENSITY] = clamp(max(normalStrike[INTENSITY], 0.88), 0.88, LIGHTNING_IC_MAX_INTENSITY);
           result = (row == 0) ? normalStrike : vec4(originX, 4.0, 0.0, 0.0);
         } else {
-          result = (row == 0) ? normalStrike : vec4(originX, 0.0, 0.0, 0.0);
+          // 7.2% chance for a ground-reaching CG strike to trigger as a superbolt positive CG (meta.w = 1.0).
+          bool isSuperboltCG = !isNormalIC &&
+                               random2d(vec2(normalStrike.x * 89.3 + incoming.y * 47.1, iterNum * 1.13)) < 0.072;
+          result = (row == 0) ? normalStrike : vec4(originX, 0.0, 0.0, isSuperboltCG ? 1.0 : 0.0);
         }
       }
     }
