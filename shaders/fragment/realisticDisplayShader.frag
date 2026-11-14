@@ -325,7 +325,7 @@ vec2 evalExtArcDeriv(float t, float Hw, float V)
 // External positive CG ("bolt from the blue"): emerges from the upper storm
 // cloud at originX, arches laterally out into clear air far from the storm core,
 // and plunges down to groundPos.x (or squarely onto a capturing rod's tip).
-vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime, float currentLightningIntensity)
+vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime, float currentLightningIntensity, vec3 lightningColor)
 {
   float rodTipY = findCapturedRodTipY(groundPos.x);
   float endY = rodTipY >= 0.0 ? rodTipY : 0.0;
@@ -404,8 +404,7 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   pixVal = max(pixVal - brightnessThreshold, 0.0) * cgExcessScale;
   pixVal *= intensity;
 
-  const vec3 positiveLightningCol = vec3(1.0, 0.90, 0.82);
-  return max(pixVal * positiveLightningCol, vec3(0.0));
+  return max(pixVal * lightningColor, vec3(0.0));
 }
 
 vec2 evalCcCubic(float t, vec2 p0, vec2 p1, vec2 p2, vec2 p3)
@@ -753,9 +752,11 @@ vec4 computeAirColor(vec2 bndFragCoord)
     bool isExternalPositive = !isFlash && abs(lightningMeta.y - 1.0) < 0.25;
     bool isCloudToCloud = !isFlash && lightningMeta.y >= 1.5;
     bool isPositiveCC = isCloudToCloud && lightningMeta.y >= 2.5;
-    bool isSuperbolt = !isFlash && !isCloudToCloud && lightningMeta.w >= 0.5;
+    bool isSuperbolt = isExternalPositive && lightningMeta.w >= 0.5;
     const float superboltBrightnessMult = 12.0;
     const float superboltDurationShorten = 0.1;
+    // Approximate 52,000 K Planckian emitter in linear sRGB, normalized to blue.
+    const vec3 superboltColor = vec3(0.332, 0.469, 1.0);
     const vec3 positiveLightningCol = vec3(1.0, 0.90, 0.82);
     float repeatPeriod = map_range(random2d(lightningPos), 0., 1., 1.5, 3.0);
     if (isSuperbolt && lightningTime >= repeatPeriod * lightningFlickers(lightningData) + (2.924 - superboltDurationShorten))
@@ -777,7 +778,8 @@ vec4 computeAirColor(vec2 bndFragCoord)
     float extCurve = currentLightningIntensity * extIntensityGain * extTailFade;
     if (isExternalPositive) {
       vec3 prevBoltLight = lightningBoltLight;
-      lightningBoltLight += displayExternalLightning(lightningPos, lightningMeta.x, effectiveLightningTime, extCurve);
+      lightningBoltLight += displayExternalLightning(lightningPos, lightningMeta.x, effectiveLightningTime, extCurve,
+                                                     isSuperbolt ? superboltColor : positiveLightningCol);
       if (isSuperbolt)
         lightningBoltLight = prevBoltLight + (lightningBoltLight - prevBoltLight) * superboltBrightnessMult;
     } else if (isCloudToCloud) {
@@ -789,13 +791,8 @@ vec4 computeAirColor(vec2 bndFragCoord)
     } else if (isPositiveIC) {
       lightningBoltLight += displayPositiveFlash(lightningPos, lightningTime, currentLightningIntensity);
     } else {
-      vec3 prevBoltLight = lightningBoltLight;
       lightningBoltLight += isFlash ? displayFlash(lightningPos, lightningTime, currentLightningIntensity)
                                     : displayLightning(lightningPos, lightningTime, currentLightningIntensity);
-      if (isSuperbolt) {
-        vec3 boltDelta = lightningBoltLight - prevBoltLight;
-        lightningBoltLight = prevBoltLight + boltDelta * superboltBrightnessMult * (positiveLightningCol / vec3(0.70, 0.57, 1.0));
-      }
     }
 
     // The light a strike throws on the clouds around it.
@@ -831,14 +828,13 @@ vec4 computeAirColor(vec2 bndFragCoord)
     lightningOnLight *= currentLightningIntensity;
     if (isSuperbolt)
       lightningOnLight *= superboltBrightnessMult;
-    onLight += vec3(lightningOnLight);
+    vec3 lightningIlluminationTint = isSuperbolt ? superboltColor : vec3(1.0);
+    onLight += lightningIlluminationTint * lightningOnLight;
     if (isExternalPositive) {
-      onLight += vec3(lightningOnLight);
+      onLight += lightningIlluminationTint * lightningOnLight;
       float originDx = mod(lightningMeta.x - texCoord.x + 0.5, 1.0) - 0.5;
       vec2 originDist = vec2(originDx * aspectRatios[0], texCoord.y - lightningPos.y);
-      onLight += vec3(lightningOnLightBrightness * 2.0 / (pow(length(originDist) * 0.7, 2.) + 0.03) * extCurve);
-      if (isSuperbolt)
-        onLight += vec3(lightningOnLightBrightness * 2.0 / (pow(length(originDist) * 0.7, 2.) + 0.03) * extCurve * (superboltBrightnessMult - 1.0));
+      onLight += lightningIlluminationTint * (lightningOnLightBrightness * 2.0 / (pow(length(originDist) * 0.7, 2.) + 0.03) * extCurve * (isSuperbolt ? superboltBrightnessMult : 1.0));
     }
   }
 
@@ -1210,7 +1206,7 @@ void main()
       float rodStrikeT = calcLightningTime(strikeData[START_ITERNUM]);
       float slotGlow = lightningIntensityOverTime(calcLightningTime(strikeData[START_ITERNUM]), strikeData.xy, strikeData[INTENSITY]);
       vec4 strikeMeta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
-      if (strikeData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY && strikeMeta.y < 1.5 && strikeMeta.w >= 0.5) {
+      if (strikeData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY && abs(strikeMeta.y - 1.0) < 0.25 && strikeMeta.w >= 0.5) {
         float rodRepeatPeriod = map_range(random2d(strikeData.xy), 0., 1., 1.5, 3.0);
         if (rodStrikeT >= rodRepeatPeriod * lightningFlickers(strikeData) + 2.824)
           slotGlow = 0.0;

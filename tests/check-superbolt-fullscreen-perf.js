@@ -112,15 +112,20 @@ check('realisticDisplayShader.frag reuses fetched field state in computeAirColor
 
 /* ------------------------------------------- 3. Superbolt positive CG */
 
-check('lightningLocationShader.frag assigns 7.2% superbolt chance (meta.w = 1.0) on external +CG and normal CG only',
-  /random2d\(vec2\(extStrike\.x \* 89\.3 \+ incoming\.y \* 47\.1, iterNum \* 1\.13\)\) < 0\.072/.test(locationShader) &&
-  /bool isSuperboltCG = !isNormalIC &&\s*\n\s*random2d\(vec2\(normalStrike\.x \* 89\.3 \+ incoming\.y \* 47\.1, iterNum \* 1\.13\)\) < 0\.072;/.test(locationShader));
+check('only external positive CG can receive the 7.2% superbolt flag',
+  /bool isSuperboltExt = superboltWorldWidthMeters\(\) \* 0\.4999 >= 9000\.0 &&/.test(locationShader) &&
+  /random2d\(vec2\(originX \* 89\.3 \+ incoming\.y \* 47\.1, iterNum \* 1\.13\)\) < 0\.072/.test(locationShader) &&
+  /vec4\(originX, 1\.0, 0\.0, isSuperboltExt \? 1\.0 : 0\.0\)/.test(locationShader) &&
+  /vec4\(originX, 0\.0, 0\.0, 0\.0\)/.test(locationShader) &&
+  !/isSuperboltCG/.test(locationShader));
 
-check('realisticDisplayShader.frag makes superbolts 12x brighter, positive polarity, and 0.1s shorter',
-  /bool isSuperbolt = !isFlash && !isCloudToCloud && lightningMeta\.w >= 0\.5;/.test(displayShader) &&
+check('superbolts are blue 52000 K external strikes, 12x brighter and 0.1s shorter',
+  /bool isSuperbolt = isExternalPositive && lightningMeta\.w >= 0\.5;/.test(displayShader) &&
   /const float superboltBrightnessMult = 12\.0;/.test(displayShader) &&
   /const float superboltDurationShorten = 0\.1;/.test(displayShader) &&
-  /const vec3 positiveLightningCol = vec3\(1\.0, 0\.90, 0\.82\);/.test(displayShader) &&
+  /const vec3 superboltColor = vec3\(0\.332, 0\.469, 1\.0\);/.test(displayShader) &&
+  /isSuperbolt \? superboltColor : positiveLightningCol/.test(displayShader) &&
+  /vec3 lightningIlluminationTint = isSuperbolt \? superboltColor : vec3\(1\.0\)/.test(displayShader) &&
   /lightningTime >= repeatPeriod \* lightningFlickers\(lightningData\) \+ \(2\.924 - superboltDurationShorten\)/.test(displayShader) &&
   /if \(isSuperbolt\)\s*\n\s*lightningOnLight \*= superboltBrightnessMult;/.test(displayShader));
 
@@ -136,35 +141,80 @@ check('app.js implements 40 Hz decaying random-axis camera shake triggered only 
   /const renderViewX = cam\.curXpos \+ shakeOffset\.x;/.test(appSource) &&
   /const renderViewY = cam\.curYpos \+ shakeOffset\.y;/.test(appSource));
 
-// Monte Carlo check: 7.2% superbolt occurrence on CG strikes (and 0% on IC)
+// Distribution of the independent superbolt roll, only after external classification.
 {
-  let cgTotal = 0;
-  let cgSuperbolts = 0;
-  let icSuperbolts = 0;
-  for (let i = 0; i < 10000; i++) {
+  let extTotal = 0, extSuperbolts = 0, otherSuperbolts = 0;
+  for (let i = 0; i < 100000; i++) {
     const ox = fract(0.11 + i * 0.01731);
     const oy = 0.22 + ((i * 0.031) % 0.45);
     const iter = 400 + i;
-    const isCG = (i % 5) !== 0; // 80% CG, 20% IC
-    const intensity = isCG ? 1.5 + ((i * 0.23) % 2.8) : 0.85;
-    if (intensity <= 1.0) {
-      // IC flashes never set superbolt flag
-      const sb = false;
-      if (sb) icSuperbolts++;
-    } else {
-      cgTotal++;
-      const coldFactor = clamp((-25.0 - (-35.0)) / 30.0, 0.0, 1.0);
-      const posChance = mix(0.14, 0.26, coldFactor);
-      const isExt = random2d(ox * 31.7 + oy * 59.3, iter * 0.73) < posChance;
-      const sx = isExt ? fract(ox + 0.21) : ox;
-      const isSuperbolt = random2d(f32(sx * 89.3 + oy * 47.1), f32(iter * 1.13)) < 0.072;
-      if (isSuperbolt) cgSuperbolts++;
+    const isExt = random2d(ox * 31.7 + oy * 59.3, iter * 0.73) < 0.18;
+    const sb = isExt && random2d(f32(ox * 89.3 + oy * 47.1), f32(iter * 1.13)) < 0.072;
+    if (isExt) { extTotal++; if (sb) extSuperbolts++; }
+    else if (sb) otherSuperbolts++;
+  }
+  const rate = extSuperbolts / extTotal;
+  check('superbolt share is approximately 7.2% of external CG and zero for other types',
+    otherSuperbolts === 0 && rate >= 0.064 && rate <= 0.080,
+    (rate * 100).toFixed(2) + '% of ' + extTotal);
+}
+
+// Exercise world-height scaling, periodic seams, narrow worlds, and rods that
+// attempt to move endpoints outside the allowed range. Mirrors the shader math.
+{
+  check('physical range and rod checks are wired to the configured sim height',
+    /uniform float simHeightMeters;/.test(locationShader) &&
+    /simHeightMeters \* resolution\.x \/ max\(resolution\.y, 1\.0\)/.test(locationShader) &&
+    /float minDx = 9000\.0 \/ widthMeters;/.test(locationShader) &&
+    /float maxDx = min\(42000\.0 \/ widthMeters, 0\.4999\);/.test(locationShader) &&
+    /rodRangeMeters >= 9000\.0 && rodRangeMeters <= 42000\.0/.test(locationShader) &&
+    /uniform1f\(gl\.getUniformLocation\(lightningLocationProgram, 'simHeightMeters'\), guiControls\.simHeight\)/.test(appSource));
+  const wrappedDist = (a,b) => Math.abs(glslMod(a - b + 0.5, 1) - 0.5);
+  let valid = true, minFound = Infinity, maxFound = 0, crossing = false;
+  for (const [height, rx, ry] of [[12000, 2000, 300], [5000, 1000, 200], [15000, 1600, 200]]) {
+    const width = height * rx / ry;
+    const lo = 9000 / width, hi = Math.min(42000 / width, 0.4999);
+    for (let i = 0; i <= 1000; i++) {
+      const origin = i % 2 ? 0.99 : 0.01;
+      const target = fract(origin + (i % 3 ? 1 : -1) * mix(lo, hi, i / 1000));
+      const distance = wrappedDist(origin, target) * width;
+      valid &&= distance >= 8999.999 && distance <= 42000.001;
+      crossing ||= Math.abs(origin - target) > 0.5;
+      minFound = Math.min(minFound, distance); maxFound = Math.max(maxFound, distance);
+      for (const rod of [origin, fract(origin + 0.125), fract(origin + 0.49)]) {
+        const rodDistance = wrappedDist(origin, rod) * width;
+        const final = rodDistance >= 9000 && rodDistance <= 42000 ? rod : target;
+        const finalDist = wrappedDist(origin, final) * width;
+        valid &&= finalDist >= 8999.999 && finalDist <= 42000.001;
+      }
     }
   }
-  const rate = cgSuperbolts / cgTotal;
-  check('Monte Carlo superbolt share matches ~7.2% on CG strikes and 0% on IC flashes',
-    icSuperbolts === 0 && rate >= 0.064 && rate <= 0.080,
-    (rate * 100).toFixed(2) + '% (' + cgSuperbolts + '/' + cgTotal + '), icSuperbolts=' + icSuperbolts);
+  check('9–42 km distances hold at multiple heights, across seams and after rod capture',
+    valid && crossing && Math.abs(minFound - 9000) < 0.001 && Math.abs(maxFound - 42000) < 0.001);
+  check('narrow periodic worlds reject superbolts instead of violating minimum distance',
+    18000 * 0.4999 < 9000 && 20000 * 0.4999 >= 9000);
+}
+
+// Independently integrate a 52,000 K Planck spectrum against analytic CIE
+// 1931 matching functions, then convert XYZ to linear sRGB (D65 primaries).
+{
+  const gauss = (w, mu, left, right) => Math.exp(-0.5 * ((w - mu) * (w < mu ? left : right)) ** 2);
+  let X = 0, Y = 0, Z = 0;
+  for (let w = 360; w <= 830; w++) {
+    const x = 1.056 * gauss(w, 599.8, 0.0264, 0.0323) + 0.362 * gauss(w, 442.0, 0.0624, 0.0374) - 0.065 * gauss(w, 501.1, 0.0490, 0.0382);
+    const y = 0.821 * gauss(w, 568.8, 0.0213, 0.0247) + 0.286 * gauss(w, 530.9, 0.0613, 0.0322);
+    const z = 1.217 * gauss(w, 437.0, 0.0845, 0.0278) + 0.681 * gauss(w, 459.0, 0.0385, 0.0725);
+    const wavelength = w * 1e-9;
+    const radiance = wavelength ** -5 / Math.expm1(0.01438776877 / (wavelength * 52000));
+    X += x * radiance; Y += y * radiance; Z += z * radiance;
+  }
+  const red = 3.2406 * X - 1.5372 * Y - 0.4986 * Z;
+  const green = -0.9689 * X + 1.8758 * Y + 0.0415 * Z;
+  const blue = 0.0557 * X - 0.2040 * Y + 1.0570 * Z;
+  const match = displayShader.match(/const vec3 superboltColor = vec3\(([\d.]+), ([\d.]+), ([\d.]+)\)/);
+  check('superbolt linear RGB approximates a 52000 K Planck spectrum',
+    !!match && Math.abs(+match[1] - red / blue) < 0.01 &&
+    Math.abs(+match[2] - green / blue) < 0.01 && +match[3] === 1);
 }
 
 // Duration & brightness math check: peak ignition at T=0 is 12x, ends 0.1s earlier (T=2.824)

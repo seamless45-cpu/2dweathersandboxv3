@@ -6735,8 +6735,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.31'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.31')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.32'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.32')
   ]);
 
   const [
@@ -7444,7 +7444,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   for (let i = 0; i < 2; i++) {
     gl.bindTexture(gl.TEXTURE_2D, lightningDataTextures[i]);
-    // Row 0: (groundX, originY, startIterNum, intensity); Row 1: (originX, isExternalPositive, 0, 0)
+    // Row 0: (groundX, originY, startIterNum, intensity); Row 1: (originX, type, targetY, superbolt flag)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, numLightningSlots, 2, 0, gl.RGBA, gl.FLOAT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
@@ -7691,7 +7691,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.31');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.32');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8039,6 +8039,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'waterTex'), 2);
   gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'baseTex'), 3);
   gl.uniform1f(gl.getUniformLocation(lightningLocationProgram, 'dryLapse'), dryLapse);
+  gl.uniform1f(gl.getUniformLocation(lightningLocationProgram, 'simHeightMeters'), guiControls.simHeight);
   gl.uniform2f(gl.getUniformLocation(lightningLocationProgram, 'resolution'), sim_res_x, sim_res_y);
   gl.uniform2f(gl.getUniformLocation(lightningLocationProgram, 'texelSize'), texelSizeX, texelSizeY);
 
@@ -9665,7 +9666,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.31');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.32');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
