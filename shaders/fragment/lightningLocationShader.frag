@@ -21,6 +21,7 @@ uniform float iterNum;
 out vec4 lightningLocation;
 
 uniform float dryLapse;
+uniform float simHeightMeters; // simulation height in meters, for physical strike ranges
 
 #include "common.glsl"
 
@@ -162,6 +163,38 @@ float selectExternalStrikeTarget(vec2 originPos, float iter)
   return bestX;
 }
 
+// Superbolts travel 9–42 km laterally, measured along the shortest periodic
+// path. A narrow world cannot represent the full range; use its available span
+// and do not generate a superbolt at all if it cannot represent 9 km.
+float superboltWorldWidthMeters()
+{
+  return simHeightMeters * resolution.x / max(resolution.y, 1.0);
+}
+
+float selectSuperboltStrikeTarget(vec2 originPos, float iter)
+{
+  float widthMeters = superboltWorldWidthMeters();
+  float minDx = 9000.0 / widthMeters;
+  float maxDx = min(42000.0 / widthMeters, 0.4999);
+  float yMid = clamp(originPos.y * 0.55, 0.08, 0.45);
+  float bestX = fract(originPos.x + minDx);
+  float bestScore = 1e9;
+  for (int k = 0; k < 6; k++) {
+    float rDist = random2d(vec2(originPos.x * 23.7 + float(k) * 11.3,
+                                originPos.y * 17.9 + iter * 2.13 + float(k) * 3.7));
+    float dx = mix(minDx, maxDx, rDist);
+    float side = ((k % 2) == 0) ? 1.0 : -1.0;
+    float cx = fract(originPos.x + side * dx);
+    float tieBias = 0.02 * random2d(vec2(originPos.x * 17.3 + float(k) * 5.7, iter * 1.9 + float(k)));
+    float score = stormScoreAt(cx, yMid) + tieBias;
+    if (score < bestScore) {
+      bestScore = score;
+      bestX = cx;
+    }
+  }
+  return bestX;
+}
+
 // Probe waterTex laterally on both sides and vertically across storm decks to
 // find a distinct cloud cell or anvil deck target for cloud-to-cloud (CC)
 // lightning, favoring separated pockets with clearer air in between so the
@@ -238,7 +271,7 @@ vec3 selectCloudToCloudTarget(vec2 originPos, float iter)
 void main()
 {
   int slot = int(gl_FragCoord.x); // pixel centres land on 0.5, 1.5, ... -> slots 0..LIGHTNING_SLOTS-1
-  int row = int(gl_FragCoord.y);  // row 0: (groundOrTargetX, originY, iter, intensity); row 1: meta (originX, type, targetY, 0)
+  int row = int(gl_FragCoord.y);  // row 0: (groundOrTargetX, originY, iter, intensity); row 1: meta (originX, type, targetY, superbolt flag)
   vec4 previous = texelFetch(lightningDataTex, ivec2(slot, row), 0);
 
   // A precipitation particle writes a new strike into pixel (1, 0) of the
@@ -298,14 +331,23 @@ void main()
                               originTempK < CtoK(-25.0) &&
                               random2d(vec2(originX * 31.7 + incoming.y * 59.3, iterNum * 0.73)) < posChance;
     if (isExternalPositive) {
+      // Roll only for external positive CG. Worlds narrower than 18 km cannot
+      // represent a 9 km shortest periodic path and keep ordinary external CG.
+      bool isSuperboltExt = superboltWorldWidthMeters() * 0.4999 >= 9000.0 &&
+        random2d(vec2(originX * 89.3 + incoming.y * 47.1, iterNum * 1.13)) < 0.072;
       vec4 extStrike = incoming;
-      extStrike.x = selectExternalStrikeTarget(vec2(originX, incoming.y), iterNum);
+      extStrike.x = isSuperboltExt
+        ? selectSuperboltStrikeTarget(vec2(originX, incoming.y), iterNum)
+        : selectExternalStrikeTarget(vec2(originX, incoming.y), iterNum);
       // Encode external positive CG in (4.5, 5.4] so lightningFlickers() selects
       // a single return stroke (0 restrikes most of the time, rare 1 restroke)
       // while remaining bounded well inside the maximum slot lifetime.
       extStrike[INTENSITY] = clamp(4.6 + (incoming[INTENSITY] - 0.75) * 0.25, 4.6, 5.4);
-      extStrike = attractToRod(extStrike);
-      bool isSuperboltExt = random2d(vec2(extStrike.x * 89.3 + incoming.y * 47.1, iterNum * 1.13)) < 0.072;
+      vec4 rodStrike = attractToRod(extStrike);
+      float rodRangeMeters = wrappedHorizontalDist(originX, rodStrike.x) * superboltWorldWidthMeters();
+      // Do not let rod attraction move a superbolt outside its allowed range.
+      if (!isSuperboltExt || (rodRangeMeters >= 9000.0 && rodRangeMeters <= 42000.0))
+        extStrike = rodStrike;
       result = (row == 0) ? extStrike : vec4(originX, 1.0, 0.0, isSuperboltExt ? 1.0 : 0.0);
     } else {
       bool cgTriggerNearRod = incoming[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY &&
@@ -339,10 +381,7 @@ void main()
           normalStrike[INTENSITY] = clamp(max(normalStrike[INTENSITY], 0.88), 0.88, LIGHTNING_IC_MAX_INTENSITY);
           result = (row == 0) ? normalStrike : vec4(originX, 4.0, 0.0, 0.0);
         } else {
-          // 7.2% chance for a ground-reaching CG strike to trigger as a superbolt positive CG (meta.w = 1.0).
-          bool isSuperboltCG = !isNormalIC &&
-                               random2d(vec2(normalStrike.x * 89.3 + incoming.y * 47.1, iterNum * 1.13)) < 0.072;
-          result = (row == 0) ? normalStrike : vec4(originX, 0.0, 0.0, isSuperboltCG ? 1.0 : 0.0);
+          result = (row == 0) ? normalStrike : vec4(originX, 0.0, 0.0, 0.0);
         }
       }
     }

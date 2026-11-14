@@ -280,7 +280,7 @@ const softHdrClamp = (value) => {
   check('a cloud-to-ground stroke lights the clouds around it',
     onLift === 0.004 &&
     /lightningOnLight = lightningOnLightBrightness \/ \(pow\(length\(dist\), 2\.\) \+ 0\.03\);/.test(displayShader) &&
-    /onLight \+= vec3\(lightningOnLight\)/.test(displayShader),
+    /onLight \+= lightningIlluminationTint \* lightningOnLight/.test(displayShader),
     'the tight lobe has to sit on the channel it came from');
   check('there is no second, wide lobe any more',
     !/lightningSkyLightBrightness/.test(displayShader) && !/distanceSquared/.test(displayShader),
@@ -300,7 +300,7 @@ check('rod snaps are gated to cloud-to-ground strikes and attract both normal -C
   /float wrappedHorizontalDist\(/.test(locationShader) &&
   /float rodEffectiveRadius\(/.test(locationShader) &&
   /bool hasNearbyLightningRod\(/.test(locationShader) &&
-  /extStrike = attractToRod\(extStrike\);/.test(locationShader) &&
+  /vec4 rodStrike = attractToRod\(extStrike\);/.test(locationShader) &&
   /vec4 normalStrike = attractToRod\(incoming\);/.test(locationShader));
 
 const commonDisplay = fs.readFileSync(path.join(ROOT, 'shaders', 'commonDisplay.glsl'), 'utf8');
