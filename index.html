@@ -19,7 +19,7 @@
     <script type="text/javascript" src="libraries/pako.min.js"></script>
     <script type="text/javascript" src="libraries/chart.js"></script>
     <script type="text/javascript" src="libraries/chartjs-adapter-date-fns.js"></script>
-    <script type="text/javascript" src="app.js?v=2026-12-06.34"></script>
+    <script type="text/javascript" src="app.js?v=2026-12-06.35"></script>
     <script type="text/javascript" src="pwa.js"></script>
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico">
     <style>
@@ -734,6 +734,72 @@
             margin-left: -1px;
             margin-top: 6px;
         }
+
+        /* In-simulation option list: no native select popup, including in fullscreen. */
+        .dg.ac .dg.main .c .sim-option-trigger {
+            box-sizing: border-box;
+            width: 100%;
+            height: 25px;
+            margin-top: 3px;
+            padding: 0 24px 0 8px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            text-align: left;
+            color: #f4f8ff;
+            background: rgba(8, 12, 18, 0.92);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 5px;
+            cursor: pointer;
+            font: inherit;
+            line-height: 23px;
+            position: relative;
+        }
+        .dg.ac .dg.main .c .sim-option-trigger::after {
+            content: "▾";
+            position: absolute;
+            right: 8px;
+            color: #9ed9ff;
+        }
+        .dg.ac .dg.main .c .sim-option-trigger:hover,
+        .dg.ac .dg.main .c .sim-option-trigger:focus-visible {
+            outline: 2px solid #8cc9ff;
+            outline-offset: 1px;
+        }
+        .sim-option-menu {
+            position: fixed;
+            z-index: 100000;
+            overflow-y: auto;
+            box-sizing: border-box;
+            padding: 5px;
+            background: #101b2a;
+            border: 1px solid #53738d;
+            border-radius: 7px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+            font: 13px/1.3 Arial, sans-serif;
+        }
+        .sim-option-item {
+            display: block;
+            width: 100%;
+            padding: 8px 10px;
+            color: #eef7ff;
+            background: transparent;
+            border: 0;
+            border-radius: 4px;
+            text-align: left;
+            font: inherit;
+            cursor: pointer;
+        }
+        .sim-option-item:hover, .sim-option-item:focus-visible {
+            background: #284760;
+            outline: 2px solid #8cc9ff;
+            outline-offset: -2px;
+        }
+        .sim-option-item[aria-selected="true"] {
+            background: #244b5e;
+            color: #aaf5e7;
+        }
+        .sim-option-item:disabled { opacity: 0.45; cursor: default; }
 
         .dg.ac .dg.main .c select {
             background: rgba(8, 12, 18, 0.92);

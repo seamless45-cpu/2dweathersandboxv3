@@ -71,9 +71,9 @@ check('rod types are uploaded to both shader programs with dirty tracking',
   /rodTypes\[0\]/.test(app) && /gl\.uniform1fv\(locations.types, rodTypeData\)/.test(app) &&
   /uploadLightningRodUniforms\(lightningLocationProgram\)/.test(app) && /uploadLightningRodUniforms\(realisticDisplayProgram\)/.test(app));
 check('super rod extends reach, guaranteed capture, visible height, tip termination and preview',
-  /rodTypes\[rodIdx\] > 0\.5 \? 2\.0 : 1\.0/.test(location) &&
+  /rodTypes\[rodIdx\] > 0\.5 \? 10\.0 : 1\.0/.test(location) &&
   /rodTypes\[nearestRod\] > 0\.5 \? 0\.70 : 0\.35/.test(location) &&
-  /min\(rodAttractRadius \* reachMultiplier \* heightFactor \* currentFactor, 0\.499\)/.test(location) &&
+  /rodAttractRadius \* reachMultiplier \* heightFactor \* currentFactor/.test(location) &&
   /rodHeight \* \(rodTypes\[i\] > 0\.5 \? 1\.8 : 1\.0\)/.test(display) &&
   /float thisRodHeight = rodHeight \* \(isSuperRod \? 1\.8 : 1\.0\)/.test(display) &&
   /cursor\.w >= 5\.0/.test(cursor));
@@ -87,7 +87,7 @@ check('full slots cause a retry next frame, not lost clicks or overwritten event
   /if \(acceptedSlot >= 0\)\s*\{\s*pendingArtificialLightning\.shift\(\)/.test(app) &&
   /slot == freeSlot/.test(location) && /lightningSlotEnd\(data, meta\)/.test(location));
 check('manual strike pass runs when precipitation is disabled and acknowledges once',
-  /if \(guiControls.enablePrecipitation \|\| pendingArtificialLightning.length > 0\)/.test(app) &&
+  /if \(guiControls.enablePrecipitation \|\| pendingArtificialLightning.length > 0 \|\|/.test(app) &&
   /gl\.readPixels\(0, 0, numLightningSlots, 1, gl\.RGBA, gl\.FLOAT, manualSlotReadback\)/.test(app) &&
   /countedSlotStartIter\[acceptedSlot\] = iterNum/.test(app) && /soundSystem\.soundThunder\(targetX, manualSlotReadback/.test(app));
 check('artificial channel and rod share the same extended animation clock and lifetime',

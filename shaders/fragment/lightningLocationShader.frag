@@ -46,8 +46,8 @@ float rodEffectiveRadius(int rodIdx, float intensity)
   float effectiveHeight = rodHeight * (rodTypes[rodIdx] > 0.5 ? 1.8 : 1.0);
   float heightFactor = 1.0 + clamp(rodPositions[rodIdx].y * 1.2 + (effectiveHeight / max(resolution.y, 1.0)) * 3.0, 0.0, 0.45);
   float currentFactor = clamp(0.85 + 0.12 * intensity, 0.90, 1.45);
-  float reachMultiplier = rodTypes[rodIdx] > 0.5 ? 2.0 : 1.0;
-  return min(rodAttractRadius * reachMultiplier * heightFactor * currentFactor, 0.499);
+  float reachMultiplier = rodTypes[rodIdx] > 0.5 ? 10.0 : 1.0;
+  return rodAttractRadius * reachMultiplier * heightFactor * currentFactor;
 }
 
 bool hasNearbyLightningRod(float strikeX, float intensity)
@@ -214,6 +214,26 @@ float findStormCloudTop(vec2 origin)
   return top;
 }
 
+// Upward leaders originate at a super rod when a cold, electrically active
+// cloud is directly overhead. Cloud/precipitation is a proxy for charge: the
+// weather solver has no electric-field model. Returns the first cloud height.
+float upwardLeaderCloudTarget(vec2 rod, float tipY)
+{
+  float minY = tipY + 0.05;
+  if (minY >= 0.98)
+    return -1.0;
+  for (int i = 0; i < 16; i++) {
+    float y = mix(minY, 0.98, float(i) / 15.0);
+    vec2 pos = vec2(rod.x, y);
+    vec4 water = texture(waterTex, pos);
+    float temp = potentialToRealT(texture(baseTex, pos)[TEMPERATURE], y);
+    if (water[CLOUD] >= 0.15 && water[CLOUD] + water[PRECIPITATION] >= 0.72 &&
+        temp > 50.0 && temp < CtoK(0.0))
+      return y;
+  }
+  return -1.0;
+}
+
 // Probe waterTex laterally on both sides and vertically across storm decks to
 // find a distinct cloud cell or anvil deck target for cloud-to-cloud (CC)
 // lightning, favoring separated pockets with clearer air in between so the
@@ -325,6 +345,28 @@ void main()
     hasNewStrike = true;
   }
 
+  // A rod-origin event competes for the same slot as natural/manual strikes,
+  // never overwrites one and never reclassifies a CG strike as upward lightning.
+  bool isGroundInitiated = false;
+  float upwardTipY = 0.0;
+  if (!hasNewStrike && iterNum > 0.0 && mod(iterNum, 60.0) < 0.5) {
+    for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
+      if (i >= rodCount)
+        break;
+      if (rodTypes[i] < 0.5)
+        continue;
+      float tipY = rodPositions[i].y + rodHeight * 1.8 / max(resolution.y, 1.0);
+      float targetY = upwardLeaderCloudTarget(rodPositions[i], tipY);
+      if (targetY > tipY && random2d(vec2(rodPositions[i].x * 93.1 + float(i) * 7.7, iterNum * 1.19)) < 0.08) {
+        incoming = vec4(rodPositions[i].x, targetY, iterNum, 2.2);
+        upwardTipY = tipY;
+        isGroundInitiated = true;
+        hasNewStrike = true;
+        break;
+      }
+    }
+  }
+
   bool duplicate = false;
   int freeSlot = -1;
   if (hasNewStrike) {
@@ -344,7 +386,10 @@ void main()
   vec4 result = previous;
   if (hasNewStrike && !duplicate && slot == freeSlot) {
     float originX = fract(incoming.x);
-    if (isArtificial) {
+    if (isGroundInitiated) {
+      // type 5: upward GC, .z stores the originating rod tip.
+      result = (row == 0) ? incoming : vec4(originX, 5.0, upwardTipY, 0.0);
+    } else if (isArtificial) {
       // Artificial lightning is an ordinary CG stroke, subject to rod capture;
       // it does not roll for naturally occurring exotic lightning.
       vec4 forcedStrike = attractToRod(incoming);

@@ -609,7 +609,7 @@ var applySuperSharpDetail = function() {};
 function setBrushCursor(program, cursorType, cursorX, cursorY)
 {
   cursorX = guiControls.wrapHorizontally ? mod(cursorX, 1.0) : clamp(cursorX, 0.0, 1.0);
-  const cursorRadius = cursorType >= 4.0 ? LIGHTNING_ROD_ATTRACT_RADIUS * (cursorType >= 5.0 ? SUPER_LIGHTNING_ROD_REACH_MULT : 1.0) : guiControls.brushSize * 0.5;
+  const cursorRadius = cursorType >= 4.0 ? Math.min(0.5, LIGHTNING_ROD_ATTRACT_RADIUS * (cursorType >= 5.0 ? SUPER_LIGHTNING_ROD_REACH_MULT : 1.0)) : guiControls.brushSize * 0.5;
   gl.uniform4f(getUniformLoc(program, 'cursor'), cursorX, cursorY, cursorRadius, cursorType);
   gl.uniform1f(getUniformLoc(program, 'wholeWidthBrushWidth'), guiControls.wholeWidthBrushWidth * 0.01);
   gl.uniform1f(getUniformLoc(program, 'windPushWidth'), guiControls.wholeWidthBrushWidth * 0.01);
@@ -2082,7 +2082,7 @@ let lightningRodsVersion = 0;
 let lightningRodCaptures = 0;
 const MAX_LIGHTNING_RODS = 12;
 const LIGHTNING_ROD_ATTRACT_RADIUS = 0.11;
-const SUPER_LIGHTNING_ROD_REACH_MULT = 2.0;
+const SUPER_LIGHTNING_ROD_REACH_MULT = 10.0;
 const lightningRodStatus = { placed : '0 / ' + MAX_LIGHTNING_RODS + ' (0 hits)' };
 
 function updateLightningRodStatus()
@@ -2367,6 +2367,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const artificialLightningStatus = { status : 'Ready' };
 
   let sliderGradientObserver;
+  let cleanupOptionLists;
   let loadedShaderCount = 0;
   const totalShaderCount = 30;
 
@@ -4799,38 +4800,206 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     foreground.style.backgroundColor = '#ffffff';
   }
 
-  function setupDropdownWheelSelection()
+  // Keep dat.GUI's select as the value/controller adapter, but present our own
+  // in-page listbox rather than opening an OS/browser-native option popup.
+  function setupInSimOptionLists(gui)
   {
-    datGui.domElement.querySelectorAll('select').forEach(function(select) {
-      select.addEventListener('wheel', function(event) {
-        if (event.deltaY == 0)
-          return;
-        event.preventDefault();
-        event.stopPropagation();
+    let active = null;
+    let idCounter = 0;
+    const controllerRestorers = [];
+    const elements = [];
 
-        const direction = event.deltaY > 0 ? 1 : -1;
-        let nextIndex = select.selectedIndex;
-        for (let attempt = 0; attempt < select.options.length; attempt++) {
-          nextIndex = (nextIndex + direction + select.options.length) % select.options.length;
-          if (!select.options[nextIndex].disabled)
-            break;
+    function closeList(restoreFocus = false)
+    {
+      if (!active)
+        return;
+      const old = active;
+      active = null;
+      old.trigger.setAttribute('aria-expanded', 'false');
+      old.menu.remove();
+      if (restoreFocus && old.trigger.isConnected)
+        old.trigger.focus();
+    }
+
+    function onOutside(event)
+    {
+      if (active && !active.menu.contains(event.target) && !active.trigger.contains(event.target))
+        closeList();
+    }
+    function onScroll(event)
+    {
+      if (active && !(event.target instanceof Node && active.menu.contains(event.target)))
+        closeList();
+    }
+    const onResize = () => closeList();
+    const onGuiKey = event => { if (event.code === 'KeyH') closeList(); };
+    document.addEventListener('keydown', onGuiKey);
+    document.addEventListener('pointerdown', onOutside, true);
+    document.addEventListener('fullscreenchange', onResize);
+    window.addEventListener('resize', onResize);
+    window.addEventListener('scroll', onScroll, true);
+
+    function setupController(controller)
+    {
+      const select = controller.__select;
+      if (!select || !select.options)
+        return;
+      const trigger = document.createElement('button');
+      trigger.type = 'button';
+      trigger.className = 'sim-option-trigger';
+      trigger.setAttribute('aria-haspopup', 'listbox');
+      trigger.setAttribute('aria-expanded', 'false');
+      const row = select.closest('li');
+      const label = row && row.querySelector('.property-name');
+      select.style.display = 'none';
+      select.setAttribute('aria-hidden', 'true');
+      select.tabIndex = -1;
+      select.parentElement.appendChild(trigger);
+      elements.push(trigger);
+
+      const sync = () => {
+        const selected = select.options[select.selectedIndex];
+        trigger.textContent = selected ? selected.textContent : 'Select';
+        trigger.setAttribute('aria-label', (label ? label.textContent.trim() + ': ' : '') + trigger.textContent);
+        trigger.disabled = select.disabled;
+        if (active && active.trigger === trigger) {
+          Array.from(active.menu.children).forEach((item, i) =>
+            item.setAttribute('aria-selected', i === select.selectedIndex ? 'true' : 'false'));
         }
-        if (nextIndex == select.selectedIndex || select.options[nextIndex].disabled)
-          return;
+      };
+      const originalUpdate = controller.updateDisplay;
+      controller.updateDisplay = function(...args) {
+        const result = originalUpdate.apply(this, args);
+        sync();
+        return result;
+      };
+      controllerRestorers.push(() => { controller.updateDisplay = originalUpdate; });
+      select.addEventListener('change', sync);
+      sync();
 
-        select.selectedIndex = nextIndex;
-        select.dispatchEvent(new Event('input', {bubbles: true}));
-        select.dispatchEvent(new Event('change', {bubbles: true}));
-        const row = select.closest('li');
-        row.classList.remove('selection-wheel-change');
-        void row.offsetWidth;
-        row.classList.add('selection-wheel-change');
+      function choose(index)
+      {
+        if (!select.options[index] || select.options[index].disabled)
+          return;
+        if (index !== select.selectedIndex) {
+          select.selectedIndex = index;
+          select.dispatchEvent(new Event('input', {bubbles: true}));
+          select.dispatchEvent(new Event('change', {bubbles: true}));
+        }
+        sync();
+        closeList(true);
+      }
+
+      function openList()
+      {
+        if (active && active.trigger === trigger) {
+          closeList();
+          return;
+        }
+        closeList();
+        const menu = document.createElement('div');
+        menu.className = 'sim-option-menu';
+        menu.id = 'sim-option-list-' + (++idCounter);
+        menu.setAttribute('role', 'listbox');
+        menu.setAttribute('aria-label', label ? label.textContent.trim() : 'Options');
+        trigger.setAttribute('aria-controls', menu.id);
+        for (let i = 0; i < select.options.length; i++) {
+          const option = select.options[i];
+          const item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'sim-option-item';
+          item.textContent = option.textContent;
+          item.disabled = option.disabled;
+          item.setAttribute('role', 'option');
+          item.setAttribute('aria-selected', i === select.selectedIndex ? 'true' : 'false');
+          item.addEventListener('click', () => choose(i));
+          menu.appendChild(item);
+        }
+        document.body.appendChild(menu);
+        active = {trigger, menu};
+        const rect = trigger.getBoundingClientRect();
+        const width = Math.min(Math.max(rect.width, 180), Math.max(120, window.innerWidth - 16));
+        const availableBelow = window.innerHeight - rect.bottom - 8;
+        const availableAbove = rect.top - 8;
+        const openAbove = availableBelow < 180 && availableAbove > availableBelow;
+        const available = Math.max(60, openAbove ? availableAbove : availableBelow);
+        menu.style.width = width + 'px';
+        menu.style.maxHeight = Math.min(300, available) + 'px';
+        menu.style.left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)) + 'px';
+        if (openAbove)
+          menu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+        else
+          menu.style.top = (rect.bottom + 4) + 'px';
+        trigger.setAttribute('aria-expanded', 'true');
+        const selected = menu.children[select.selectedIndex];
+        if (selected && !selected.disabled)
+          selected.focus();
+        else {
+          const first = menu.querySelector('button:not(:disabled)');
+          if (first) first.focus();
+        }
+        menu.addEventListener('keydown', event => {
+          if (event.key === 'Escape') {
+            event.preventDefault(); event.stopPropagation(); closeList(true); return;
+          }
+          if (event.key === 'Tab') { closeList(); return; }
+          if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key))
+            return;
+          event.preventDefault(); event.stopPropagation();
+          const items = Array.from(menu.children);
+          let i = items.indexOf(document.activeElement);
+          if (event.key === 'Home') i = -1;
+          else if (event.key === 'End') i = items.length;
+          const direction = event.key === 'ArrowUp' || event.key === 'End' ? -1 : 1;
+          for (let tries = 0; tries < items.length; tries++) {
+            i = (i + direction + items.length) % items.length;
+            if (!items[i].disabled) { items[i].focus(); break; }
+          }
+        });
+      }
+      trigger.addEventListener('click', openList);
+      trigger.addEventListener('keydown', event => {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault(); event.stopPropagation(); openList();
+        } else if (event.key === 'Escape' && active && active.trigger === trigger) {
+          event.preventDefault(); event.stopPropagation(); closeList(true);
+        }
+      });
+      trigger.addEventListener('wheel', event => {
+        if (!event.deltaY || !select.options.length)
+          return;
+        event.preventDefault(); event.stopPropagation();
+        const direction = event.deltaY > 0 ? 1 : -1;
+        let index = select.selectedIndex;
+        for (let tries = 0; tries < select.options.length; tries++) {
+          index = (index + direction + select.options.length) % select.options.length;
+          if (!select.options[index].disabled) { choose(index); break; }
+        }
       }, {passive: false});
-    });
+    }
+
+    function visit(folder)
+    {
+      folder.__controllers.forEach(setupController);
+      Object.values(folder.__folders).forEach(visit);
+    }
+    visit(gui);
+    return function cleanupOptionLists() {
+      closeList();
+      document.removeEventListener('keydown', onGuiKey);
+      document.removeEventListener('pointerdown', onOutside, true);
+      document.removeEventListener('fullscreenchange', onResize);
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('scroll', onScroll, true);
+      controllerRestorers.forEach(restore => restore());
+      elements.forEach(element => element.remove());
+    };
   }
 
   function setupDatGui(strGuiControls)
   {
+    if (cleanupOptionLists)
+      cleanupOptionLists();
     if (sliderGradientObserver)
       sliderGradientObserver.disconnect();
 
@@ -4999,7 +5168,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     const lightningRodInput = lightningRodController.domElement.querySelector('input');
     if (lightningRodInput) {
       lightningRodInput.readOnly = true;
-      lightningRodInput.title = 'Pick Lightning Rod or Super Lightning Rod and click ground; Shift-click or right-click either type to remove it. Super rods have twice the base reach.';
+      lightningRodInput.title = 'Pick Lightning Rod or Super Lightning Rod and click ground; Shift-click or right-click either type to remove it. Super rods have ten times the attraction and can initiate upward lightning under storms.';
     }
     UI_folder.add({ clearLightningRods : function() {
                       lightningRods = [];
@@ -5681,7 +5850,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     });
     datGui.width = 400;
 
-    setupDropdownWheelSelection();
+    cleanupOptionLists = setupInSimOptionLists(datGui);
 
     const sliderForegrounds = datGui.domElement.querySelectorAll('.slider-fg');
     sliderForegrounds.forEach(updateSliderGradient);
@@ -6572,7 +6741,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   document.addEventListener('keydown', (event) => {
     if (event.target instanceof HTMLElement &&
-        event.target.closest('input, textarea, select, [contenteditable="true"]'))
+        event.target.closest('input, textarea, select, button, [role="listbox"], [contenteditable="true"]'))
       return;
 
     if (event.code == 'ControlLeft') {
@@ -6786,8 +6955,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.34'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.34')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.35'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.35')
   ]);
 
   const [
@@ -7745,7 +7914,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.34');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.35');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8261,6 +8430,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     let artificialAttemptedThisFrame = false;
+    const hasSuperLightningRods = lightningRods.some(rod => rod.isSuper);
     let camPanSpeed = guiControls.camSpeed;
 
     if (rightCtrlPressed) {
@@ -8573,7 +8743,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             }
 
             // The slot pass also runs for manually queued strikes when rain is off.
-            if (guiControls.enablePrecipitation || pendingArtificialLightning.length > 0) {
+            if (guiControls.enablePrecipitation || pendingArtificialLightning.length > 0 ||
+                (hasSuperLightningRods && iterNum % 60 === 0)) {
               // Strike slot manager: a new strike takes a free slot and every
               // running strike keeps its own until its animation is over, so
               // strikes never cut each other short. Ping-pong the slot array.
@@ -8658,12 +8829,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         // hearing thunder - and no strike is missed, because a strike is found by
         // comparing its start iteration against the last one we heard, not against
         // the previous frame.
-        const lightningReadbackTick = (guiControls.enablePrecipitation || iterNum <= manualLightningActiveUntil) &&
+        const lightningReadbackTick = (guiControls.enablePrecipitation || hasSuperLightningRods || iterNum <= manualLightningActiveUntil) &&
                                       iterNum != lastSuperboltCheckIteration &&
                                       (superboltCheckFrame++ % 3) === 0;
         const lightningSoundDue = guiControls.sound && lightningReadbackTick;
         const superboltCheckDue = lightningReadbackTick;
-        const rodCaptureCheckDue = lightningRods.length > 0 && (guiControls.enablePrecipitation || iterNum <= manualLightningActiveUntil) &&
+        const rodCaptureCheckDue = lightningRods.length > 0 && (guiControls.enablePrecipitation || hasSuperLightningRods || iterNum <= manualLightningActiveUntil) &&
                                    iterNum != lastRodCaptureCheckIteration &&
                                    (rodCaptureFrame++ % 12) === 0;
         if (lightningSoundDue || rodCaptureCheckDue || superboltCheckDue) {
@@ -8734,7 +8905,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               const targetY = lightningDataValues[metaOffset + 2];
               const isSuperbolt = lightningDataValues[metaOffset + 3] >= 0.5;
               const superboltSoundMult = isSuperbolt ? 1.5 : 1.0;
-              if (metaType >= 3.5) {
+              if (Math.abs(metaType - 5.0) < 0.25) {
+                // Upward ground-to-cloud lightning still produces CG thunder.
+                soundSystem.soundThunder(targetX, originY, Math.pow(strikeIntensity, 2.0));
+              } else if (metaType >= 3.5) {
                 // Positive intra-cloud flash: strong cloud rumble at the origin cell via cc*.mp3.
                 soundSystem.soundThunder(targetX, originY, Math.min(Math.pow(strikeIntensity, 2.0), 1.0));
               } else if (metaType >= 1.5) {
@@ -8754,7 +8928,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               lastLightningSoundIteration = newestIteration;
             }
           }
-        } else if (!guiControls.sound || (!guiControls.enablePrecipitation && iterNum > manualLightningActiveUntil)) {
+        } else if (!guiControls.sound || (!guiControls.enablePrecipitation && !hasSuperLightningRods && iterNum > manualLightningActiveUntil)) {
           lastLightningSoundIteration = iterNum;
           lastLightningSoundCheckIteration = iterNum;
         }
@@ -9769,7 +9943,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.34');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.35');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
