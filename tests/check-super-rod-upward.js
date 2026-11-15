@@ -1,5 +1,5 @@
 'use strict';
-// Ground-to-cloud initiation, tenfold attraction, and slot/render integration.
+// Ground-to-cloud initiation, 2.5-fold attraction, and slot/render integration.
 const fs = require('fs');
 const path = require('path');
 const root = path.join(__dirname, '..');
@@ -11,17 +11,18 @@ const common = read('shaders/common.glsl');
 let passed = 0, failed = 0;
 function check(name, ok) { console.log((ok ? 'PASS ' : 'FAIL ') + name); if (ok) passed++; else failed++; }
 
-check('super rods scale the underlying attraction radius by ten, not the old two',
-  /const SUPER_LIGHTNING_ROD_REACH_MULT = 10\.0;/.test(app) &&
-  /rodTypes\[rodIdx\] > 0\.5 \? 10\.0 : 1\.0/.test(location) &&
-  /return rodAttractRadius \* reachMultiplier \* heightFactor \* currentFactor;/.test(location));
-// The shortest wrapped distance is <= half a world: retain the full strength
-// in the capture calculation but cap the visible preview to the whole domain.
+check('super rods scale base attraction radius by 2.5 while keeping height and current factors',
+  /const SUPER_LIGHTNING_ROD_REACH_MULT = 2\.5;/.test(app) &&
+  /rodTypes\[rodIdx\] > 0\.5 \? 2\.5 : 1\.0/.test(location) &&
+  /return rodAttractRadius \* reachMultiplier \* heightFactor \* currentFactor;/.test(location) &&
+  /cursorType >= 5\.0 \? SUPER_LIGHTNING_ROD_REACH_MULT : 1\.0/.test(app));
+// Preview shows base reach capped at half the wrapped world; actual capture
+// additionally depends on mast height and strike current.
 const wrapDist = (a, b) => Math.abs(((a - b + 1.5) % 1) - 0.5);
-const normalRadius = 0.11 * 1.1 * 1.1, superRadius = 0.11 * 10 * 1.1 * 1.1;
-check('tenfold strength covers the periodic domain, including its seam',
-  Math.abs(superRadius / normalRadius - 10) < 1e-12 && wrapDist(0.99, 0.01) < 0.021 &&
-  [0, 0.1, 0.25, 0.5].every(dx => dx / superRadius <= 0.70) &&
+const normalRadius = 0.11 * 1.1 * 1.1, superRadius = 0.11 * 2.5 * 1.1 * 1.1;
+check('2.5-fold base reach does not automatically cover the periodic domain',
+  Math.abs(superRadius / normalRadius - 2.5) < 1e-12 && superRadius < 0.5 &&
+  wrapDist(0.99, 0.01) < 0.021 && 0.5 > superRadius &&
   /Math\.min\(0\.5, LIGHTNING_ROD_ATTRACT_RADIUS/.test(app));
 check('superbolt attraction keeps its original 9–42 km ground range',
   /rodRangeMeters >= 9000\.0 && rodRangeMeters <= 42000\.0/.test(location));

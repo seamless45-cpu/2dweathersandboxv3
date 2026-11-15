@@ -691,8 +691,9 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
   return vec3(0.62, 0.76, 1.0) * glow * min(intensity, 30.0) * 250.0;
 }
 
-// Anvil crawlers are long, asymmetric, branching leaders travelling through
-// a broad shallow cloud deck, not a mirrored ladder. Coordinates are in km.
+// A stepped network spreads through the anvil: three independent leaders
+// advance outward, then fork from completed joints into smaller tributaries.
+// All coordinates are in km; the seeded geometry stays fixed during a flash.
 vec3 drawAnvilCrawler(vec2 origin, float top, float time)
 {
   float heightKm = cellHeight * resolution.y * 0.001;
@@ -702,39 +703,43 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time)
     return vec3(0.0);
   float glow = 0.0;
   float seed = random2d(origin * 91.7);
-  for (int lane = 0; lane < 4; lane++) {
+  for (int lane = 0; lane < 3; lane++) {
     float f = float(lane);
-    float side = lane < 2 ? -1.0 : 1.0;
-    float lengthKm = 9.0 + 9.0 * random2d(vec2(seed + f * 1.31, origin.x * 37.0));
-    float slope = (random2d(vec2(seed + f * 7.1, origin.y * 19.0)) - 0.58) * 1.8;
-    float progress = clamp((time - f * 0.10) * 1.15, 0.0, 1.0) * 8.0;
+    float side = lane == 0 ? -1.0 : 1.0;
+    float lengthKm = 11.0 + 8.0 * random2d(vec2(seed + f * 1.31, origin.x * 37.0));
+    float slope = (random2d(vec2(seed + f * 7.1, origin.y * 19.0)) - 0.5) * 2.2;
+    float progress = clamp((time - f * 0.13) * 0.8, 0.0, 1.0) * 10.0;
     vec2 prev = vec2(0.0, -0.55);
-    for (int i = 1; i <= 8; i++) {
+    for (int i = 1; i <= 10; i++) {
       float k = float(i);
       float n = random2d(vec2(seed * 11.0 + f * 3.7, k * 17.3 + origin.y));
-      vec2 next = vec2(side * lengthKm * k / 8.0,
-                       -0.55 + slope * k / 8.0 + (n - 0.5) * 1.35);
+      vec2 next = vec2(side * lengthKm * k / 10.0,
+                       -0.55 + slope * k / 10.0 + (n - 0.5) * 1.5);
       float segmentGrowth = clamp(progress - (k - 1.0), 0.0, 1.0);
       if (segmentGrowth > 0.0) {
-        vec2 liveEnd = mix(prev, next, segmentGrowth);
-        glow += channelGlow(p, prev, liveEnd, 0.055 + 0.01 * (1.0 - k / 8.0));
-        if (i >= 2 && mod(k + f, 2.0) < 0.5) {
-          float branchGrowth = clamp((segmentGrowth - 0.35) / 0.65, 0.0, 1.0);
-          vec2 fork = mix(prev, next, 0.35);
-          float forkDir = n > 0.45 ? -1.0 : 1.0;
-          vec2 forkEnd = fork + vec2(side * (1.5 + n * 2.2), forkDir * (0.8 + n * 1.4));
-          if (branchGrowth > 0.0) {
-            glow += channelGlow(p, fork, mix(fork, forkEnd, branchGrowth), 0.040) * 0.72;
-            vec2 tip = forkEnd + vec2(side * 1.1, forkDir * 0.75);
-            glow += channelGlow(p, mix(fork, forkEnd, 0.72), mix(mix(fork, forkEnd, 0.72), tip, branchGrowth), 0.028) * 0.38;
-          }
+        glow += channelGlow(p, prev, mix(prev, next, segmentGrowth), 0.055 - 0.018 * k / 10.0);
+      }
+      // A fork cannot start until its parent joint exists; its second twig
+      // similarly waits for the first segment, avoiding detached flashes.
+      if (i >= 2 && i <= 8 && mod(k + f, 3.0) < 0.5) {
+        float branchProgress = clamp(progress - k, 0.0, 2.0);
+        float forkDir = n > 0.5 ? 1.0 : -1.0;
+        vec2 forkEnd = next + vec2(side * (1.2 + n * 1.5), forkDir * (0.8 + n));
+        float firstGrowth = clamp(branchProgress, 0.0, 1.0);
+        float secondGrowth = clamp(branchProgress - 1.0, 0.0, 1.0);
+        if (firstGrowth > 0.0)
+          glow += channelGlow(p, next, mix(next, forkEnd, firstGrowth), 0.032) * 0.75;
+        if (secondGrowth > 0.0) {
+          vec2 twigEnd = forkEnd + vec2(side * 1.0, forkDir * 0.65);
+          glow += channelGlow(p, forkEnd, mix(forkEnd, twigEnd, secondGrowth), 0.022) * 0.48;
         }
       }
       prev = next;
     }
   }
-  float fade = 1.0 - smoothstep(1.3, 2.5, time);
-  return vec3(0.68, 0.78, 1.0) * min(glow, 2.0) * fade * 2500.0;
+  float fade = 1.0 - smoothstep(1.55, 2.5, time);
+  float pulse = 0.82 + 0.18 * sin(time * 17.0 + seed * 6.283);
+  return vec3(0.68, 0.78, 1.0) * min(glow, 2.0) * fade * pulse * 2500.0;
 }
 
 // Optical approximations of upper-atmospheric transients at physical altitudes.
