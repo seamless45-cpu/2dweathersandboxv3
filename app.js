@@ -2774,7 +2774,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         this.tarXpos = clamp(this.tarXpos, -0.99, 0.99);
     }
 
-    changeViewYpos(change) { this.tarYpos = clamp(this.tarYpos + change, -2.50, 0.50); }
+    changeViewYpos(change)
+    {
+      // Allow panning to 100 km for upper-atmospheric lightning, even when the
+      // simulated weather layer is shallow or the world is very narrow.
+      const upperSkyLimit = (1.0 - 2.0 * 100000.0 / guiControls.simHeight) / sim_aspect;
+      this.tarYpos = clamp(this.tarYpos + change, Math.min(-2.50, upperSkyLimit), 0.50);
+    }
 
     zoomAtMousePos(delta)
     {
@@ -6735,8 +6741,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.32'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.32')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.33'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.33')
   ]);
 
   const [
@@ -7691,7 +7697,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.32');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.33');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9666,7 +9672,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.32');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.33');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

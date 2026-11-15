@@ -440,9 +440,9 @@ function gaps(strikes) {
 
 /* ------------------------------------------------------------ 3. the wiring */
 
-check('the slot manager books a slot by that strike\'s own end',
-  /iterNum < strikeAnimEnd\(slotData\)/.test(precipitationVert) &&
-  /bool slotBusy\(vec4 data\)\s*\{\s*return data\[START_ITERNUM\] > 0\.0 && iterNum < strikeAnimEnd\(data\);\s*\}/.test(locationShader),
+check('the slot manager and precipitation agree on strike and optical effect lifetimes',
+  /iterNum < lightningSlotEnd\(slotData, slotMeta\)/.test(precipitationVert) &&
+  /bool slotBusy\(vec4 data, vec4 meta\)\s*\{\s*return data\[START_ITERNUM\] > 0\.0 && iterNum < lightningSlotEnd\(data, meta\);\s*\}/.test(locationShader),
   'the vertex shader and lightningLocationShader.frag have to agree on when a slot is free');
 check('no shader gates a running strike on the worst-case length any more',
   !/LIGHTNING_ANIM_ITERS/.test(displayShader) &&

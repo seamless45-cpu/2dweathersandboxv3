@@ -641,6 +641,110 @@ vec3 spectral_zucconi(float w)
 }
 
 
+// meta.w keeps superbolt in its integer part and four exactly representable
+// fractional bits for optical effects. Existing superbolt consumers still see
+// >= 0.5 only for the integer flag.
+bool hasOpticalEffect(float flags, float bit)
+{
+  return mod(floor(fract(flags) * 32.0 + 0.5) / bit, 2.0) >= 1.0;
+}
+
+float channelGlow(vec2 p, vec2 a, vec2 b, float width)
+{
+  vec2 ab = b - a;
+  float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 0.0001), 0.0, 1.0);
+  float d = length(p - (a + t * ab));
+  return exp(-d * d / (width * width));
+}
+
+// Branched, mostly horizontal channels along the upper cloud deck, in km.
+vec3 drawAnvilCrawler(vec2 origin, float top, float time)
+{
+  float heightKm = cellHeight * resolution.y * 0.001;
+  vec2 p = vec2((mod(texCoord.x - origin.x + 0.5, 1.0) - 0.5) * aspectRatios.x * heightKm,
+                texCoord.y * heightKm - top * heightKm);
+  if (abs(p.x) > 19.0 || abs(p.y) > 4.0 || time < 0.0 || time > 2.5)
+    return vec3(0.0);
+  float glow = 0.0;
+  float seed = random2d(origin * 91.7) * 6.28;
+  for (int sideIndex = 0; sideIndex < 2; sideIndex++) {
+    float side = sideIndex == 0 ? -1.0 : 1.0;
+    vec2 prev = vec2(0.0, -0.4);
+    for (int i = 1; i <= 6; i++) {
+      float k = float(i);
+      vec2 next = vec2(side * k * 2.5, -0.45 + 0.5 * sin(k * 1.3 + seed + side));
+      float progress = smoothstep(k / 6.0 - 0.22, k / 6.0, time * 0.8);
+      glow += channelGlow(p, prev, next, 0.10) * progress;
+      vec2 branchEnd = next + vec2(side * 1.7, -1.1 - 0.45 * sin(k + seed));
+      glow += 0.55 * channelGlow(p, mix(prev, next, 0.6), branchEnd, 0.075) * progress;
+      prev = next;
+    }
+  }
+  float fade = 1.0 - smoothstep(1.1, 2.5, time);
+  return vec3(0.63, 0.72, 1.0) * glow * fade * 2500.0;
+}
+
+// Optical approximations of upper-atmospheric transients at physical altitudes.
+// Time uses the existing lightning animation clock, not atmospheric dynamics.
+vec3 drawUpperAtmosphereLightning()
+{
+  float heightKm = cellHeight * resolution.y * 0.001;
+  float altitude = texCoord.y * heightKm;
+  if (altitude < 7.0 || altitude > 100.0)
+    return vec3(0.0);
+  vec3 light = vec3(0.0);
+  for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
+    vec4 data = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
+    if (data[START_ITERNUM] <= 0.0 || iterNum < data[START_ITERNUM])
+      continue;
+    vec4 meta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
+    if (iterNum >= lightningSlotEnd(data, meta))
+      continue;
+    float t = (iterNum - data[START_ITERNUM]) / 40.0;
+    if (t > 2.5)
+      continue;
+    float dx = (mod(texCoord.x - data.x + 0.5, 1.0) - 0.5) * aspectRatios.x * heightKm;
+    if (hasOpticalEffect(meta.w, 2.0) && altitude >= 45.0 && altitude <= 90.0 && abs(dx) < 14.0) {
+      // A delayed red sprite: diffuse upper body with fine downward tendrils.
+      float fade = smoothstep(0.15, 0.40, t) * (1.0 - smoothstep(1.1, 2.1, t));
+      float body = exp(-pow(dx / 4.3, 2.0) - pow((altitude - 76.0) / 7.0, 2.0));
+      float filaments = 0.0;
+      for (int i = 0; i < 7; i++) {
+        float k = float(i) - 3.0;
+        float wander = 0.45 * sin(altitude * 0.18 + k * 2.0 + data.x * 30.0);
+        float spread = k * mix(0.8, 2.2, clamp((75.0 - altitude) / 28.0, 0.0, 1.0));
+        float strand = exp(-pow((dx - spread - wander) / 0.22, 2.0));
+        filaments += strand * smoothstep(47.0 + abs(k) * 1.6, 55.0 + abs(k) * 1.6, altitude) * (1.0 - smoothstep(80.0, 87.0, altitude));
+      }
+      light += vec3(1.0, 0.045, 0.035) * (body * 5.0 + filaments * 9.0) * fade;
+    }
+    if (hasOpticalEffect(meta.w, 4.0)) {
+      // Blue jets rise from a cold convective cloud top and fan towards 40 km.
+      float baseKm = meta.z * heightKm;
+      if (altitude >= baseKm && altitude <= 43.0 && abs(dx) < 8.0) {
+        float progress = clamp((altitude - baseKm) / max(40.0 - baseKm, 1.0), 0.0, 1.0);
+        float fade = (1.0 - smoothstep(1.5, 2.5, t)) * (1.0 - smoothstep(t * 0.8 + 0.05, t * 0.8 + 0.25, progress));
+        float cone = exp(-pow(dx / (0.25 + progress * 2.8), 2.0)) * (1.0 - progress);
+        float streams = 0.0;
+        for (int i = -2; i <= 2; i++) {
+          float path = float(i) * progress * 1.2 + 0.16 * sin(altitude * 0.45 + float(i) * 2.0);
+          streams += exp(-pow((dx - path) / 0.16, 2.0));
+        }
+        light += vec3(0.05, 0.22, 1.0) * (cone * 3.0 + streams * 5.0) * fade;
+      }
+    }
+    if (hasOpticalEffect(meta.w, 8.0) && altitude >= 82.0 && altitude <= 98.0) {
+      // Cross-section of an expanding ionospheric ring, centred near 90 km.
+      float radius = mix(2.0, 65.0, clamp(t / 1.5, 0.0, 1.0));
+      float shell = exp(-pow((abs(dx) - radius) / 2.5, 2.0) - pow((altitude - 90.0) / 1.8, 2.0));
+      float fade = (1.0 - smoothstep(0.75, 1.6, t));
+      light += vec3(1.0, 0.13, 0.08) * shell * fade * 8.0;
+    }
+  }
+  return light;
+}
+
+
 vec4 computeAirColor(vec2 bndFragCoord)
 {
   shadowLight = minShadowLight;
@@ -722,8 +826,16 @@ vec4 computeAirColor(vec2 bndFragCoord)
     float lightningStartIterNum = lightningData[START_ITERNUM];
     if (lightningStartIterNum <= 0.0)
       continue;                                              // never used / released
-    // its own animation, not the longest one there can be: a flash is drawn for
-    // exactly as long as it has light (see strikeAnimEnd in common.glsl)
+    vec4 lightningMeta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
+    if (iterNum >= lightningStartIterNum && iterNum < lightningSlotEnd(lightningData, lightningMeta) &&
+        lightningData[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY && hasOpticalEffect(lightningMeta.w, 1.0)) {
+      float opticalTime = (iterNum - lightningStartIterNum) / 40.0;
+      vec3 crawler = drawAnvilCrawler(vec2(lightningMeta.x, lightningData.y), lightningMeta.z, opticalTime);
+      lightningBoltLight += crawler;
+      onLight += crawler * 0.0001;
+    }
+    // The parent channel retains its own animation even if an optical effect
+    // keeps the slot alive longer for visibility at high iteration rates.
     if (iterNum < lightningStartIterNum || iterNum >= strikeAnimEnd(lightningData))
       continue;
 
@@ -746,7 +858,6 @@ vec4 computeAirColor(vec2 bndFragCoord)
     // cloud's attenuation of the *light* at the end of this function, which is a
     // filter on how bright a channel seen through a cloud is, not a mask on whether
     // the channel exists.
-    vec4 lightningMeta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
     bool isFlash = lightningData[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY;
     bool isPositiveIC = isFlash && lightningMeta.y >= 3.5;
     bool isExternalPositive = !isFlash && abs(lightningMeta.y - 1.0) < 0.25;
@@ -863,12 +974,14 @@ void main()
   onLight = vec3(0.0);
 
   if (texCoord.y > 1.0) { // above simulation area
+    vec3 upperAtmosphereLight = drawUpperAtmosphereLightning();
     if (rodCount == 0) {
-      fragmentColor = vec4(0.0);
+      fragmentColor = vec4(softHdrClamp(upperAtmosphereLight), clamp(length(upperAtmosphereLight), 0.0, 1.0));
       drawCursor(cursor, view);
       return;
     }
     opacity = 0.0;
+    emittedLight += upperAtmosphereLight;
     lightIntensity = 0.0;
     shadowLight = minShadowLight;
   } else if (texCoord.y < 0.) { // < texelSize.y below simulation area

@@ -75,9 +75,9 @@ bool hasNearbyLightningRod(float strikeX, float intensity)
 // flash booked a slot for three or four times its own length, and a storm spent
 // most of its time with every slot booked and every new strike dropped.
 
-bool slotBusy(vec4 data)
+bool slotBusy(vec4 data, vec4 meta)
 {
-  return data[START_ITERNUM] > 0.0 && iterNum < strikeAnimEnd(data);
+  return data[START_ITERNUM] > 0.0 && iterNum < lightningSlotEnd(data, meta);
 }
 
 // Pull any CG strike (normal -CG or external +CG) onto the nearest reachable rod.
@@ -193,6 +193,19 @@ float selectSuperboltStrikeTarget(vec2 originPos, float iter)
     }
   }
   return bestX;
+}
+
+// Estimate the upper cloud edge above this lightning source. These are
+// diagnostics of modeled cloud water, not a separate upper-atmosphere model.
+float findStormCloudTop(vec2 origin)
+{
+  float top = origin.y;
+  for (int i = 0; i < 12; i++) {
+    float y = mix(origin.y, 0.995, float(i + 1) / 12.0);
+    if (texture(waterTex, vec2(origin.x, y))[CLOUD] > 0.02)
+      top = y;
+  }
+  return top;
 }
 
 // Probe waterTex laterally on both sides and vertically across storm decks to
@@ -311,7 +324,8 @@ void main()
       if (data[START_ITERNUM] > 0.0 &&
           abs(data[START_ITERNUM] - incoming[START_ITERNUM]) < 0.5)
         duplicate = true;
-      if (freeSlot < 0 && !slotBusy(data))
+      vec4 meta = texelFetch(lightningDataTex, ivec2(i, 1), 0);
+      if (freeSlot < 0 && !slotBusy(data, meta))
         freeSlot = i;
     }
   }
@@ -384,6 +398,36 @@ void main()
           result = (row == 0) ? normalStrike : vec4(originX, 0.0, 0.0, 0.0);
         }
       }
+    }
+
+    // Fractional bits of meta.w carry independent optical effects, leaving its
+    // integer bit for existing superbolts. Probabilities are per eligible stored
+    // lightning event (not per frame or per simulation cell).
+    if (row == 1) {
+      bool positiveCG = abs(result.y - 1.0) < 0.25;
+      bool negativeCG = abs(result.y) < 0.25 && incoming[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY;
+      bool intraCloud = incoming[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY &&
+                        (result.y < 0.25 || result.y >= 3.5);
+      float cloudTop = findStormCloudTop(vec2(fract(incoming.x), incoming.y));
+      float cloudTopMeters = cloudTop * simHeightMeters;
+      bool matureStorm = originTempK > 50.0 && originTempK < CtoK(-10.0) &&
+                         incoming.y * simHeightMeters >= 4000.0 && cloudTopMeters >= 7000.0 &&
+                         texture(waterTex, vec2(fract(incoming.x), incoming.y))[CLOUD] > 0.02;
+      float seedX = fract(incoming.x) * 73.1 + incoming.y * 29.9;
+      if (intraCloud && matureStorm) {
+        result.z = cloudTop; // free for IC: origin-to-anvil top, not a CC target
+        if (random2d(vec2(seedX + 11.7, iterNum * 1.71)) < 0.09)
+          result.w += 1.0 / 32.0; // anvil crawler
+        if (random2d(vec2(seedX + 31.3, iterNum * 2.11)) < 0.00025)
+          result.w += 4.0 / 32.0; // blue jet: 0.025% of eligible IC events
+      }
+      // Positive CG drives the mesospheric quasi-electrostatic field; intense
+      // CG of either polarity can radiate the EMP that produces an elve.
+      if (positiveCG && matureStorm && random2d(vec2(seedX + 47.9, iterNum * 2.73)) < 0.0005)
+        result.w += 2.0 / 32.0; // red sprite: 0.05% of eligible +CG events
+      if (matureStorm && (positiveCG || (negativeCG && incoming[INTENSITY] >= 2.0)) &&
+          random2d(vec2(seedX + 59.7, iterNum * 3.17)) < 0.00014)
+        result.w += 8.0 / 32.0; // elve: 0.014% of eligible energetic CG events
     }
   }
 

@@ -145,7 +145,8 @@ void main()
           bool lightningSlotFree = false;
           for (int i = 0; i < LIGHTNING_SLOTS; i++) {
             vec4 slotData = texelFetch(lightningDataTex, ivec2(i, 0), 0);
-            if (!(slotData[START_ITERNUM] > 0. && iterNum < strikeAnimEnd(slotData)))
+            vec4 slotMeta = texelFetch(lightningDataTex, ivec2(i, 1), 0);
+            if (!(slotData[START_ITERNUM] > 0. && iterNum < lightningSlotEnd(slotData, slotMeta)))
               lightningSlotFree = true;
           }
 
