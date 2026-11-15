@@ -88,7 +88,7 @@ check('lightningLocationShader.frag defines selectCloudToCloudTarget and both -C
 
 check('realisticDisplayShader.frag separates External +CG (meta.y == 1.0), -CC (2.0), and +CC (3.0)',
   /bool isExternalPositive = !isFlash && abs\(lightningMeta\.y - 1\.0\) < 0\.25;/.test(displayShader) &&
-  /bool isCloudToCloud = !isFlash && lightningMeta\.y >= 1\.5;/.test(displayShader) &&
+  /bool isCloudToCloud = !isFlash && lightningMeta\.y >= 1\.5 && !isGroundToCloud;/.test(displayShader) &&
   /bool isPositiveCC = isCloudToCloud && lightningMeta\.y >= 2\.5;/.test(displayShader) &&
   /vec3 displayCloudToCloudLightning\(/.test(displayShader),
   'all four lightning modes must dispatch cleanly without overlap');

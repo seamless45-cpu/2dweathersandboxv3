@@ -658,6 +658,39 @@ float channelGlow(vec2 p, vec2 a, vec2 b, float width)
   return exp(-d * d / (width * width));
 }
 
+// Rising ground-to-cloud leader, rooted at the actual super-rod tip. Fine
+// forks extend upward as the channel advances into the cold cloud.
+vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
+{
+  float heightKm = cellHeight * resolution.y * 0.001;
+  vec2 p = vec2((mod(texCoord.x - pos.x + 0.5, 1.0) - 0.5) * aspectRatios.x * heightKm,
+                (texCoord.y - tipY) * heightKm);
+  float span = max((pos.y - tipY) * heightKm, 0.05);
+  if (abs(p.x) > 3.5 || p.y < 0.0 || p.y > span + 1.0)
+    return vec3(0.0);
+  float growth = clamp(time * 1.3 + 0.08, 0.0, 1.0) * 9.0;
+  float glow = 0.0;
+  vec2 prev = vec2(0.0, 0.0);
+  float seed = random2d(pos * 81.3);
+  for (int i = 1; i <= 9; i++) {
+    float k = float(i);
+    float jitter = (random2d(vec2(seed + k * 1.37, pos.x * 22.7)) - 0.5) * 0.5;
+    vec2 next = vec2(jitter * sin(3.14159265 * k / 9.0), span * k / 9.0);
+    float segment = clamp(growth - (k - 1.0), 0.0, 1.0);
+    if (segment > 0.0) {
+      glow += channelGlow(p, prev, mix(prev, next, segment), 0.05);
+      if (i >= 3 && i <= 7 && mod(k, 2.0) > 0.5) {
+        vec2 forkStart = mix(prev, next, 0.5);
+        float side = mod(k, 4.0) < 2.0 ? -1.0 : 1.0;
+        vec2 forkEnd = forkStart + vec2(side * (0.6 + k * 0.08), span * 0.12);
+        glow += 0.55 * channelGlow(p, forkStart, mix(forkStart, forkEnd, segment), 0.035);
+      }
+    }
+    prev = next;
+  }
+  return vec3(0.62, 0.76, 1.0) * glow * min(intensity, 30.0) * 250.0;
+}
+
 // Anvil crawlers are long, asymmetric, branching leaders travelling through
 // a broad shallow cloud deck, not a mirrored ladder. Coordinates are in km.
 vec3 drawAnvilCrawler(vec2 origin, float top, float time)
@@ -856,14 +889,15 @@ vec4 computeAirColor(vec2 bndFragCoord)
     }
     // The parent channel retains its own animation even if an optical effect
     // keeps the slot alive longer for visibility at high iteration rates.
-    if (iterNum < lightningStartIterNum || (lightningMeta.z < -0.5
+    bool isGroundToCloud = abs(lightningMeta.y - 5.0) < 0.25;
+    if (iterNum < lightningStartIterNum || (lightningMeta.z < -0.5 || isGroundToCloud
         ? iterNum >= lightningSlotEnd(lightningData, lightningMeta)
         : iterNum >= strikeAnimEnd(lightningData)))
       continue;
 
     vec2 lightningPos = lightningData.xy;
-    float lightningTime = lightningMeta.z < -0.5
-      ? (iterNum - lightningStartIterNum) / 20.0 : calcLightningTime(lightningStartIterNum);
+    float lightningTime = isGroundToCloud ? (iterNum - lightningStartIterNum) / 40.0
+      : lightningMeta.z < -0.5 ? (iterNum - lightningStartIterNum) / 20.0 : calcLightningTime(lightningStartIterNum);
     // Every strike starts directly on the trigger iteration with zero fixed delay.
     float currentLightningIntensity = lightningIntensityOverTime(lightningTime, lightningPos, lightningData[INTENSITY]);
     if (currentLightningIntensity <= 0.0)
@@ -884,7 +918,7 @@ vec4 computeAirColor(vec2 bndFragCoord)
     bool isFlash = lightningData[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY;
     bool isPositiveIC = isFlash && lightningMeta.y >= 3.5;
     bool isExternalPositive = !isFlash && abs(lightningMeta.y - 1.0) < 0.25;
-    bool isCloudToCloud = !isFlash && lightningMeta.y >= 1.5;
+    bool isCloudToCloud = !isFlash && lightningMeta.y >= 1.5 && !isGroundToCloud;
     bool isPositiveCC = isCloudToCloud && lightningMeta.y >= 2.5;
     bool isSuperbolt = isExternalPositive && lightningMeta.w >= 0.5;
     const float superboltBrightnessMult = 12.0;
@@ -910,7 +944,9 @@ vec4 computeAirColor(vec2 bndFragCoord)
     float extBaseIntensity = clamp(mix(1.8, 3.4, (lightningData[INTENSITY] - 4.6) / 0.8), 1.8, 3.4);
     float extIntensityGain = pow(extBaseIntensity / max(lightningData[INTENSITY], 1.0), 2.0);
     float extCurve = currentLightningIntensity * extIntensityGain * extTailFade;
-    if (isExternalPositive) {
+    if (isGroundToCloud) {
+      lightningBoltLight += displayGroundToCloud(lightningPos, lightningMeta.z, lightningTime, currentLightningIntensity);
+    } else if (isExternalPositive) {
       vec3 prevBoltLight = lightningBoltLight;
       lightningBoltLight += displayExternalLightning(lightningPos, lightningMeta.x, effectiveLightningTime, extCurve,
                                                      isSuperbolt ? superboltColor : positiveLightningCol);
@@ -940,6 +976,10 @@ vec4 computeAirColor(vec2 bndFragCoord)
       lightningOnLight = lightningOnLightBrightness * 2.0 / (pow(length(flashDist) * 0.5, 2.) + 0.03);
       if (isPositiveIC)
         lightningOnLight *= 1.5;
+    } else if (isGroundToCloud) {
+      float dx = mod(lightningPos.x - texCoord.x + 0.5, 1.0) - 0.5;
+      vec2 dist = vec2(dx * aspectRatios.x, texCoord.y - 0.5 * (lightningPos.y + lightningMeta.z));
+      lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03);
     } else if (isCloudToCloud) {
       vec2 ccTargetDist = vec2((mod(lightningPos.x - texCoord.x + 0.5, 1.0) - 0.5) * aspectRatios[0],
                                texCoord.y - lightningMeta.z);
@@ -1341,12 +1381,13 @@ void main()
       if (strikeData[START_ITERNUM] <= 0.0 || abs(mod(strikeData.x - rod.x + 0.5, 1.0) - 0.5) > 1e-5)
         continue;
       vec4 strikeMeta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
-      if (iterNum < strikeData[START_ITERNUM] || (strikeMeta.z < -0.5
+      bool isUpwardStrike = abs(strikeMeta.y - 5.0) < 0.25;
+      if (iterNum < strikeData[START_ITERNUM] || (strikeMeta.z < -0.5 || isUpwardStrike
           ? iterNum >= lightningSlotEnd(strikeData, strikeMeta)
           : iterNum >= strikeAnimEnd(strikeData)))
         continue; // this strike is not running
-      float rodStrikeT = strikeMeta.z < -0.5
-        ? (iterNum - strikeData[START_ITERNUM]) / 20.0 : calcLightningTime(strikeData[START_ITERNUM]);
+      float rodStrikeT = isUpwardStrike ? (iterNum - strikeData[START_ITERNUM]) / 40.0
+        : strikeMeta.z < -0.5 ? (iterNum - strikeData[START_ITERNUM]) / 20.0 : calcLightningTime(strikeData[START_ITERNUM]);
       float slotGlow = lightningIntensityOverTime(rodStrikeT, strikeData.xy, strikeData[INTENSITY]);
       if (strikeData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY && abs(strikeMeta.y - 1.0) < 0.25 && strikeMeta.w >= 0.5) {
         float rodRepeatPeriod = map_range(random2d(strikeData.xy), 0., 1., 1.5, 3.0);

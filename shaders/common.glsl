@@ -303,7 +303,9 @@ float lightningSlotEnd(vec4 strike, vec4 meta)
   float end = strikeAnimEnd(strike);
   // Artificial CG stores -1 in otherwise-unused targetY and plays its parent
   // channel at quarter speed so a manual click survives high iteration rates.
-  if (meta.z < -0.5)
+  if (abs(meta.y - 5.0) < 0.25)
+    end = strike[START_ITERNUM] + (end - strike[START_ITERNUM]) * 8.0;
+  else if (meta.z < -0.5)
     end = strike[START_ITERNUM] + (end - strike[START_ITERNUM]) * 4.0;
   if (fract(meta.w) > 0.0)
     end = max(end, strike[START_ITERNUM] + 100.0);
