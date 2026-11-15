@@ -105,7 +105,8 @@ precision highp isampler2D;
 // More than that buys little and costs a 2D texture fetch per slot per pixel
 // in the display pass.
 #define LIGHTNING_SLOTS 6
-// Longest a strike can possibly animate, in iterations - a bound, not a timer.
+// Longest ordinary natural strike can animate, in iterations - a bound, not a timer.
+// Artificial strikes use their separate extended slot lifetime below.
 // A strike is not held for this long: strikeAnimEnd() below works out how long
 // that particular strike lasts, and a slot is released the moment its own light
 // is over. lightningTime advances 5 iterations per unit (calcLightningTime), the
@@ -300,6 +301,10 @@ float lightningSlotEnd(vec4 strike, vec4 meta)
   if (strike[START_ITERNUM] <= 0.0)
     return 0.0;
   float end = strikeAnimEnd(strike);
+  // Artificial CG stores -1 in otherwise-unused targetY and plays its parent
+  // channel at quarter speed so a manual click survives high iteration rates.
+  if (meta.z < -0.5)
+    end = strike[START_ITERNUM] + (end - strike[START_ITERNUM]) * 4.0;
   if (fract(meta.w) > 0.0)
     end = max(end, strike[START_ITERNUM] + 100.0);
   return end;

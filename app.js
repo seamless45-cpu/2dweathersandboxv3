@@ -609,7 +609,7 @@ var applySuperSharpDetail = function() {};
 function setBrushCursor(program, cursorType, cursorX, cursorY)
 {
   cursorX = guiControls.wrapHorizontally ? mod(cursorX, 1.0) : clamp(cursorX, 0.0, 1.0);
-  const cursorRadius = cursorType >= 4.0 ? LIGHTNING_ROD_ATTRACT_RADIUS : guiControls.brushSize * 0.5;
+  const cursorRadius = cursorType >= 4.0 ? LIGHTNING_ROD_ATTRACT_RADIUS * (cursorType >= 5.0 ? SUPER_LIGHTNING_ROD_REACH_MULT : 1.0) : guiControls.brushSize * 0.5;
   gl.uniform4f(getUniformLoc(program, 'cursor'), cursorX, cursorY, cursorRadius, cursorType);
   gl.uniform1f(getUniformLoc(program, 'wholeWidthBrushWidth'), guiControls.wholeWidthBrushWidth * 0.01);
   gl.uniform1f(getUniformLoc(program, 'windPushWidth'), guiControls.wholeWidthBrushWidth * 0.01);
@@ -2082,6 +2082,7 @@ let lightningRodsVersion = 0;
 let lightningRodCaptures = 0;
 const MAX_LIGHTNING_RODS = 12;
 const LIGHTNING_ROD_ATTRACT_RADIUS = 0.11;
+const SUPER_LIGHTNING_ROD_REACH_MULT = 2.0;
 const lightningRodStatus = { placed : '0 / ' + MAX_LIGHTNING_RODS + ' (0 hits)' };
 
 function updateLightningRodStatus()
@@ -2363,6 +2364,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   lightningRodsVersion++;
   lightningRodCaptures = 0;
   updateLightningRodStatus();
+  const artificialLightningStatus = { status : 'Ready' };
 
   let sliderGradientObserver;
   let loadedShaderCount = 0;
@@ -4981,6 +4983,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         'Wind Push' : 'TOOL_WIND_PUSH',
         'Weather Station' : 'TOOL_STATION',
         'Lightning Rod' : 'TOOL_LIGHTNING_ROD',
+        'Super Lightning Rod' : 'TOOL_SUPER_LIGHTNING_ROD',
+        'Artificial Lightning' : 'TOOL_ARTIFICIAL_LIGHTNING',
       })
       .name('Tool')
       .listen();
@@ -4995,7 +4999,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     const lightningRodInput = lightningRodController.domElement.querySelector('input');
     if (lightningRodInput) {
       lightningRodInput.readOnly = true;
-      lightningRodInput.title = 'Pick the Lightning Rod tool, then left-click ground to plant a rod; Shift-click or right-click a rod to remove it. Captures -CG and +CG strokes within reach.';
+      lightningRodInput.title = 'Pick Lightning Rod or Super Lightning Rod and click ground; Shift-click or right-click either type to remove it. Super rods have twice the base reach.';
     }
     UI_folder.add({ clearLightningRods : function() {
                       lightningRods = [];
@@ -5004,6 +5008,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
                       updateLightningRodStatus();
                     } }, 'clearLightningRods')
       .name('Clear Lightning Rods');
+    const artificialStatusController = UI_folder.add(artificialLightningStatus, 'status')
+      .name('Artificial Lightning').listen();
+    const artificialStatusInput = artificialStatusController.domElement.querySelector('input');
+    if (artificialStatusInput) {
+      artificialStatusInput.readOnly = true;
+      artificialStatusInput.title = 'Select Artificial Lightning and click in the simulation. Requests wait for a free slot and while paused.';
+    }
     const windPushControllers = [
       UI_folder.add(guiControls, 'windPushStrengthMph', 0, 300, 1).name('Wind Push Strength (mph)'),
       UI_folder.add(guiControls, 'windPushDirection', {
@@ -6289,7 +6300,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   canvas.addEventListener('mousedown', function(e) { mouseDownEvent(e); });
   canvas.addEventListener('contextmenu', function(e) {
-    if (guiControls.tool == 'TOOL_LIGHTNING_ROD')
+    if (guiControls.tool == 'TOOL_LIGHTNING_ROD' || guiControls.tool == 'TOOL_SUPER_LIGHTNING_ROD')
       e.preventDefault();
   });
   graphCanvas.addEventListener('mousedown', function(e) { mouseDownEvent(e); });
@@ -6340,7 +6351,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   // Plant a lightning rod where the user clicked. Returns true when a rod was
   // placed; clicking the open sky (or a column without ground) does nothing,
   // because a mast standing in mid-air looks wrong.
-  function tryPlaceLightningRod(simXpos, simYpos)
+  function tryPlaceLightningRod(simXpos, simYpos, isSuper = false)
   {
     if (!Number.isFinite(simXpos) || !Number.isFinite(simYpos))
       return false;
@@ -6359,7 +6370,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return false; // a rod already stands here
     if (lightningRods.length >= MAX_LIGHTNING_RODS)
       lightningRods.shift(); // the oldest mast makes way for the new one
-    lightningRods.push({ x : rodX, y : (surfaceCell + 1) / sim_res_y });
+    lightningRods.push({ x : rodX, y : (surfaceCell + 1) / sim_res_y, isSuper });
     lightningRodsVersion++;
     updateLightningRodStatus();
     return true;
@@ -6379,7 +6390,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       const dx = Math.abs(mod(wrappedX - rod.x + 0.5, 1.0) - 0.5);
       if (dx > maxHorizDist)
         continue;
-      if (simYpos < rod.y - 0.03 || simYpos > rod.y + rodWorldHeight + 0.05)
+      if (simYpos < rod.y - 0.03 || simYpos > rod.y + rodWorldHeight * (rod.isSuper ? 1.8 : 1.0) + 0.05)
         continue;
       if (dx < bestDx) {
         bestDx = dx;
@@ -6397,13 +6408,43 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   function placeLightningRodAtClientPoint(clientX, clientY)
   {
     const rect = canvas.getBoundingClientRect();
-    return tryPlaceLightningRod(screenToSimX(clientX - rect.left), screenToSimY(clientY - rect.top));
+    return tryPlaceLightningRod(screenToSimX(clientX - rect.left), screenToSimY(clientY - rect.top), guiControls.tool == 'TOOL_SUPER_LIGHTNING_ROD');
   }
 
   function removeLightningRodAtClientPoint(clientX, clientY)
   {
     const rect = canvas.getBoundingClientRect();
     return tryRemoveNearestLightningRod(screenToSimX(clientX - rect.left), screenToSimY(clientY - rect.top));
+  }
+
+  // A bounded queue survives pause and full slot arrays; a click inserts one
+  // ordinary CG event on the next available simulation iteration.
+  const pendingArtificialLightning = [];
+  let manualLightningActiveUntil = -1;
+  function queueArtificialLightningAtClientPoint(clientX, clientY)
+  {
+    if (pendingArtificialLightning.length >= 16) {
+      artificialLightningStatus.status = 'Queue full (16)';
+      return false;
+    }
+    const rect = canvas.getBoundingClientRect();
+    let x = screenToSimX(clientX - rect.left);
+    const y = screenToSimY(clientY - rect.top);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || y < 0 || y > 1 ||
+        (!guiControls.wrapHorizontally && (x < 0 || x > 1)))
+      return false;
+    x = guiControls.wrapHorizontally ? mod(x, 1.0) : clamp(x, 0.0, 0.999999);
+    const surfaceCell = findTerrainSurfaceCell(Math.min(Math.floor(x * sim_res_x), sim_res_x - 1));
+    if (surfaceCell < 0)
+      return false;
+    const minOrigin = (surfaceCell + 1) / sim_res_y + 0.08;
+    if (minOrigin >= 0.98)
+      return false;
+    // A ground click uses a high source; a sky click chooses its altitude.
+    const originY = clamp(y > minOrigin ? y : Math.max(0.6, minOrigin), minOrigin, 0.98);
+    pendingArtificialLightning.push({ x, y : originY });
+    artificialLightningStatus.status = 'Queued: ' + pendingArtificialLightning.length;
+    return true;
   }
 
   function mouseDownEvent(e)
@@ -6421,14 +6462,16 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         if (simXpos >= 0 && simXpos < sim_res_x && Number.isInteger(simYpos) &&
             simYpos >= 0 && simYpos < sim_res_y)
           weatherStations.push(new Weatherstation(simXpos, simYpos)); // add weather station
-      } else if (guiControls.tool == 'TOOL_LIGHTNING_ROD') {
+      } else if (guiControls.tool == 'TOOL_ARTIFICIAL_LIGHTNING') {
+        queueArtificialLightningAtClientPoint(e.clientX, e.clientY);
+      } else if (guiControls.tool == 'TOOL_LIGHTNING_ROD' || guiControls.tool == 'TOOL_SUPER_LIGHTNING_ROD') {
         // Shift+click removes the nearest rod; normal left-click plants a mast on the terrain
         if (e.shiftKey)
           removeLightningRodAtClientPoint(e.clientX, e.clientY);
         else
           placeLightningRodAtClientPoint(e.clientX, e.clientY);
       }
-    } else if (e.button == 2 && !SETUP_MODE && guiControls.tool == 'TOOL_LIGHTNING_ROD') {
+    } else if (e.button == 2 && !SETUP_MODE && (guiControls.tool == 'TOOL_LIGHTNING_ROD' || guiControls.tool == 'TOOL_SUPER_LIGHTNING_ROD')) {
       removeLightningRodAtClientPoint(e.clientX, e.clientY);
     } else if (e.button == 1) {
       // middle mouse button
@@ -6466,8 +6509,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       if (SETUP_MODE) {
         startSimulation();
-      } else if (guiControls.tool == 'TOOL_LIGHTNING_ROD' && event.changedTouches.length) {
+      } else if ((guiControls.tool == 'TOOL_LIGHTNING_ROD' || guiControls.tool == 'TOOL_SUPER_LIGHTNING_ROD') && event.changedTouches.length) {
         placeLightningRodAtClientPoint(event.changedTouches[0].clientX, event.changedTouches[0].clientY);
+      } else if (guiControls.tool == 'TOOL_ARTIFICIAL_LIGHTNING' && event.changedTouches.length) {
+        queueArtificialLightningAtClientPoint(event.changedTouches[0].clientX, event.changedTouches[0].clientY);
       }
     }
   }, {passive : false});
@@ -6741,8 +6786,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.33'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.33')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.34'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.34')
   ]);
 
   const [
@@ -7319,6 +7364,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   {
     ambientLightDirty = true;
     superboltShakeStartTimeMs = -1;
+    pendingArtificialLightning.length = 0;
+    artificialLightningStatus.status = 'Ready';
+    manualLightningActiveUntil = -1;
     gl.bindTexture(gl.TEXTURE_2D, baseTexture_0);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, initialBaseTex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -7697,7 +7745,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.33');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.34');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8053,6 +8101,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   // physical size at any resolution; the placed rods themselves are uploaded
   // every frame because the Lightning Rod tool can add one at any time.
   const rodPositionData = new Float32Array(MAX_LIGHTNING_RODS * 2);
+  const rodTypeData = new Float32Array(MAX_LIGHTNING_RODS);
   const rodUniformLocations = new Map();
   const rodUploadedVersion = new WeakMap();
   const rodThickness = clamp(sim_res_x * 0.0022, 2.2, 24.0); // half width, in cells
@@ -8065,6 +8114,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     if (locations == null) {
       locations = {
         positions : gl.getUniformLocation(program, 'rodPositions[0]'),
+        types : gl.getUniformLocation(program, 'rodTypes[0]'),
         count : gl.getUniformLocation(program, 'rodCount'),
         thickness : gl.getUniformLocation(program, 'rodThickness'),
         height : gl.getUniformLocation(program, 'rodHeight'),
@@ -8083,10 +8133,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.useProgram(program); // uniform locations are only valid for the active program
     const count = Math.min(lightningRods.length, MAX_LIGHTNING_RODS);
     rodPositionData.fill(0);
+    rodTypeData.fill(0);
     for (let i = 0; i < count; i++) {
       rodPositionData[i * 2] = lightningRods[i].x;
       rodPositionData[i * 2 + 1] = lightningRods[i].y;
+      rodTypeData[i] = lightningRods[i].isSuper ? 1.0 : 0.0;
     }
+    if (locations.types != null)
+      gl.uniform1fv(locations.types, rodTypeData);
     if (locations.positions != null)
       gl.uniform2fv(locations.positions, rodPositionData);
     if (locations.count != null)
@@ -8147,6 +8201,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const precipSampleValues = new Float32Array(4);
   const countedSlotStartIter = new Float64Array(numLightningSlots);
   const lightningDataValues = new Float32Array(numLightningSlots * 2 * 4);
+  const manualSlotReadback = new Float32Array(numLightningSlots * 4);
 
   function hashShakeStep(seed, step)
   {
@@ -8205,6 +8260,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     if (graphicsContextLost) // nothing left to draw with; the overlay explains why
       return;
 
+    let artificialAttemptedThisFrame = false;
     let camPanSpeed = guiControls.camSpeed;
 
     if (rightCtrlPressed) {
@@ -8514,12 +8570,21 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               precipitationEven = !precipitationEven;
 
 
+            }
+
+            // The slot pass also runs for manually queued strikes when rain is off.
+            if (guiControls.enablePrecipitation || pendingArtificialLightning.length > 0) {
               // Strike slot manager: a new strike takes a free slot and every
               // running strike keeps its own until its animation is over, so
               // strikes never cut each other short. Ping-pong the slot array.
+              gl.bindVertexArray(fluidVao);
+              gl.disable(gl.BLEND);
               const lightningDst = 1 - lightningDataSrc;
               gl.useProgram(lightningLocationProgram);
               gl.uniform1f(getUniformLoc(lightningLocationProgram, 'iterNum'), iterNum);
+              const manualStrike = !artificialAttemptedThisFrame && iterNum > 0 ? pendingArtificialLightning[0] : null;
+              gl.uniform4f(getUniformLoc(lightningLocationProgram, 'artificialStrike'),
+                           manualStrike ? manualStrike.x : 0, manualStrike ? manualStrike.y : 0, 2.8, manualStrike ? 1 : 0);
               uploadLightningRodUniforms(lightningLocationProgram); // rods capture CG strikes
 
               gl.activeTexture(gl.TEXTURE0);
@@ -8537,6 +8602,36 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
               gl.viewport(0, 0, sim_res_x, sim_res_y);
               lightningDataSrc = lightningDst;
+              if (manualStrike) {
+                artificialAttemptedThisFrame = true;
+                // A synchronous readback only on a user request acknowledges a free
+                // slot; otherwise retry once next frame without dropping the click.
+                gl.readBuffer(gl.COLOR_ATTACHMENT0);
+                gl.readPixels(0, 0, numLightningSlots, 1, gl.RGBA, gl.FLOAT, manualSlotReadback);
+                let acceptedSlot = -1;
+                for (let slot = 0; slot < numLightningSlots; slot++) {
+                  if (Math.abs(manualSlotReadback[slot * 4 + 2] - iterNum) < 0.5) {
+                    acceptedSlot = slot;
+                    break;
+                  }
+                }
+                if (acceptedSlot >= 0) {
+                  pendingArtificialLightning.shift();
+                  artificialLightningStatus.status = pendingArtificialLightning.length ? 'Queued: ' + pendingArtificialLightning.length : 'Ready';
+                  manualLightningActiveUntil = iterNum + 504;
+                  const offset = acceptedSlot * 4;
+                  const targetX = manualSlotReadback[offset];
+                  if (lightningRods.some(rod => Math.abs(mod(targetX - rod.x + 0.5, 1.0) - 0.5) < 1e-4)) {
+                    lightningRodCaptures++;
+                    countedSlotStartIter[acceptedSlot] = iterNum;
+                    updateLightningRodStatus();
+                  }
+                  if (guiControls.sound && soundSystem) {
+                    soundSystem.soundThunder(targetX, manualSlotReadback[offset + 1], Math.pow(manualSlotReadback[offset + 3], 2.0));
+                    lastLightningSoundIteration = iterNum;
+                  }
+                }
+              }
 
             }
 
@@ -8563,12 +8658,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         // hearing thunder - and no strike is missed, because a strike is found by
         // comparing its start iteration against the last one we heard, not against
         // the previous frame.
-        const lightningReadbackTick = guiControls.enablePrecipitation &&
+        const lightningReadbackTick = (guiControls.enablePrecipitation || iterNum <= manualLightningActiveUntil) &&
                                       iterNum != lastSuperboltCheckIteration &&
                                       (superboltCheckFrame++ % 3) === 0;
         const lightningSoundDue = guiControls.sound && lightningReadbackTick;
         const superboltCheckDue = lightningReadbackTick;
-        const rodCaptureCheckDue = lightningRods.length > 0 && guiControls.enablePrecipitation &&
+        const rodCaptureCheckDue = lightningRods.length > 0 && (guiControls.enablePrecipitation || iterNum <= manualLightningActiveUntil) &&
                                    iterNum != lastRodCaptureCheckIteration &&
                                    (rodCaptureFrame++ % 12) === 0;
         if (lightningSoundDue || rodCaptureCheckDue || superboltCheckDue) {
@@ -8659,7 +8754,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               lastLightningSoundIteration = newestIteration;
             }
           }
-        } else if (!guiControls.sound || !guiControls.enablePrecipitation) {
+        } else if (!guiControls.sound || (!guiControls.enablePrecipitation && iterNum > manualLightningActiveUntil)) {
           lastLightningSoundIteration = iterNum;
           lastLightningSoundCheckIteration = iterNum;
         }
@@ -8677,6 +8772,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     windPushControlsVisibilityUpdater();
     if (guiControls.tool == 'TOOL_WIND_PUSH') {
       cursorType = 3.0; // configurable wind push area
+    } else if (!SETUP_MODE && guiControls.tool == 'TOOL_SUPER_LIGHTNING_ROD') {
+      cursorType = 5.0;
     } else if (!SETUP_MODE && guiControls.tool == 'TOOL_LIGHTNING_ROD') {
       cursorType = 4.0; // lightning rod mast & protection reach preview
     } else if (guiControls.wholeWidth) {
@@ -9672,7 +9769,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.33');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.34');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

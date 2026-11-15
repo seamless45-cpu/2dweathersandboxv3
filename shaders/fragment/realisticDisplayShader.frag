@@ -61,6 +61,7 @@ out vec4 fragmentColor;
 // Lightning rods: masts standing on the terrain, placed with the Lightning Rod
 // tool. (Declared after common.glsl so MAX_LIGHTNING_RODS is known.)
 uniform vec2 rodPositions[MAX_LIGHTNING_RODS];
+uniform float rodTypes[MAX_LIGHTNING_RODS];
 uniform int rodCount;
 uniform float rodThickness;     // half width of the mast, in cells
 uniform float rodHeight;        // height of the mast, in cells
@@ -148,7 +149,7 @@ float findCapturedRodTipY(float strikeX)
     if (i >= rodCount)
       break;
     if (abs(mod(strikeX - rodPositions[i].x + 0.5, 1.0) - 0.5) < 1e-5)
-      return rodPositions[i].y + rodHeight / max(resolution.y, 1.0);
+      return rodPositions[i].y + rodHeight * (rodTypes[i] > 0.5 ? 1.8 : 1.0) / max(resolution.y, 1.0);
   }
   return -1.0;
 }
@@ -657,31 +658,50 @@ float channelGlow(vec2 p, vec2 a, vec2 b, float width)
   return exp(-d * d / (width * width));
 }
 
-// Branched, mostly horizontal channels along the upper cloud deck, in km.
+// Anvil crawlers are long, asymmetric, branching leaders travelling through
+// a broad shallow cloud deck, not a mirrored ladder. Coordinates are in km.
 vec3 drawAnvilCrawler(vec2 origin, float top, float time)
 {
   float heightKm = cellHeight * resolution.y * 0.001;
   vec2 p = vec2((mod(texCoord.x - origin.x + 0.5, 1.0) - 0.5) * aspectRatios.x * heightKm,
                 texCoord.y * heightKm - top * heightKm);
-  if (abs(p.x) > 19.0 || abs(p.y) > 4.0 || time < 0.0 || time > 2.5)
+  if (abs(p.x) > 27.0 || abs(p.y) > 7.0 || time < 0.0 || time > 2.5)
     return vec3(0.0);
   float glow = 0.0;
-  float seed = random2d(origin * 91.7) * 6.28;
-  for (int sideIndex = 0; sideIndex < 2; sideIndex++) {
-    float side = sideIndex == 0 ? -1.0 : 1.0;
-    vec2 prev = vec2(0.0, -0.4);
-    for (int i = 1; i <= 6; i++) {
+  float seed = random2d(origin * 91.7);
+  for (int lane = 0; lane < 4; lane++) {
+    float f = float(lane);
+    float side = lane < 2 ? -1.0 : 1.0;
+    float lengthKm = 9.0 + 9.0 * random2d(vec2(seed + f * 1.31, origin.x * 37.0));
+    float slope = (random2d(vec2(seed + f * 7.1, origin.y * 19.0)) - 0.58) * 1.8;
+    float progress = clamp((time - f * 0.10) * 1.15, 0.0, 1.0) * 8.0;
+    vec2 prev = vec2(0.0, -0.55);
+    for (int i = 1; i <= 8; i++) {
       float k = float(i);
-      vec2 next = vec2(side * k * 2.5, -0.45 + 0.5 * sin(k * 1.3 + seed + side));
-      float progress = smoothstep(k / 6.0 - 0.22, k / 6.0, time * 0.8);
-      glow += channelGlow(p, prev, next, 0.10) * progress;
-      vec2 branchEnd = next + vec2(side * 1.7, -1.1 - 0.45 * sin(k + seed));
-      glow += 0.55 * channelGlow(p, mix(prev, next, 0.6), branchEnd, 0.075) * progress;
+      float n = random2d(vec2(seed * 11.0 + f * 3.7, k * 17.3 + origin.y));
+      vec2 next = vec2(side * lengthKm * k / 8.0,
+                       -0.55 + slope * k / 8.0 + (n - 0.5) * 1.35);
+      float segmentGrowth = clamp(progress - (k - 1.0), 0.0, 1.0);
+      if (segmentGrowth > 0.0) {
+        vec2 liveEnd = mix(prev, next, segmentGrowth);
+        glow += channelGlow(p, prev, liveEnd, 0.055 + 0.01 * (1.0 - k / 8.0));
+        if (i >= 2 && mod(k + f, 2.0) < 0.5) {
+          float branchGrowth = clamp((segmentGrowth - 0.35) / 0.65, 0.0, 1.0);
+          vec2 fork = mix(prev, next, 0.35);
+          float forkDir = n > 0.45 ? -1.0 : 1.0;
+          vec2 forkEnd = fork + vec2(side * (1.5 + n * 2.2), forkDir * (0.8 + n * 1.4));
+          if (branchGrowth > 0.0) {
+            glow += channelGlow(p, fork, mix(fork, forkEnd, branchGrowth), 0.040) * 0.72;
+            vec2 tip = forkEnd + vec2(side * 1.1, forkDir * 0.75);
+            glow += channelGlow(p, mix(fork, forkEnd, 0.72), mix(mix(fork, forkEnd, 0.72), tip, branchGrowth), 0.028) * 0.38;
+          }
+        }
+      }
       prev = next;
     }
   }
-  float fade = 1.0 - smoothstep(1.1, 2.5, time);
-  return vec3(0.63, 0.72, 1.0) * glow * fade * 2500.0;
+  float fade = 1.0 - smoothstep(1.3, 2.5, time);
+  return vec3(0.68, 0.78, 1.0) * min(glow, 2.0) * fade * 2500.0;
 }
 
 // Optical approximations of upper-atmospheric transients at physical altitudes.
@@ -836,11 +856,14 @@ vec4 computeAirColor(vec2 bndFragCoord)
     }
     // The parent channel retains its own animation even if an optical effect
     // keeps the slot alive longer for visibility at high iteration rates.
-    if (iterNum < lightningStartIterNum || iterNum >= strikeAnimEnd(lightningData))
+    if (iterNum < lightningStartIterNum || (lightningMeta.z < -0.5
+        ? iterNum >= lightningSlotEnd(lightningData, lightningMeta)
+        : iterNum >= strikeAnimEnd(lightningData)))
       continue;
 
     vec2 lightningPos = lightningData.xy;
-    float lightningTime = calcLightningTime(lightningStartIterNum);
+    float lightningTime = lightningMeta.z < -0.5
+      ? (iterNum - lightningStartIterNum) / 20.0 : calcLightningTime(lightningStartIterNum);
     // Every strike starts directly on the trigger iteration with zero fixed delay.
     float currentLightningIntensity = lightningIntensityOverTime(lightningTime, lightningPos, lightningData[INTENSITY]);
     if (currentLightningIntensity <= 0.0)
@@ -1303,9 +1326,12 @@ void main()
     if (i >= rodCount)
       break;
     vec2 rod = rodPositions[i];
+    bool isSuperRod = rodTypes[i] > 0.5;
+    float thisRodHeight = rodHeight * (isSuperRod ? 1.8 : 1.0);
+    float thisRodThickness = rodThickness * (isSuperRod ? 1.35 : 1.0);
     float dxCells = (mod(texCoord.x - rod.x + 0.5, 1.0) - 0.5) * resolution.x; // wrapped horizontal offset in cells
     float dyCells = (texCoord.y - rod.y) * resolution.y;                       // height above surface, in cells
-    if (dyCells < -1.5 || dyCells > rodHeight + rodCoronaReach || abs(dxCells) > max(rodThickness * 3.2, rodCoronaReach + 1.0))
+    if (dyCells < -1.5 || dyCells > thisRodHeight + rodCoronaReach || abs(dxCells) > max(thisRodThickness * 3.2, rodCoronaReach + 1.0))
       continue;
 
     // The current this mast is carrying, if it has taken a strike (wrapped across periodic boundary).
@@ -1314,11 +1340,14 @@ void main()
       vec4 strikeData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
       if (strikeData[START_ITERNUM] <= 0.0 || abs(mod(strikeData.x - rod.x + 0.5, 1.0) - 0.5) > 1e-5)
         continue;
-      if (iterNum < strikeData[START_ITERNUM] || iterNum >= strikeAnimEnd(strikeData))
-        continue; // this strike is not running
-      float rodStrikeT = calcLightningTime(strikeData[START_ITERNUM]);
-      float slotGlow = lightningIntensityOverTime(calcLightningTime(strikeData[START_ITERNUM]), strikeData.xy, strikeData[INTENSITY]);
       vec4 strikeMeta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
+      if (iterNum < strikeData[START_ITERNUM] || (strikeMeta.z < -0.5
+          ? iterNum >= lightningSlotEnd(strikeData, strikeMeta)
+          : iterNum >= strikeAnimEnd(strikeData)))
+        continue; // this strike is not running
+      float rodStrikeT = strikeMeta.z < -0.5
+        ? (iterNum - strikeData[START_ITERNUM]) / 20.0 : calcLightningTime(strikeData[START_ITERNUM]);
+      float slotGlow = lightningIntensityOverTime(rodStrikeT, strikeData.xy, strikeData[INTENSITY]);
       if (strikeData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY && abs(strikeMeta.y - 1.0) < 0.25 && strikeMeta.w >= 0.5) {
         float rodRepeatPeriod = map_range(random2d(strikeData.xy), 0., 1., 1.5, 3.0);
         if (rodStrikeT >= rodRepeatPeriod * lightningFlickers(strikeData) + 2.824)
@@ -1330,12 +1359,12 @@ void main()
       strikeGlow = max(strikeGlow, slotGlow);
     }
 
-    float alongRod = clamp(dyCells / max(rodHeight, 1.0), 0.0, 1.0);
-    float mastWidth = max(rodThickness * mix(0.92, 0.08, pow(alongRod, 0.85)), 0.24);
+    float alongRod = clamp(dyCells / max(thisRodHeight, 1.0), 0.0, 1.0);
+    float mastWidth = max(thisRodThickness * mix(0.92, 0.08, pow(alongRod, 0.85)), 0.24);
     if (alongRod >= 0.80 && alongRod <= 0.835)
-      mastWidth = max(mastWidth * 1.65, rodThickness * 0.72); // corona / arrester collar ring
+      mastWidth = max(mastWidth * 1.65, thisRodThickness * 0.72); // corona / arrester collar ring
     float plinthT = clamp(dyCells / rodBaseCells, 0.0, 1.0);
-    float baseWidth = max(rodThickness * mix(2.75, 0.92, smoothstep(0.0, 1.0, plinthT)), 0.65);
+    float baseWidth = max(thisRodThickness * mix(2.75, 0.92, smoothstep(0.0, 1.0, plinthT)), 0.65);
     float halfWidth = dyCells < rodBaseCells ? baseWidth : mastWidth;
     bool onMetal = dyCells >= -0.75 && abs(dxCells) <= halfWidth;
 
@@ -1355,6 +1384,8 @@ void main()
         matCol = mix(vec3(0.65, 0.71, 0.80), vec3(0.11, 0.12, 0.15), pow(acrossRod, 0.75)) * band;
         matCol += vec3(0.30, 0.35, 0.44) * pow(acrossRod, 4.0);
       }
+      if (isSuperRod && alongRod > 0.08 && alongRod < 0.84)
+        matCol = mix(matCol, vec3(0.55, 0.66, 0.82), 0.48);
       color = mix(matCol, vec3(1.0, 0.97, 0.90), clamp(strikeGlow * 0.55, 0.0, 1.0));
       shadowLight = max(shadowLight, 0.38);
       opacity = 1.0;
@@ -1362,7 +1393,7 @@ void main()
 
     // Dynamic tip ionization: subtle St. Elmo's fire intensifies under overhead
     // storm clouds and erupts into a plasma arc when capturing a CG bolt.
-    float tipDistance = length(vec2(dxCells, dyCells - rodHeight));
+    float tipDistance = length(vec2(dxCells, dyCells - thisRodHeight));
     if (tipDistance < rodCoronaReach) {
       float stormCloud = texture(waterTex, vec2(rod.x, clamp(rod.y + 0.16, 0.0, 0.96)))[CLOUD];
       float ambientIon = clamp(stormCloud * 0.75, 0.0, 1.4) * (0.85 + 0.15 * sin(iterNum * 0.45 + rod.x * 40.0));
