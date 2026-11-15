@@ -21,7 +21,7 @@ out vec2 onScreenUV;       // Normalized onscreen coordinates where canvas heigt
 
 uniform float Xmult;       // gl.uniform1f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'Xmult'), horizontalDisplayMult);
 
-const float Ymult = 5.;    // 5.0
+const float Ymult = 45.;   // extends the display mesh beyond 100 km even at 5 km sim height
 
 void main()
 {

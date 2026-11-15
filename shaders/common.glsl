@@ -293,6 +293,18 @@ float strikeAnimEnd(vec4 strike)
   return start + 5.0 * (repeatPeriod * numFlashes + 2.924);
 }
 
+// Optical effects need enough simulation steps to be seen at up to 50 steps
+// per rendered frame. Ordinary strikes and superbolts retain their own timing.
+float lightningSlotEnd(vec4 strike, vec4 meta)
+{
+  if (strike[START_ITERNUM] <= 0.0)
+    return 0.0;
+  float end = strikeAnimEnd(strike);
+  if (fract(meta.w) > 0.0)
+    end = max(end, strike[START_ITERNUM] + 100.0);
+  return end;
+}
+
 float rand2d(vec2 co)
 {
   const float a = 12.9898;
