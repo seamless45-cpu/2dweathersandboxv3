@@ -21,6 +21,7 @@ uniform float iterNum;
 out vec4 lightningLocation;
 
 uniform float dryLapse;
+uniform vec4 artificialStrike; // x, origin y, intensity, active
 uniform float simHeightMeters; // simulation height in meters, for physical strike ranges
 
 #include "common.glsl"
@@ -30,6 +31,7 @@ uniform float simHeightMeters; // simulation height in meters, for physical stri
 // the terrain surface it stands on. A rod only affects cloud-to-ground strikes:
 // an intra-cloud flash keeps the place it formed in.
 uniform vec2 rodPositions[MAX_LIGHTNING_RODS];
+uniform float rodTypes[MAX_LIGHTNING_RODS]; // 1 = super rod
 uniform int rodCount;
 uniform float rodHeight;        // mast height, in cells
 uniform float rodAttractRadius; // horizontal reach, normalized sim width
@@ -41,9 +43,11 @@ float wrappedHorizontalDist(float a, float b)
 
 float rodEffectiveRadius(int rodIdx, float intensity)
 {
-  float heightFactor = 1.0 + clamp(rodPositions[rodIdx].y * 1.2 + (rodHeight / max(resolution.y, 1.0)) * 3.0, 0.0, 0.45);
+  float effectiveHeight = rodHeight * (rodTypes[rodIdx] > 0.5 ? 1.8 : 1.0);
+  float heightFactor = 1.0 + clamp(rodPositions[rodIdx].y * 1.2 + (effectiveHeight / max(resolution.y, 1.0)) * 3.0, 0.0, 0.45);
   float currentFactor = clamp(0.85 + 0.12 * intensity, 0.90, 1.45);
-  return rodAttractRadius * heightFactor * currentFactor;
+  float reachMultiplier = rodTypes[rodIdx] > 0.5 ? 2.0 : 1.0;
+  return min(rodAttractRadius * reachMultiplier * heightFactor * currentFactor, 0.499);
 }
 
 bool hasNearbyLightningRod(float strikeX, float intensity)
@@ -59,7 +63,7 @@ bool hasNearbyLightningRod(float strikeX, float intensity)
 
 // Lightning slot manager.
 //
-// The lightning data texture is LIGHTNING_SLOTS x 1: one texel per strike.
+// The lightning data texture is LIGHTNING_SLOTS x 2: strike and metadata rows.
 // Each strike keeps its slot for its whole animation, so a newer strike can
 // never overwrite (and therefore cut short) one that is still flashing. A new
 // strike only starts when a slot has finished; if every slot is busy the
@@ -82,7 +86,8 @@ bool slotBusy(vec4 data, vec4 meta)
 
 // Pull any CG strike (normal -CG or external +CG) onto the nearest reachable rod.
 // Uses an electrogeometric reach scaled by rod elevation/height and stroke current:
-// inside the inner protective cone (<= 35% reach) capture is guaranteed, tapering
+// inside the inner protective cone (35% for normal, 70% for super rods) capture
+// is guaranteed, tapering
 // smoothly toward the outer boundary across periodic seam wraps.
 vec4 attractToRod(vec4 strike)
 {
@@ -105,9 +110,10 @@ vec4 attractToRod(vec4 strike)
   if (nearestRod < 0)
     return strike;
 
-  float pull = bestNormalizedDist <= 0.35
+  float guaranteedReach = rodTypes[nearestRod] > 0.5 ? 0.70 : 0.35;
+  float pull = bestNormalizedDist <= guaranteedReach
     ? 1.0
-    : pow(clamp((1.0 - bestNormalizedDist) / 0.65, 0.0, 1.0), 1.35);
+    : pow(clamp((1.0 - bestNormalizedDist) / (1.0 - guaranteedReach), 0.0, 1.0), 1.35);
   if (random2d(vec2(strike.y * 149.7 + fract(strike.x) * 31.3, strike[START_ITERNUM] * 7.31)) > pull)
     return strike;
 
@@ -313,6 +319,11 @@ void main()
   // (channel 2 == START_ITERNUM) into (1, 0), leaving INTENSITY at 0; require both
   // channels so phantom zero-intensity vapor splats never hijack a lightning slot.
   bool hasNewStrike = incomingRaw[START_ITERNUM] >= 0.5 && incomingRaw[INTENSITY] >= 0.5;
+  bool isArtificial = artificialStrike.w > 0.5;
+  if (isArtificial) {
+    incoming = vec4(artificialStrike.xy, iterNum, artificialStrike.z);
+    hasNewStrike = true;
+  }
 
   bool duplicate = false;
   int freeSlot = -1;
@@ -333,101 +344,108 @@ void main()
   vec4 result = previous;
   if (hasNewStrike && !duplicate && slot == freeSlot) {
     float originX = fract(incoming.x);
-    // Tall convective clouds only initiate external positive CG from cold upper
-    // charge regions strictly below -25 °C.
-    float originPotentialT = texture(baseTex, vec2(originX, incoming.y))[TEMPERATURE];
-    float originTempK = potentialToRealT(originPotentialT, incoming.y);
-    float originTempC = KtoC(originTempK);
-    float coldFactor = clamp((-25.0 - originTempC) / 30.0, 0.0, 1.0);
-    float posChance = mix(0.14, 0.26, coldFactor);
-    bool isExternalPositive = incoming.y >= 0.18 &&
-                              originTempK > 50.0 &&
-                              originTempK < CtoK(-25.0) &&
-                              random2d(vec2(originX * 31.7 + incoming.y * 59.3, iterNum * 0.73)) < posChance;
-    if (isExternalPositive) {
-      // Roll only for external positive CG. Worlds narrower than 18 km cannot
-      // represent a 9 km shortest periodic path and keep ordinary external CG.
-      bool isSuperboltExt = superboltWorldWidthMeters() * 0.4999 >= 9000.0 &&
-        random2d(vec2(originX * 89.3 + incoming.y * 47.1, iterNum * 1.13)) < 0.072;
-      vec4 extStrike = incoming;
-      extStrike.x = isSuperboltExt
-        ? selectSuperboltStrikeTarget(vec2(originX, incoming.y), iterNum)
-        : selectExternalStrikeTarget(vec2(originX, incoming.y), iterNum);
-      // Encode external positive CG in (4.5, 5.4] so lightningFlickers() selects
-      // a single return stroke (0 restrikes most of the time, rare 1 restroke)
-      // while remaining bounded well inside the maximum slot lifetime.
-      extStrike[INTENSITY] = clamp(4.6 + (incoming[INTENSITY] - 0.75) * 0.25, 4.6, 5.4);
-      vec4 rodStrike = attractToRod(extStrike);
-      float rodRangeMeters = wrappedHorizontalDist(originX, rodStrike.x) * superboltWorldWidthMeters();
-      // Do not let rod attraction move a superbolt outside its allowed range.
-      if (!isSuperboltExt || (rodRangeMeters >= 9000.0 && rodRangeMeters <= 42000.0))
-        extStrike = rodStrike;
-      result = (row == 0) ? extStrike : vec4(originX, 1.0, 0.0, isSuperboltExt ? 1.0 : 0.0);
+    if (isArtificial) {
+      // Artificial lightning is an ordinary CG stroke, subject to rod capture;
+      // it does not roll for naturally occurring exotic lightning.
+      vec4 forcedStrike = attractToRod(incoming);
+      result = (row == 0) ? forcedStrike : vec4(originX, 0.0, -1.0, 0.0);
     } else {
-      bool cgTriggerNearRod = incoming[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY &&
-                              hasNearbyLightningRod(originX, incoming[INTENSITY]);
-      vec3 ccTarget = (!cgTriggerNearRod && incoming.y >= 0.08)
-        ? selectCloudToCloudTarget(vec2(originX, incoming.y), iterNum)
-        : vec3(0.0);
-      float ccRoll = random2d(vec2(originX * 47.3 + incoming.y * 83.1, iterNum * 1.37));
-      float ccShare = (incoming[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY) ? 0.55 : 0.30;
-      if (!cgTriggerNearRod && ccTarget.z > 0.5 && ccRoll < ccShare) {
-        // Cloud-to-cloud (CC): meta.y = 2.0 for negative (-CC), 3.0 for positive (+CC).
-        bool isPositiveCC = random2d(vec2(ccTarget.x * 71.9 + ccTarget.y * 31.1, iterNum * 2.19)) < 0.30;
-        vec4 ccStrike = incoming;
-        ccStrike.x = ccTarget.x;
-        if (isPositiveCC) {
-          // Encode +CC above 5.45 for single-stroke preference + rare restroke.
-          ccStrike[INTENSITY] = clamp(5.5 + (incoming[INTENSITY] - 0.75) * 0.13, 5.5, 6.0);
-          result = (row == 0) ? ccStrike : vec4(originX, 3.0, ccTarget.y, 0.0);
-        } else {
-          // Keep -CC above LIGHTNING_IC_MAX_INTENSITY so it stays distinct from IC flash.
-          ccStrike[INTENSITY] = clamp(1.5 + (incoming[INTENSITY] - 0.75) * 0.22, 1.5, 2.3);
-          result = (row == 0) ? ccStrike : vec4(originX, 2.0, ccTarget.y, 0.0);
-        }
+      // Tall convective clouds only initiate external positive CG from cold upper
+      // charge regions strictly below -25 °C.
+      float originPotentialT = texture(baseTex, vec2(originX, incoming.y))[TEMPERATURE];
+      float originTempK = potentialToRealT(originPotentialT, incoming.y);
+      float originTempC = KtoC(originTempK);
+      float coldFactor = clamp((-25.0 - originTempC) / 30.0, 0.0, 1.0);
+      float posChance = mix(0.14, 0.26, coldFactor);
+      bool isExternalPositive = incoming.y >= 0.18 &&
+                                originTempK > 50.0 &&
+                                originTempK < CtoK(-25.0) &&
+                                random2d(vec2(originX * 31.7 + incoming.y * 59.3, iterNum * 0.73)) < posChance;
+      if (isExternalPositive) {
+        // Roll only for external positive CG. Worlds narrower than 18 km cannot
+        // represent a 9 km shortest periodic path and keep ordinary external CG.
+        bool isSuperboltExt = superboltWorldWidthMeters() * 0.4999 >= 9000.0 &&
+          random2d(vec2(originX * 89.3 + incoming.y * 47.1, iterNum * 1.13)) < 0.072;
+        vec4 extStrike = incoming;
+        extStrike.x = isSuperboltExt
+          ? selectSuperboltStrikeTarget(vec2(originX, incoming.y), iterNum)
+          : selectExternalStrikeTarget(vec2(originX, incoming.y), iterNum);
+        // Encode external positive CG in (4.5, 5.4] so lightningFlickers() selects
+        // a single return stroke (0 restrikes most of the time, rare 1 restroke)
+        // while remaining bounded well inside the maximum slot lifetime.
+        extStrike[INTENSITY] = clamp(4.6 + (incoming[INTENSITY] - 0.75) * 0.25, 4.6, 5.4);
+        vec4 rodStrike = attractToRod(extStrike);
+        float rodRangeMeters = wrappedHorizontalDist(originX, rodStrike.x) * superboltWorldWidthMeters();
+        // Do not let rod attraction move a superbolt outside its allowed range.
+        if (!isSuperboltExt || (rodRangeMeters >= 9000.0 && rodRangeMeters <= 42000.0))
+          extStrike = rodStrike;
+        result = (row == 0) ? extStrike : vec4(originX, 1.0, 0.0, isSuperboltExt ? 1.0 : 0.0);
       } else {
-        vec4 normalStrike = attractToRod(incoming);
-        bool isNormalIC = normalStrike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY;
-        float posIcChance = mix(0.20, 0.36, clamp((incoming.y - 0.16) / 0.28, 0.0, 1.0));
-        bool isPositiveIC = isNormalIC && incoming.y >= 0.16 &&
-                            random2d(vec2(originX * 61.3 + incoming.y * 41.7, iterNum * 1.91)) < posIcChance;
-        if (isPositiveIC) {
-          normalStrike[INTENSITY] = clamp(max(normalStrike[INTENSITY], 0.88), 0.88, LIGHTNING_IC_MAX_INTENSITY);
-          result = (row == 0) ? normalStrike : vec4(originX, 4.0, 0.0, 0.0);
+        bool cgTriggerNearRod = incoming[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY &&
+                                hasNearbyLightningRod(originX, incoming[INTENSITY]);
+        vec3 ccTarget = (!cgTriggerNearRod && incoming.y >= 0.08)
+          ? selectCloudToCloudTarget(vec2(originX, incoming.y), iterNum)
+          : vec3(0.0);
+        float ccRoll = random2d(vec2(originX * 47.3 + incoming.y * 83.1, iterNum * 1.37));
+        float ccShare = (incoming[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY) ? 0.55 : 0.30;
+        if (!cgTriggerNearRod && ccTarget.z > 0.5 && ccRoll < ccShare) {
+          // Cloud-to-cloud (CC): meta.y = 2.0 for negative (-CC), 3.0 for positive (+CC).
+          bool isPositiveCC = random2d(vec2(ccTarget.x * 71.9 + ccTarget.y * 31.1, iterNum * 2.19)) < 0.30;
+          vec4 ccStrike = incoming;
+          ccStrike.x = ccTarget.x;
+          if (isPositiveCC) {
+            // Encode +CC above 5.45 for single-stroke preference + rare restroke.
+            ccStrike[INTENSITY] = clamp(5.5 + (incoming[INTENSITY] - 0.75) * 0.13, 5.5, 6.0);
+            result = (row == 0) ? ccStrike : vec4(originX, 3.0, ccTarget.y, 0.0);
+          } else {
+            // Keep -CC above LIGHTNING_IC_MAX_INTENSITY so it stays distinct from IC flash.
+            ccStrike[INTENSITY] = clamp(1.5 + (incoming[INTENSITY] - 0.75) * 0.22, 1.5, 2.3);
+            result = (row == 0) ? ccStrike : vec4(originX, 2.0, ccTarget.y, 0.0);
+          }
         } else {
-          result = (row == 0) ? normalStrike : vec4(originX, 0.0, 0.0, 0.0);
+          vec4 normalStrike = attractToRod(incoming);
+          bool isNormalIC = normalStrike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY;
+          float posIcChance = mix(0.20, 0.36, clamp((incoming.y - 0.16) / 0.28, 0.0, 1.0));
+          bool isPositiveIC = isNormalIC && incoming.y >= 0.16 &&
+                              random2d(vec2(originX * 61.3 + incoming.y * 41.7, iterNum * 1.91)) < posIcChance;
+          if (isPositiveIC) {
+            normalStrike[INTENSITY] = clamp(max(normalStrike[INTENSITY], 0.88), 0.88, LIGHTNING_IC_MAX_INTENSITY);
+            result = (row == 0) ? normalStrike : vec4(originX, 4.0, 0.0, 0.0);
+          } else {
+            result = (row == 0) ? normalStrike : vec4(originX, 0.0, 0.0, 0.0);
+          }
         }
       }
-    }
 
-    // Fractional bits of meta.w carry independent optical effects, leaving its
-    // integer bit for existing superbolts. Probabilities are per eligible stored
-    // lightning event (not per frame or per simulation cell).
-    if (row == 1) {
-      bool positiveCG = abs(result.y - 1.0) < 0.25;
-      bool negativeCG = abs(result.y) < 0.25 && incoming[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY;
-      bool intraCloud = incoming[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY &&
-                        (result.y < 0.25 || result.y >= 3.5);
-      float cloudTop = findStormCloudTop(vec2(fract(incoming.x), incoming.y));
-      float cloudTopMeters = cloudTop * simHeightMeters;
-      bool matureStorm = originTempK > 50.0 && originTempK < CtoK(-10.0) &&
-                         incoming.y * simHeightMeters >= 4000.0 && cloudTopMeters >= 7000.0 &&
-                         texture(waterTex, vec2(fract(incoming.x), incoming.y))[CLOUD] > 0.02;
-      float seedX = fract(incoming.x) * 73.1 + incoming.y * 29.9;
-      if (intraCloud && matureStorm) {
-        result.z = cloudTop; // free for IC: origin-to-anvil top, not a CC target
-        if (random2d(vec2(seedX + 11.7, iterNum * 1.71)) < 0.09)
-          result.w += 1.0 / 32.0; // anvil crawler
-        if (random2d(vec2(seedX + 31.3, iterNum * 2.11)) < 0.00025)
-          result.w += 4.0 / 32.0; // blue jet: 0.025% of eligible IC events
+      // Fractional bits of meta.w carry independent optical effects, leaving its
+      // integer bit for existing superbolts. Probabilities are per eligible stored
+      // lightning event (not per frame or per simulation cell).
+      if (row == 1) {
+        bool positiveCG = abs(result.y - 1.0) < 0.25;
+        bool negativeCG = abs(result.y) < 0.25 && incoming[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY;
+        bool intraCloud = incoming[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY &&
+                          (result.y < 0.25 || result.y >= 3.5);
+        float cloudTop = findStormCloudTop(vec2(fract(incoming.x), incoming.y));
+        float cloudTopMeters = cloudTop * simHeightMeters;
+        bool matureStorm = originTempK > 50.0 && originTempK < CtoK(-10.0) &&
+                           incoming.y * simHeightMeters >= 4000.0 && cloudTopMeters >= 7000.0 &&
+                           texture(waterTex, vec2(fract(incoming.x), incoming.y))[CLOUD] > 0.02;
+        float seedX = fract(incoming.x) * 73.1 + incoming.y * 29.9;
+        if (intraCloud && matureStorm) {
+          result.z = cloudTop; // free for IC: origin-to-anvil top, not a CC target
+          if (random2d(vec2(seedX + 11.7, iterNum * 1.71)) < 0.09)
+            result.w += 1.0 / 32.0; // anvil crawler
+          if (random2d(vec2(seedX + 31.3, iterNum * 2.11)) < 0.00025)
+            result.w += 4.0 / 32.0; // blue jet: 0.025% of eligible IC events
+        }
+        // Positive CG drives the mesospheric quasi-electrostatic field; intense
+        // CG of either polarity can radiate the EMP that produces an elve.
+        if (positiveCG && matureStorm && random2d(vec2(seedX + 47.9, iterNum * 2.73)) < 0.0005)
+          result.w += 2.0 / 32.0; // red sprite: 0.05% of eligible +CG events
+        if (matureStorm && (positiveCG || (negativeCG && incoming[INTENSITY] >= 2.0)) &&
+            random2d(vec2(seedX + 59.7, iterNum * 3.17)) < 0.00014)
+          result.w += 8.0 / 32.0; // elve: 0.014% of eligible energetic CG events
       }
-      // Positive CG drives the mesospheric quasi-electrostatic field; intense
-      // CG of either polarity can radiate the EMP that produces an elve.
-      if (positiveCG && matureStorm && random2d(vec2(seedX + 47.9, iterNum * 2.73)) < 0.0005)
-        result.w += 2.0 / 32.0; // red sprite: 0.05% of eligible +CG events
-      if (matureStorm && (positiveCG || (negativeCG && incoming[INTENSITY] >= 2.0)) &&
-          random2d(vec2(seedX + 59.7, iterNum * 3.17)) < 0.00014)
-        result.w += 8.0 / 32.0; // elve: 0.014% of eligible energetic CG events
     }
   }
 

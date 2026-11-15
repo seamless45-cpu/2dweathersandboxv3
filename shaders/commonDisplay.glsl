@@ -25,7 +25,7 @@ void drawCursor(vec4 cursor, vec3 view)            // OFF: cursor.w < 1       No
       float horizontalDist = abs(dx);
       float edgeTolX = max(0.0016 / max(view[2], 0.25), texelSize.x * 0.35);
       float edgeTolY = edgeTolX * (resolution.x / max(resolution.y, 1.0));
-      float mastHeight = 18.0 * texelSize.y;
+      float mastHeight = (cursor.w >= 5.0 ? 32.4 : 18.0) * texelSize.y;
       float dy = texCoord.y - cursor.y;
       bool onMast = horizontalDist < edgeTolX * 0.85 && dy >= 0.0 && dy <= mastHeight;
       bool onBase = horizontalDist <= edgeTolX * 4.5 && abs(dy) < edgeTolY * 0.9;
@@ -33,7 +33,7 @@ void drawCursor(vec4 cursor, vec3 view)            // OFF: cursor.w < 1       No
                          fract(horizontalDist * 140.0) < 0.45;
       bool onReachTick = abs(horizontalDist - cursor[2]) < edgeTolX * 0.85 && abs(dy) <= edgeTolY * 3.0;
       if (onMast || onBase)
-        fragmentColor = vec4(0.75, 0.90, 1.0, 1.0);
+        fragmentColor = cursor.w >= 5.0 ? vec4(0.35, 1.0, 1.0, 1.0) : vec4(0.75, 0.90, 1.0, 1.0);
       else if (onReachLine || onReachTick)
         fragmentColor = vec4(0.45, 0.72, 1.0, 1.0);
     } else if (cursor.w >= 3.) {                   // wind push area
