@@ -46,7 +46,7 @@ float rodEffectiveRadius(int rodIdx, float intensity)
   float effectiveHeight = rodHeight * (rodTypes[rodIdx] > 0.5 ? 1.8 : 1.0);
   float heightFactor = 1.0 + clamp(rodPositions[rodIdx].y * 1.2 + (effectiveHeight / max(resolution.y, 1.0)) * 3.0, 0.0, 0.45);
   float currentFactor = clamp(0.85 + 0.12 * intensity, 0.90, 1.45);
-  float reachMultiplier = rodTypes[rodIdx] > 0.5 ? 10.0 : 1.0;
+  float reachMultiplier = rodTypes[rodIdx] > 0.5 ? 2.5 : 1.0;
   return rodAttractRadius * reachMultiplier * heightFactor * currentFactor;
 }
 

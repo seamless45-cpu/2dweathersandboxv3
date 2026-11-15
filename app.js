@@ -2082,7 +2082,7 @@ let lightningRodsVersion = 0;
 let lightningRodCaptures = 0;
 const MAX_LIGHTNING_RODS = 12;
 const LIGHTNING_ROD_ATTRACT_RADIUS = 0.11;
-const SUPER_LIGHTNING_ROD_REACH_MULT = 10.0;
+const SUPER_LIGHTNING_ROD_REACH_MULT = 2.5;
 const lightningRodStatus = { placed : '0 / ' + MAX_LIGHTNING_RODS + ' (0 hits)' };
 
 function updateLightningRodStatus()
@@ -5168,7 +5168,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     const lightningRodInput = lightningRodController.domElement.querySelector('input');
     if (lightningRodInput) {
       lightningRodInput.readOnly = true;
-      lightningRodInput.title = 'Pick Lightning Rod or Super Lightning Rod and click ground; Shift-click or right-click either type to remove it. Super rods have ten times the attraction and can initiate upward lightning under storms.';
+      lightningRodInput.title = 'Pick Lightning Rod or Super Lightning Rod and click ground; Shift-click or right-click either type to remove it. Super rods have 2.5 times the base attraction and can initiate upward lightning under storms.';
     }
     UI_folder.add({ clearLightningRods : function() {
                       lightningRods = [];
@@ -6955,8 +6955,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.35'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.35')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.36'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.36')
   ]);
 
   const [
@@ -7914,7 +7914,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.35');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.36');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9943,7 +9943,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.35');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.36');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

@@ -71,7 +71,7 @@ check('rod types are uploaded to both shader programs with dirty tracking',
   /rodTypes\[0\]/.test(app) && /gl\.uniform1fv\(locations.types, rodTypeData\)/.test(app) &&
   /uploadLightningRodUniforms\(lightningLocationProgram\)/.test(app) && /uploadLightningRodUniforms\(realisticDisplayProgram\)/.test(app));
 check('super rod extends reach, guaranteed capture, visible height, tip termination and preview',
-  /rodTypes\[rodIdx\] > 0\.5 \? 10\.0 : 1\.0/.test(location) &&
+  /rodTypes\[rodIdx\] > 0\.5 \? 2\.5 : 1\.0/.test(location) &&
   /rodTypes\[nearestRod\] > 0\.5 \? 0\.70 : 0\.35/.test(location) &&
   /rodAttractRadius \* reachMultiplier \* heightFactor \* currentFactor/.test(location) &&
   /rodHeight \* \(rodTypes\[i\] > 0\.5 \? 1\.8 : 1\.0\)/.test(display) &&
@@ -94,9 +94,25 @@ check('artificial channel and rod share the same extended animation clock and li
   /meta\.z < -0\.5[\s\S]{0,130}\* 4\.0/.test(common) &&
   /\(iterNum - lightningStartIterNum\) \/ 20\.0/.test(display) &&
   /\(iterNum - strikeData\[START_ITERNUM\]\) \/ 20\.0/.test(display));
-check('crawler uses individually seeded, progressively growing leaders and branching',
-  /lane < 4/.test(display) && /lengthKm = 9\.0 \+ 9\.0 \* random2d/.test(display) &&
+check('crawler uses stepped asymmetric leaders with sequential forks and fade',
+  /lane < 3/.test(display) && /lengthKm = 11\.0 \+ 8\.0 \* random2d/.test(display) &&
   /segmentGrowth = clamp\(progress - \(k - 1\.0\)/.test(display) &&
-  /mix\(prev, next, segmentGrowth\)/.test(display) && /branchGrowth/.test(display) && /vec2 tip = forkEnd/.test(display));
+  /mix\(prev, next, segmentGrowth\)/.test(display) &&
+  /branchProgress = clamp\(progress - k, 0\.0, 2\.0\)/.test(display) &&
+  /firstGrowth = clamp\(branchProgress, 0\.0, 1\.0\)/.test(display) &&
+  /secondGrowth = clamp\(branchProgress - 1\.0, 0\.0, 1\.0\)/.test(display) &&
+  /channelGlow\(p, forkEnd, mix\(forkEnd, twigEnd, secondGrowth\)/.test(display) &&
+  /smoothstep\(1\.55, 2\.5, time\)/.test(display));
+// Before a fork or twig begins, the segment it connects to is complete.
+let connected = true, visible = false;
+for (let progress = 0; progress <= 10; progress += 0.01) for (let k = 2; k <= 8; k++) {
+  const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+  const parent = clamp(progress - (k - 1), 0, 1);
+  const branch = clamp(progress - k, 0, 2);
+  const first = clamp(branch, 0, 1), second = clamp(branch - 1, 0, 1);
+  connected &&= (!first || parent === 1) && (!second || first === 1);
+  visible ||= first > 0 && second > 0;
+}
+check('forks grow only after their parent segments, and both levels can appear', connected && visible);
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 if (failed) process.exitCode = 1;
