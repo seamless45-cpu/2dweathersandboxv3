@@ -82,11 +82,11 @@ const NETWORK_TILE = (512 * 256) / MB;
 console.log('Graphics memory at the default resolution\n');
 const DEFAULTS = { x : 2000, y : 300 };
 const boltBudget = /const numLightningTextures = readLightningTileBudget\(\);/.test(app) ? 2 : 4;
-const boltTiles = boltBudget * (2500 * 5000) / MB;          // R8, no mip chain
+const boltTiles = boltBudget * (2500 * 5000) * 4 / 3 / MB;  // R8 with mip chain
 
 const rows = [
   ['simulation textures, ' + DEFAULTS.x + ' x ' + DEFAULTS.y + ' cells', simMemoryMB(DEFAULTS.x, DEFAULTS.y)],
-  ['bolt artwork, ' + boltBudget + ' x 2500 x 5000 R8', boltTiles],
+  ['bolt artwork, ' + boltBudget + ' x 2500 x 5000 R8 with mips', boltTiles],
   ['intra-cloud network, 512 x 256 R8', NETWORK_TILE],
   ['surface texture map, uploaded at 2048 x 1280', SURFACE_MAP],
   ['HDR + bloom at a ' + WINDOW_W + ' x ' + WINDOW_H + ' window', displayMemoryMB()]

@@ -94,25 +94,28 @@ check('artificial channel and rod share the same extended animation clock and li
   /meta\.z < -0\.5[\s\S]{0,130}\* 4\.0/.test(common) &&
   /\(iterNum - lightningStartIterNum\) \/ 20\.0/.test(display) &&
   /\(iterNum - strikeData\[START_ITERNUM\]\) \/ 20\.0/.test(display));
-check('crawler uses stepped asymmetric leaders with sequential forks and fade',
-  /lane < 3/.test(display) && /lengthKm = 11\.0 \+ 8\.0 \* random2d/.test(display) &&
-  /segmentGrowth = clamp\(progress - \(k - 1\.0\)/.test(display) &&
-  /mix\(prev, next, segmentGrowth\)/.test(display) &&
+check('crawler connects the IC origin to the anvil and propagates staggered leaders',
+  /originY = \(origin.y - top\) \* heightKm/.test(display) &&
+  /feederProgress = clamp\(time \/ 0\.3, 0\.0, 1\.0\) \* 4\.0/.test(display) &&
+  /mix\(vec2\(0\.0, originY\), root, k \/ 4\.0\)/.test(display) &&
+  /lane < 3/.test(display) && /\(time - 0\.3 - f \* 0\.12\) \/ 1\.25/.test(display) &&
+  /mix\(prev, next, growth\)/.test(display) && /float head =/.test(display) &&
   /branchProgress = clamp\(progress - k, 0\.0, 2\.0\)/.test(display) &&
-  /firstGrowth = clamp\(branchProgress, 0\.0, 1\.0\)/.test(display) &&
-  /secondGrowth = clamp\(branchProgress - 1\.0, 0\.0, 1\.0\)/.test(display) &&
-  /channelGlow\(p, forkEnd, mix\(forkEnd, twigEnd, secondGrowth\)/.test(display) &&
-  /smoothstep\(1\.55, 2\.5, time\)/.test(display));
-// Before a fork or twig begins, the segment it connects to is complete.
+  /channelGlow\(p, elbow, mix\(elbow, tip, second\)/.test(display) &&
+  /smoothstep\(1\.6, 2\.5, time\)/.test(display));
+// Propagation remains attached, including every sub-branch; growth begins only
+// after the feeder reaches the root and the relevant parent joint is complete.
 let connected = true, visible = false;
-for (let progress = 0; progress <= 10; progress += 0.01) for (let k = 2; k <= 8; k++) {
+for (let time = 0; time <= 2.5; time += 0.005) for (let lane = 0; lane < 3; lane++) for (let k = 2; k <= 7; k++) {
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+  const feeder = clamp(time / 0.3, 0, 1);
+  const progress = clamp((time - 0.3 - lane * 0.12) / 1.25, 0, 1) * 9;
   const parent = clamp(progress - (k - 1), 0, 1);
   const branch = clamp(progress - k, 0, 2);
   const first = clamp(branch, 0, 1), second = clamp(branch - 1, 0, 1);
-  connected &&= (!first || parent === 1) && (!second || first === 1);
+  connected &&= (!progress || feeder === 1) && (!first || parent === 1) && (!second || first === 1);
   visible ||= first > 0 && second > 0;
 }
-check('forks grow only after their parent segments, and both levels can appear', connected && visible);
+check('all leader and branch levels grow from completed connections', connected && visible);
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 if (failed) process.exitCode = 1;
