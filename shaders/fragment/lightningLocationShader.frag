@@ -21,7 +21,9 @@ uniform float iterNum;
 out vec4 lightningLocation;
 
 uniform float dryLapse;
-uniform vec4 artificialStrike; // x, origin y, intensity, active
+uniform vec4 artificialStrike;      // x, origin y, intensity, active
+uniform float artificialStrikeVariant; // which kind of event a manual click queues (see app.js)
+uniform float artificialStrikeTipY;    // terrain surface height at the click, for upward GC strikes
 uniform float simHeightMeters; // simulation height in meters, for physical strike ranges
 
 #include "common.glsl"
@@ -378,10 +380,67 @@ void main()
       // type 5: upward GC, .z stores the originating rod tip.
       result = (row == 0) ? incoming : vec4(originX, 5.0, upwardTipY, 0.0);
     } else if (isArtificial) {
-      // Artificial lightning is an ordinary CG stroke, subject to rod capture;
-      // it does not roll for naturally occurring exotic lightning.
-      vec4 forcedStrike = attractToRod(incoming);
-      result = (row == 0) ? forcedStrike : vec4(originX, 0.0, -1.0, 0.0);
+      // Artificial lightning: the "Artificial Lightning Variant" option picked in
+      // the UI decides which kind of event the click produces. Ground-striking
+      // variants still obey rod capture, exactly as natural strikes do; the
+      // intra-cloud, cloud-to-cloud and upward variants keep the place they
+      // formed in. Strikes that carry an extra target/anchor height in meta.z
+      // store it with the artificial offset of 10.0 (see artificialMeta() in
+      // common.glsl); the rest leave meta.z at the -1 artificial sentinel.
+      float variant = artificialStrikeVariant;
+      vec4 artData = incoming;
+      vec4 artMeta = vec4(originX, 0.0, -1.0, 0.0); // ordinary CG by default
+      if (variant > 0.5 && variant < 1.5) {         // intra-cloud flash
+        artData[INTENSITY] = 0.85;
+      } else if (variant > 1.5 && variant < 2.5) {  // positive intra-cloud flash
+        artData[INTENSITY] = 0.95;
+        artMeta.y = 4.0;
+      } else if (variant > 2.5 && variant < 4.5) {  // cloud-to-cloud (-CC / +CC)
+        bool ccPositive = variant >= 3.5;
+        vec3 ccTarget = selectCloudToCloudTarget(vec2(originX, incoming.y), iterNum);
+        if (ccTarget.z > 0.5) {
+          artData.x = ccTarget.x;
+          if (ccPositive) {
+            artData[INTENSITY] = clamp(5.5 + (incoming[INTENSITY] - 0.75) * 0.13, 5.5, 6.0);
+            artMeta = vec4(originX, 3.0, 10.0 + ccTarget.y, 0.0);
+          } else {
+            artData[INTENSITY] = clamp(1.5 + (incoming[INTENSITY] - 0.75) * 0.22, 1.5, 2.3);
+            artMeta = vec4(originX, 2.0, 10.0 + ccTarget.y, 0.0);
+          }
+        } else {
+          artData[INTENSITY] = 0.85; // no cloud deck to reach: fall back to an ordinary flash
+        }
+      } else if (variant > 4.5 && variant < 5.5) {  // positive cloud-to-ground
+        artData[INTENSITY] = 4.8;
+        artMeta.y = 1.0;
+        artData = attractToRod(artData);
+      } else if (variant > 5.5 && variant < 6.5) {  // superbolt
+        artData[INTENSITY] = 5.0;
+        artMeta = vec4(originX, 1.0, -1.0, 1.0); // integer meta.w = superbolt flag
+        artData = attractToRod(artData);
+      } else if (variant > 6.5 && variant < 7.5) {  // ground-to-cloud (upward leader)
+        artData = vec4(originX, max(incoming.y, artificialStrikeTipY + 0.05), iterNum, 2.2);
+        artMeta = vec4(originX, 5.0, 10.0 + clamp(artificialStrikeTipY, 0.0, 0.99), 0.0);
+      } else if (variant > 7.5 && variant < 8.5) {  // anvil crawler (IC + crawler effect)
+        float cloudTop = max(findStormCloudTop(vec2(originX, incoming.y)), incoming.y + 0.12);
+        artData[INTENSITY] = 0.85;
+        artMeta = vec4(originX, 0.0, 10.0 + clamp(cloudTop, 0.0, 0.99), 1.0 / 32.0);
+      } else if (variant > 8.5 && variant < 9.5) {  // blue jet (IC + jet effect)
+        float cloudTop = max(findStormCloudTop(vec2(originX, incoming.y)), incoming.y + 0.10);
+        artData[INTENSITY] = 0.85;
+        artMeta = vec4(originX, 0.0, 10.0 + clamp(cloudTop, 0.0, 0.99), 4.0 / 32.0);
+      } else if (variant > 9.5 && variant < 10.5) { // red sprite (+CG + sprite effect)
+        artData[INTENSITY] = 4.8;
+        artMeta = vec4(originX, 1.0, -1.0, 2.0 / 32.0);
+        artData = attractToRod(artData);
+      } else if (variant > 10.5 && variant < 11.5) { // elve (energetic CG + elve effect)
+        artData[INTENSITY] = 3.5;
+        artMeta = vec4(originX, 0.0, -1.0, 8.0 / 32.0);
+        artData = attractToRod(artData);
+      } else {                                      // ordinary cloud-to-ground (default)
+        artData = attractToRod(artData);
+      }
+      result = (row == 0) ? artData : artMeta;
     } else {
       // Tall convective clouds only initiate external positive CG from cold upper
       // charge regions strictly below -25 °C.
@@ -448,8 +507,11 @@ void main()
 
       // Fractional bits of meta.w carry independent optical effects, leaving its
       // integer bit for existing superbolts. Probabilities are per eligible stored
-      // lightning event (not per frame or per simulation cell).
-      if (row == 1) {
+      // lightning event (not per frame or per simulation cell). Artificial strikes
+      // picked in the variant list already carry exactly the optical bits their
+      // variant promises, and their meta.z holds either the artificial sentinel or
+      // a 10-offset height - leave both alone.
+      if (row == 1 && !artificialMeta(result.z)) {
         bool positiveCG = abs(result.y - 1.0) < 0.25;
         bool negativeCG = abs(result.y) < 0.25 && incoming[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY;
         bool intraCloud = incoming[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY &&

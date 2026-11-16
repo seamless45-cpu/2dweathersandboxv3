@@ -34,7 +34,7 @@ uniform float windPushRelativeHumidity;
 uniform float windPushWidth;
 uniform float windPushDepth;
 uniform vec2 userInputMove;  // moveX  moveY
-uniform int userInputType;   // 0 = nothing 	1 = temp ...
+uniform int userInputType;   // 0 = nothing 	1 = temp ... 23 = precipitation
 
 uniform vec4 airplaneValues; // xpos   Ypos   throttle   fire
 
@@ -315,6 +315,14 @@ void main()
     } else if (userInputType == 3 && wall[DISTANCE] != 0) { // smoke, only apply if not wall
       water[SMOKE] += userInputValues[BRUSH_INTENSITY];
       water[SMOKE] = min(max(water[SMOKE], 0.0), 2.0);
+
+    } else if (userInputType == 23 && wall[DISTANCE] != 0) {                    // precipitation, only apply if not wall
+      // Painting rain or snow straight into the air: injects into the
+      // precipitation field, which falls downward with the flow, decays slowly,
+      // dims the sun and feeds reflectivity. The precipitation particle brush
+      // (see precipitationShader.vert) spawns the real droplets that deposit
+      // moisture on the ground. Ctrl paints the field back out.
+      water[PRECIPITATION] = max(water[PRECIPITATION] + userInputValues[BRUSH_INTENSITY] * 0.5, 0.0);
 
     } else if (userInputType == 4) {                                                 // drag/move air
 

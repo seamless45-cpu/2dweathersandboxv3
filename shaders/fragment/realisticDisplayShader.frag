@@ -697,8 +697,25 @@ float channelGlow(vec2 p, vec2 a, vec2 b, float width)
   return (width / filteredWidth) * exp(-d * d / (filteredWidth * filteredWidth));
 }
 
-// Rising ground-to-cloud leader, rooted at the actual super-rod tip. Fine
-// forks extend upward as the channel advances into the cold cloud.
+// Rising ground-to-cloud leader, rooted at the actual super-rod tip.
+// Reworked as a tortuous, dendritic channel: the primary leader follows a
+// leaning, fractal-displaced spine (slope-corrected distance, no conditional
+// derivatives), two levels of forward-diverging forks break away from the
+// trunk as it advances, and a bright head travels along the established
+// channel. Forks only start growing once the trunk head has passed their
+// joint, and sub-forks only after their fork has - growth stays connected
+// end to end, exactly as in the intra-cloud and crawler channels.
+vec2 evalGcQuad(float t, vec2 p0, vec2 p1, vec2 p2)
+{
+  float om = 1.0 - t;
+  return om * om * p0 + 2.0 * om * t * p1 + t * t * p2;
+}
+
+vec2 evalGcQuadDeriv(float t, vec2 p0, vec2 p1, vec2 p2)
+{
+  return 2.0 * (1.0 - t) * (p1 - p0) + 2.0 * t * (p2 - p1);
+}
+
 vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
 {
   if (!inLightningWorldTile())
@@ -707,33 +724,132 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
   vec2 p = vec2((texCoord.x - pos.x) * aspectRatios.x * heightKm,
                 (texCoord.y - tipY) * heightKm);
   float span = max((pos.y - tipY) * heightKm, 0.05);
-  if (abs(p.x) > 3.5 || p.y < 0.0 || p.y > span + 1.0)
-    return vec3(0.0);
-  float growth = clamp(time * 1.3 + 0.08, 0.0, 1.0) * 9.0;
-  float glow = 0.0;
-  vec2 prev = vec2(0.0, 0.0);
   float seed = random2d(pos * 81.3);
-  for (int i = 1; i <= 9; i++) {
-    float k = float(i);
-    float jitter = (random2d(vec2(seed + k * 1.37, pos.x * 22.7)) - 0.5) * 0.5;
-    vec2 next = vec2(jitter * sin(3.14159265 * k / 9.0), span * k / 9.0);
-    float segment = clamp(growth - (k - 1.0), 0.0, 1.0);
-    if (segment > 0.0) {
-      glow += channelGlow(p, prev, mix(prev, next, segment), 0.05);
-      if (i >= 3 && i <= 7 && mod(k, 2.0) > 0.5) {
-        vec2 forkStart = mix(prev, next, 0.5);
-        float side = mod(k, 4.0) < 2.0 ? -1.0 : 1.0;
-        vec2 forkEnd = forkStart + vec2(side * (0.6 + k * 0.08), span * 0.12);
-        glow += 0.55 * channelGlow(p, forkStart, mix(forkStart, forkEnd, segment), 0.035);
+  float s2 = random2d(vec2(seed * 3.71, pos.y * 7.93));
+  float lean = (s2 - 0.5) * span * 0.55; // the cloud target is rarely dead overhead
+  if (abs(p.x - 0.5 * lean) > span * 0.85 + 1.7 || p.y < -0.6 || p.y > span * 1.15 + 1.1)
+    return vec3(0.0);
+
+  // Growth clock: the trunk advances over the first ~65% of the animation,
+  // forks trail the trunk head, sub-forks trail their fork.
+  float growth = clamp(time * 1.55 + 0.08, 0.0, 1.0);
+  float trunkLen = max(length(vec2(lean, span)), 0.05);
+  float headKm = growth * trunkLen;
+  float headT = clamp(headKm / trunkLen, 0.0, 1.0);
+
+  // Spine: quadratic bezier from the rod tip to the cloud base, sampled in the
+  // underdisplaced frame with a perpendicular fractal offset on top.
+  vec2 q0 = vec2(0.0);
+  vec2 q1 = vec2(lean * 0.32, span * 0.58);
+  vec2 q2 = vec2(lean, span);
+  float jagPhase = seed * 9.0 + 0.35;
+  float jagScale = clamp(trunkLen * 0.052, 0.012, 0.045);
+
+  float bestT = 0.0;
+  float bestD2 = 1e9;
+  for (int k = 0; k < 6; k++) {
+    float tc = float(k) / 5.0;
+    vec2 diff = evalGcQuad(tc, q0, q1, q2) - p;
+    float d2 = dot(diff, diff);
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      bestT = tc;
+    }
+  }
+  float t = bestT;
+  for (int it = 0; it < 3; it++) {
+    vec2 r = evalGcQuad(t, q0, q1, q2) - p;
+    vec2 dC = evalGcQuadDeriv(t, q0, q1, q2);
+    float denom = dot(dC, dC) + 1e-6;
+    t = clamp(t - dot(r, dC) / denom, 0.0, 1.0);
+  }
+
+  vec2 c = evalGcQuad(t, q0, q1, q2);
+  vec2 dC = evalGcQuadDeriv(t, q0, q1, q2);
+  float dLen = length(dC);
+  vec2 tanDir = dLen > 1e-5 ? dC / dLen : vec2(0.0, 1.0);
+  vec2 normDir = vec2(-tanDir.y, tanDir.x);
+
+  float spineEnv = pow(sin(PI * clamp(t, 0.0, 1.0)), 0.75); // pinned at both anchors
+  vec2 spineDisp = ccFractalDisp(t * trunkLen, trunkLen, jagPhase, jagScale);
+  float dPerp = dot(p - c, normDir) - spineDisp.x * spineEnv;
+  float slope = spineDisp.y * spineEnv;
+  float distMain = abs(dPerp) * inversesqrt(1.0 + clamp(slope * slope, 0.0, 6.25));
+
+  float worldPix = max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)),
+                       length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * heightKm;
+  float coreW = max(0.0023, worldPix * 1.05);
+  // The trunk only exists behind its advancing head.
+  float growMask = headT <= 1e-4 ? 0.0 : 1.0 - smoothstep(max(headT - 0.10, 0.0), headT, t);
+  float edgeFade = smoothstep(0.0, 0.022, t) * smoothstep(1.0, 0.978, t);
+  float mainCore = smoothstep(coreW * 1.55, coreW * 0.15, distMain) * edgeFade * growMask;
+  float mainHalo = exp(-distMain / max(coreW * 3.4, 0.0050)) * 0.22 * edgeFade * growMask;
+  float mainOuter = exp(-distMain / max(coreW * 8.0, 0.012)) * 0.020 * edgeFade * growMask;
+  float mainSignal = mainCore + mainHalo + mainOuter;
+
+  // A bright head rides the growing tip.
+  float headActive = 1.0 - smoothstep(0.90, 1.0, growth);
+  float headGlow = exp(-pow((t - headT) * trunkLen / 0.32, 2.0)) * headActive * 0.85 * edgeFade;
+
+  float branchCore = 0.0;
+  float branchSignal = 0.0;
+  for (int fi = 0; fi < 3; fi++) {
+    float fIdx = float(fi);
+    float fRootT = 0.33 + fIdx * 0.21 + (random2d(vec2(seed * 5.3, fIdx * 3.7)) - 0.5) * 0.07;
+    fRootT = clamp(fRootT, 0.12, 0.86);
+    vec2 fDisp = ccFractalDisp(fRootT * trunkLen, trunkLen, jagPhase, jagScale);
+    vec2 fRoot = evalGcQuad(fRootT, q0, q1, q2);
+    vec2 fTan = evalGcQuadDeriv(fRootT, q0, q1, q2);
+    float fLen = length(fTan);
+    fTan = fLen > 1e-5 ? fTan / fLen : vec2(0.0, 1.0);
+    fRoot += vec2(-fTan.y, fTan.x) * (fDisp.x * pow(sin(PI * fRootT), 0.75));
+
+    float sideSign = mod(fIdx + floor(seed * 7.0), 2.0) < 1.0 ? -1.0 : 1.0;
+    float forkAngle = sideSign * mix(0.48, 0.88, random2d(vec2(seed * 7.1, fIdx * 1.9 + 2.3)));
+    vec2 forkDir = ccRotate(fTan, forkAngle);
+    float forkLen = span * mix(0.24, 0.40, random2d(vec2(seed * 3.3, fIdx * 4.7 + 1.1)));
+
+    // The fork only starts once the trunk head has reached its joint.
+    float forkGrowth = clamp((headKm - fRootT * trunkLen) / max(forkLen * 0.72, 0.05), 0.0, 1.0);
+    if (forkGrowth > 0.0) {
+      vec2 bVal = ccEvalBranch(p, fRoot, forkDir, forkLen * forkGrowth, sideSign,
+                               seed + fIdx * 1.37, coreW * 0.74, mix(0.80, 0.92, random2d(vec2(seed * 11.3, fIdx + 0.6))));
+      branchCore = max(branchCore, bVal.x);
+      branchSignal = max(branchSignal, bVal.y);
+
+      // Sub-fork: splits off the fork once the fork is more than half grown.
+      float subGrowth = clamp((forkGrowth - 0.55) / 0.34, 0.0, 1.0);
+      if (subGrowth > 0.0) {
+        float subAlong = 0.55 * forkLen;
+        float subSideSign = -sideSign;
+        vec2 subDir = ccRotate(forkDir, subSideSign * mix(0.35, 0.62, random2d(vec2(seed * 13.7, fIdx * 3.1 + 5.9))));
+        vec2 subStart = fRoot + forkDir * subAlong;
+        vec2 subVal = ccEvalBranch(p, subStart, subDir, forkLen * 0.52 * subGrowth, subSideSign,
+                                   seed + fIdx * 3.11, coreW * 0.58, 0.66);
+        branchCore = max(branchCore, subVal.x);
+        branchSignal = max(branchSignal, subVal.y);
       }
     }
-    prev = next;
   }
-  return vec3(0.62, 0.76, 1.0) * glow * min(intensity, 30.0) * 250.0;
+
+  float totalSignal = max(mainSignal, branchSignal) + 0.18 * min(mainSignal, branchSignal) + headGlow;
+  float pulse = 0.88 + 0.12 * sin(time * 15.0 + seed * 6.283);
+  float fade = 1.0 - smoothstep(1.8, 2.5, time);
+  vec3 gcCol = vec3(0.66, 0.78, 1.0);
+  return max(totalSignal * min(intensity, 30.0) * 250.0 * pulse * fade * gcCol, vec3(0.0));
 }
 
 // The crawler connects its parent IC flash to the anvil before staggered
-// leaders sweep outward. Branches grow from established joints, not free air.
+// leaders sweep outward. Branches grow from established joints, not free air,
+// and every joint sheds a main fork plus a short dendritic pair, so the anvil
+// edge fills in like a real anvil crawler.
+//
+// The whole figure is confined to the cloud. A leader burns through ice and
+// nothing else: inside the anvil the channel is at full strength, a dim leak
+// fringe reaches a kilometre or two past the edge, and beyond that the glow
+// is gone. This is evaluated per fragment from the cloud field itself, not
+// from a fixed range, so the crawler follows the actual deck - turrets,
+// gaps and all - and cannot run far into clear air.
 vec3 drawAnvilCrawler(vec2 origin, float top, float time)
 {
   if (!inLightningWorldTile())
@@ -744,6 +860,26 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time)
   float originY = (origin.y - top) * heightKm;
   if (abs(p.x) > 27.0 || p.y < min(originY, -5.5) - 1.0 || p.y > 5.5 || time < 0.0 || time > 2.5)
     return vec3(0.0);
+
+  // Cloud confinement: full strength inside cloud, a short leak just outside.
+  vec2 uv = clamp(texCoord, vec2(0.0), vec2(1.0));
+  vec2 leakUV = vec2(1.7e3 / (cellHeight * resolution.x), 0.95e3 / (cellHeight * resolution.y));
+  float cloudHere = texture(waterTex, uv)[CLOUD];
+  float confine = smoothstep(0.015, 0.085, cloudHere);
+  if (confine < 0.999) {
+    float nearCloud = cloudHere;
+    nearCloud = max(nearCloud, texture(waterTex, clamp(uv + vec2(leakUV.x, 0.0), 0.0, 1.0))[CLOUD]);
+    nearCloud = max(nearCloud, texture(waterTex, clamp(uv - vec2(leakUV.x, 0.0), 0.0, 1.0))[CLOUD]);
+    nearCloud = max(nearCloud, texture(waterTex, clamp(uv + vec2(0.55 * leakUV.x, leakUV.y), 0.0, 1.0))[CLOUD]);
+    nearCloud = max(nearCloud, texture(waterTex, clamp(uv - vec2(0.55 * leakUV.x, leakUV.y), 0.0, 1.0))[CLOUD]);
+    nearCloud = max(nearCloud, texture(waterTex, clamp(uv + vec2(0.55 * leakUV.x, -leakUV.y), 0.0, 1.0))[CLOUD]);
+    nearCloud = max(nearCloud, texture(waterTex, clamp(uv - vec2(0.55 * leakUV.x, -leakUV.y), 0.0, 1.0))[CLOUD]);
+    float leak = smoothstep(0.015, 0.085, nearCloud) * (1.0 - confine);
+    confine = max(confine, 0.38 * leak); // the fringe a real leader leaves past the edge
+  }
+  if (confine <= 0.004)
+    return vec3(0.0);
+
   float seed = random2d(origin * 91.7);
   float glow = 0.0;
   vec2 root = vec2(0.0, -0.7);
@@ -751,8 +887,9 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time)
   float feederProgress = clamp(time / 0.3, 0.0, 1.0) * 4.0;
   for (int i = 1; i <= 4; i++) {
     float k = float(i);
-    float jitter = (random2d(vec2(seed * 23.0, k * 9.3)) - 0.5) * 0.7 * sin(PI * k / 4.0);
+    float jitter = (random2d(vec2(seed * 23.0, k * 9.3)) - 0.5) * 0.55 * sin(PI * k / 4.0);
     vec2 next = mix(vec2(0.0, originY), root, k / 4.0) + vec2(jitter, 0.0);
+    next.x += (random2d(vec2(seed * 7.7, k * 3.1 + 1.7)) - 0.5) * 0.34 * sin(PI * k / 4.0); // second-order tortuosity
     float growth = clamp(feederProgress - (k - 1.0), 0.0, 1.0);
     if (growth > 0.0)
       glow += channelGlow(p, prev, mix(prev, next, growth), 0.045) * 0.85;
@@ -761,8 +898,10 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time)
   for (int lane = 0; lane < 3; lane++) {
     float f = float(lane);
     float side = lane == 0 ? -1.0 : 1.0;
-    float lengthKm = 10.0 + 8.0 * random2d(vec2(seed + f * 1.31, origin.x * 37.0));
-    float drift = (random2d(vec2(seed + f * 7.1, origin.y * 19.0)) - 0.5) * 2.4;
+    float lengthKm = 9.0 + 9.0 * random2d(vec2(seed + f * 1.31, origin.x * 37.0));
+    float drift = (random2d(vec2(seed + f * 7.1, origin.y * 19.0)) - 0.5) * 2.8;
+    float sag = 0.55 + 1.35 * random2d(vec2(seed + f * 5.3, origin.y * 41.0)); // leaders droop as they reach the anvil edge
+    float undPhase = random2d(vec2(seed + f * 3.9, origin.x * 11.0)) * 6.283;
     float progress = clamp((time - 0.3 - f * 0.12) / 1.25, 0.0, 1.0) * 9.0;
     prev = root;
     for (int i = 1; i <= 9; i++) {
@@ -770,32 +909,43 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time)
       float n = random2d(vec2(seed * 11.0 + f * 3.7, k * 17.3 + origin.y));
       float along = k / 9.0;
       vec2 next = root + vec2(side * lengthKm * along,
-                              drift * along + 0.55 * sin(along * 5.0 + f * 2.0) * sin(PI * along) + (n - 0.5) * 1.1);
+                              drift * along + 0.42 * sin(along * 4.6 + f * 2.0 + undPhase) * sin(PI * along) +
+                              (n - 0.5) * 0.72 - sag * along * along);
       float growth = clamp(progress - (k - 1.0), 0.0, 1.0);
       if (growth > 0.0) {
         vec2 end = mix(prev, next, growth);
         // A brighter head travels along the established dimmer channel.
         float head = 0.65 + 0.35 * (1.0 - smoothstep(0.0, 2.0, progress - k));
-        glow += channelGlow(p, prev, end, mix(0.055, 0.030, along)) * head;
+        glow += channelGlow(p, prev, end, mix(0.055, 0.028, along)) * head;
       }
-      if (i >= 2 && i <= 7 && mod(k + f, 3.0) < 0.5) {
-        float branchProgress = clamp(progress - k, 0.0, 2.0);
+      // Every second joint fires a main fork plus a short dendritic pair off
+      // the elbow, so the anvil margin branches the way a real one does.
+      if (i >= 2 && i <= 8 && mod(k + f, 2.0) < 0.5) {
+        float branchProgress = clamp(progress - k, 0.0, 2.6);
         float branchSide = n > 0.5 ? 1.0 : -1.0;
-        vec2 elbow = next + vec2(side * (0.8 + n), branchSide * (0.6 + n * 0.8));
-        vec2 tip = elbow + vec2(side * (0.9 + n), branchSide * (0.3 + (1.0 - n) * 0.7));
+        float bLen = (1.6 + 2.6 * n) * (1.0 - 0.4 * along);
+        vec2 elbow = next + normalize(vec2(side * 0.88, branchSide * (0.72 + 0.55 * n))) * bLen * 0.55;
+        vec2 tip = elbow + normalize(vec2(side * 0.80, branchSide * (0.42 + 0.42 * (1.0 - n)))) * bLen * 0.55;
         float first = clamp(branchProgress, 0.0, 1.0);
         float second = clamp(branchProgress - 1.0, 0.0, 1.0);
+        float pair = clamp(branchProgress - 2.0, 0.0, 1.0);
         if (first > 0.0)
-          glow += channelGlow(p, next, mix(next, elbow, first), 0.030) * 0.7;
+          glow += channelGlow(p, next, mix(next, elbow, first), 0.030) * 0.75;
         if (second > 0.0)
-          glow += channelGlow(p, elbow, mix(elbow, tip, second), 0.022) * 0.5;
+          glow += channelGlow(p, elbow, mix(elbow, tip, second), 0.021) * 0.55;
+        if (pair > 0.0) {
+          vec2 fingerA = elbow + normalize(vec2(side * 0.52, branchSide * 1.30)) * bLen * 0.34;
+          vec2 fingerB = elbow + normalize(vec2(side * 0.74, -branchSide * 1.12)) * bLen * 0.30;
+          glow += channelGlow(p, elbow, mix(elbow, fingerA, pair), 0.015) * 0.45;
+          glow += channelGlow(p, elbow, mix(elbow, fingerB, pair), 0.015) * 0.45;
+        }
       }
       prev = next;
     }
   }
   float fade = 1.0 - smoothstep(1.6, 2.5, time);
   float pulse = 0.84 + 0.16 * sin(time * 13.0 + seed * 6.283);
-  return vec3(0.68, 0.78, 1.0) * min(glow, 2.0) * fade * pulse * 2500.0;
+  return vec3(0.68, 0.78, 1.0) * min(glow * confine, 2.0) * fade * pulse * 2500.0;
 }
 
 // Optical approximations of upper-atmospheric transients at physical altitudes.
@@ -836,7 +986,7 @@ vec3 drawUpperAtmosphereLightning()
     }
     if (hasOpticalEffect(meta.w, 4.0)) {
       // Blue jets rise from a cold convective cloud top and fan towards 40 km.
-      float baseKm = meta.z * heightKm;
+      float baseKm = artificialMetaRawZ(meta.z) * heightKm;
       if (altitude >= baseKm && altitude <= 43.0 && abs(dx) < 8.0) {
         float progress = clamp((altitude - baseKm) / max(40.0 - baseKm, 1.0), 0.0, 1.0);
         float fade = (1.0 - smoothstep(1.5, 2.5, t)) * (1.0 - smoothstep(t * 0.8 + 0.05, t * 0.8 + 0.25, progress));
@@ -945,24 +1095,28 @@ vec4 computeAirColor(vec2 bndFragCoord)
     if (lightningStartIterNum <= 0.0)
       continue;                                              // never used / released
     vec4 lightningMeta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
+    // Artificial (manually clicked) strikes mark their meta.z with the +10
+    // offset; metaRawZ recovers the real height/sentinel, metaArt flags them.
+    float metaRawZ = artificialMetaRawZ(lightningMeta.z);
+    bool metaArt = artificialMeta(lightningMeta.z);
     if (iterNum >= lightningStartIterNum && iterNum < lightningSlotEnd(lightningData, lightningMeta) &&
         lightningData[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY && hasOpticalEffect(lightningMeta.w, 1.0)) {
       float opticalTime = (iterNum - lightningStartIterNum) / 40.0;
-      vec3 crawler = drawAnvilCrawler(vec2(lightningMeta.x, lightningData.y), lightningMeta.z, opticalTime);
+      vec3 crawler = drawAnvilCrawler(vec2(lightningMeta.x, lightningData.y), metaRawZ, opticalTime);
       lightningBoltLight += crawler;
       onLight += crawler * 0.0001;
     }
     // The parent channel retains its own animation even if an optical effect
     // keeps the slot alive longer for visibility at high iteration rates.
     bool isGroundToCloud = abs(lightningMeta.y - 5.0) < 0.25;
-    if (iterNum < lightningStartIterNum || (lightningMeta.z < -0.5 || isGroundToCloud
+    if (iterNum < lightningStartIterNum || (metaArt || isGroundToCloud
         ? iterNum >= lightningSlotEnd(lightningData, lightningMeta)
         : iterNum >= strikeAnimEnd(lightningData)))
       continue;
 
     vec2 lightningPos = lightningData.xy;
     float lightningTime = isGroundToCloud ? (iterNum - lightningStartIterNum) / 40.0
-      : lightningMeta.z < -0.5 ? (iterNum - lightningStartIterNum) / 20.0 : calcLightningTime(lightningStartIterNum);
+      : metaArt ? (iterNum - lightningStartIterNum) / 20.0 : calcLightningTime(lightningStartIterNum);
     // Every strike starts directly on the trigger iteration with zero fixed delay.
     float currentLightningIntensity = lightningIntensityOverTime(lightningTime, lightningPos, lightningData[INTENSITY]);
     if (currentLightningIntensity <= 0.0)
@@ -1010,7 +1164,7 @@ vec4 computeAirColor(vec2 bndFragCoord)
     float extIntensityGain = pow(extBaseIntensity / max(lightningData[INTENSITY], 1.0), 2.0);
     float extCurve = currentLightningIntensity * extIntensityGain * extTailFade;
     if (isGroundToCloud) {
-      lightningBoltLight += displayGroundToCloud(lightningPos, lightningMeta.z, lightningTime, currentLightningIntensity);
+      lightningBoltLight += displayGroundToCloud(lightningPos, metaRawZ, lightningTime, currentLightningIntensity);
     } else if (isExternalPositive) {
       vec3 prevBoltLight = lightningBoltLight;
       lightningBoltLight += displayExternalLightning(lightningPos, lightningMeta.x, effectiveLightningTime, extCurve,
@@ -1018,7 +1172,7 @@ vec4 computeAirColor(vec2 bndFragCoord)
       if (isSuperbolt)
         lightningBoltLight = prevBoltLight + (lightningBoltLight - prevBoltLight) * superboltBrightnessMult;
     } else if (isCloudToCloud) {
-      lightningBoltLight += displayCloudToCloudLightning(vec2(lightningPos.x, lightningMeta.z),
+      lightningBoltLight += displayCloudToCloudLightning(vec2(lightningPos.x, metaRawZ),
                                                          vec2(lightningMeta.x, lightningPos.y),
                                                          isPositiveCC,
                                                          lightningTime,
@@ -1043,16 +1197,16 @@ vec4 computeAirColor(vec2 bndFragCoord)
         lightningOnLight *= 1.5;
     } else if (isGroundToCloud) {
       float dx = lightningPos.x - texCoord.x;
-      vec2 dist = vec2(dx * aspectRatios.x, texCoord.y - 0.5 * (lightningPos.y + lightningMeta.z));
+      vec2 dist = vec2(dx * aspectRatios.x, texCoord.y - 0.5 * (lightningPos.y + metaRawZ));
       lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03);
     } else if (isCloudToCloud) {
       vec2 ccTargetDist = vec2((lightningPos.x - texCoord.x) * aspectRatios[0],
-                               texCoord.y - lightningMeta.z);
+                               texCoord.y - metaRawZ);
       lightningOnLight = lightningOnLightBrightness * 1.4 / (pow(length(ccTargetDist) * 0.5, 2.) + 0.03) * ccIntensityGain * ccTailFade;
       float ccOriginDx = lightningMeta.x - texCoord.x;
       vec2 ccOriginDist = vec2(ccOriginDx * aspectRatios[0], texCoord.y - lightningPos.y);
       float ccMidDx = 0.5 * (lightningPos.x + lightningMeta.x) - texCoord.x;
-      vec2 ccMidDist = vec2(ccMidDx * aspectRatios[0], texCoord.y - 0.5 * (lightningPos.y + lightningMeta.z));
+      vec2 ccMidDist = vec2(ccMidDx * aspectRatios[0], texCoord.y - 0.5 * (lightningPos.y + metaRawZ));
       onLight += vec3(lightningOnLightBrightness * 1.4 / (pow(length(ccOriginDist) * 0.5, 2.) + 0.03) * ccIntensityGain * ccTailFade * currentLightningIntensity);
       onLight += vec3(lightningOnLightBrightness * 0.9 / (pow(length(ccMidDist) * 0.55, 2.) + 0.035) * ccIntensityGain * ccTailFade * currentLightningIntensity);
     } else {
@@ -1451,12 +1605,12 @@ void main()
         continue;
       vec4 strikeMeta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
       bool isUpwardStrike = abs(strikeMeta.y - 5.0) < 0.25;
-      if (iterNum < strikeData[START_ITERNUM] || (strikeMeta.z < -0.5 || isUpwardStrike
+      if (iterNum < strikeData[START_ITERNUM] || (artificialMeta(strikeMeta.z) || isUpwardStrike
           ? iterNum >= lightningSlotEnd(strikeData, strikeMeta)
           : iterNum >= strikeAnimEnd(strikeData)))
         continue; // this strike is not running
       float rodStrikeT = isUpwardStrike ? (iterNum - strikeData[START_ITERNUM]) / 40.0
-        : strikeMeta.z < -0.5 ? (iterNum - strikeData[START_ITERNUM]) / 20.0 : calcLightningTime(strikeData[START_ITERNUM]);
+        : artificialMeta(strikeMeta.z) ? (iterNum - strikeData[START_ITERNUM]) / 20.0 : calcLightningTime(strikeData[START_ITERNUM]);
       float slotGlow = lightningIntensityOverTime(rodStrikeT, strikeData.xy, strikeData[INTENSITY]);
       if (strikeData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY && abs(strikeMeta.y - 1.0) < 0.25 && strikeMeta.w >= 0.5) {
         float rodRepeatPeriod = map_range(random2d(strikeData.xy), 0., 1., 1.5, 3.0);

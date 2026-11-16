@@ -36,6 +36,15 @@ uniform float inactiveDroplets; // used to maintain constant spawnrate
 uniform float evapHeat;
 uniform float meltingHeat;
 
+// Precipitation tool brush: while the user is painting with the Precipitation
+// tool, inactive droplets whose random spawn position lands inside the brush
+// are released as rain or snow regardless of cloud cover. Position in
+// normalized texture coordinates, radius in half-brush-size units of the
+// circular brush used by the fluid pass, intensity is the brush intensity.
+uniform vec4 precipBrush;     // xy = center, z = radius (brushSize * 0.5), w = intensity
+uniform int precipBrushActive;
+uniform bool precipBrushWrap;
+
 // prcipitation settings:
 uniform float aboveZeroThreshold; // 1.0
 uniform float subZeroThreshold;   // 0.0
@@ -89,16 +98,46 @@ void main()
     base = texture(baseTex, texCoord);
     water = texture(waterTex, texCoord);
 
+    // Precipitation tool: painting with the brush releases droplets directly
+    // inside it, in any air, without needing cloud cover. A freezing paint
+    // falls as snow, the rest as rain. Painted droplets never write the
+    // lightning feedback, so the tool cannot stack strikes into dense clouds.
+    bool painted = false;
+    if (precipBrushActive == 1 && base[TEMPERATURE] < 500. && precipBrush.w > 0.0) {
+      float brushDx = precipBrushWrap ? absHorizontalDist(precipBrush.x, texCoord.x) : abs(precipBrush.x - texCoord.x);
+      vec2 brushVec = vec2(brushDx, precipBrush.y - texCoord.y);
+      brushVec.x *= texelSize.y / texelSize.x; // aspect ratio correction, like the circular fluid brush
+      float brushRadius = max(precipBrush.z * texelSize.y, 1e-5);
+      if (length(brushVec) < brushRadius &&
+          random2d(vec2(mass[WATER] * 1.71 + 3.3, mass[ICE] * 2.13 + iterNum * 0.77)) < clamp(precipBrush.w * 22.0, 0.2, 1.0))
+        painted = true;
+    }
+
     // check if position is okay to spawn
     realTemp = potentialToRealT(base[TEMPERATURE]); // in Kelvin
 
 #define initalMass 0.15                             // 0.05 initial droplet mass
     float threshold;                                // minimal cloudwater before precipitation develops
-    if (realTemp > CtoK(0.0))
-      threshold = aboveZeroThreshold;               // in above freezing conditions coalescence only happens in really dense clouds
-    else                                            // the colder it gets, the faster ice starts to form
-      //  treshHold = max(map_range(realTemp, CtoK(0.0), CtoK(-30.0), subZeroThreshold, initalMass), initalMass);
-      threshold = subZeroThreshold;
+    if (painted) {
+      spawned = true;
+      newPos = vec2((texCoord.x - 0.5) * 2., (texCoord.y - 0.5) * 2.); // convert texture coordinate (0 to 1) to position (-1 to 1)
+      if (realTemp < CtoK(0.0)) {                  // below 0 C
+        newMass[WATER] = 0.0;                      // enable
+        newMass[ICE] = initalMass;                 // snow
+        feedback[HEAT] += newMass[ICE] * meltingHeat;
+        newDensity = snowDensity;
+      } else {
+        newMass[WATER] = initalMass;               // rain
+        newMass[ICE] = 0.0;
+        newDensity = 1.0;
+      }
+      feedback[VAPOR] -= initalMass;
+    } else {
+      if (realTemp > CtoK(0.0))
+        threshold = aboveZeroThreshold;             // in above freezing conditions coalescence only happens in really dense clouds
+      else                                          // the colder it gets, the faster ice starts to form
+        //  treshHold = max(map_range(realTemp, CtoK(0.0), CtoK(-30.0), subZeroThreshold, initalMass), initalMass);
+        threshold = subZeroThreshold;
 
     if (water[CLOUD] > threshold && base[TEMPERATURE] < 500.) { // if cloudwater above threshold and not wall
                                                                 // float spawnChance = (water[1] - threshold) * 1000.0 / inactiveDroplets;
@@ -168,6 +207,7 @@ void main()
         if (!lightningSpawned)
           feedback[VAPOR] -= initalMass;
       }
+    }
     }
 
     if (spawned) {
