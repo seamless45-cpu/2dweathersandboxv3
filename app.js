@@ -560,6 +560,7 @@ const guiControls_default = {
   waterGreenHouseEffect : 0.0023,
   IR_rate : 1.0,
   tool : 'TOOL_NONE',
+  artificialLightningVariant : 'ordinary_cg', // what the Artificial Lightning tool queues on click
   brushSize : 20,
   wholeWidth : false,
   wholeWidthBrushWidth : 100,
@@ -598,6 +599,40 @@ const guiControls_default = {
   lengthUnit : 'LENGTH_UNIT_METRIC',
   tempUnit : 'TEMP_UNIT_C',
   speedUnit : 'SPEED_UNIT_KMH',
+};
+
+// Artificial lightning variants: what the Artificial Lightning tool queues.
+// The slot pass translates the key picked in the in-page option list into the
+// numeric selector the slot-manager shader dispatches on. Ground-striking
+// variants (positive CG, superbolt, red sprite, elve, ordinary CG) obey rod
+// capture exactly like natural strikes; the rest keep their formation.
+const artificialVariantOptions = {
+  'Ordinary Cloud-to-Ground' : 'ordinary_cg',
+  'Intra-cloud Flash' : 'intra_cloud',
+  'Positive Intra-cloud Flash' : 'positive_ic',
+  'Cloud-to-cloud (Negative)' : 'cc_negative',
+  'Cloud-to-cloud (Positive)' : 'cc_positive',
+  'Positive Cloud-to-Ground' : 'positive_cg',
+  'Superbolt' : 'superbolt',
+  'Ground-to-cloud (Upward)' : 'ground_to_cloud',
+  'Anvil Crawler' : 'anvil_crawler',
+  'Blue Jet' : 'blue_jet',
+  'Red Sprite' : 'red_sprite',
+  'Elve' : 'elve'
+};
+const artificialVariantUniforms = {
+  ordinary_cg: 0,
+  intra_cloud: 1,
+  positive_ic: 2,
+  cc_negative: 3,
+  cc_positive: 4,
+  positive_cg: 5,
+  superbolt: 6,
+  ground_to_cloud: 7,
+  anvil_crawler: 8,
+  blue_jet: 9,
+  red_sprite: 10,
+  elve: 11
 };
 
 var horizontalDisplayMult = 3.0; // 3.0 to cover srceen while zoomed out
@@ -4939,6 +4974,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     guiControls.windPushAirTemperatureC = clamp(Number(guiControls.windPushAirTemperatureC) || 0, -40, 50);
     guiControls.windPushSetHumidity = guiControls.windPushSetHumidity === true;
     guiControls.windPushRelativeHumidity = clamp(Number(guiControls.windPushRelativeHumidity) || 0, 0, 100);
+    if (!Object.prototype.hasOwnProperty.call(artificialVariantOptions, guiControls.artificialLightningVariant))
+      guiControls.artificialLightningVariant = 'ordinary_cg';
     if (!['SPEED_UNIT_KMH', 'SPEED_UNIT_MS', 'SPEED_UNIT_MPH', 'SPEED_UNIT_KT'].includes(guiControls.speedUnit))
       guiControls.speedUnit = 'SPEED_UNIT_KMH';
     hdrRenderScale = renderQualityScales[guiControls.hdrQuality];
@@ -5073,6 +5110,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         'Snow' : 'TOOL_WALL_SNOW',
         'Wind' : 'TOOL_WIND',
         'Wind Push' : 'TOOL_WIND_PUSH',
+        'Precipitation' : 'TOOL_PRECIPITATION',
         'Weather Station' : 'TOOL_STATION',
         'Lightning Rod' : 'TOOL_LIGHTNING_ROD',
         'Super Lightning Rod' : 'TOOL_SUPER_LIGHTNING_ROD',
@@ -5107,6 +5145,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       artificialStatusInput.readOnly = true;
       artificialStatusInput.title = 'Select Artificial Lightning and click in the simulation. Requests wait for a free slot and while paused.';
     }
+    const artificialVariantController = UI_folder
+      .add(guiControls, 'artificialLightningVariant', artificialVariantOptions)
+      .name('Artificial Lightning Variant')
+      .listen();
+    const artificialVariantSelect = artificialVariantController.domElement.querySelector('select');
+    if (artificialVariantSelect)
+      artificialVariantSelect.title = 'Which kind of event the Artificial Lightning tool queues. Ordinary cloud-to-ground behaves as before; the other variants take the slot the moment it is free.';
     const windPushControllers = [
       UI_folder.add(guiControls, 'windPushStrengthMph', 0, 300, 1).name('Wind Push Strength (mph)'),
       UI_folder.add(guiControls, 'windPushDirection', {
@@ -6492,6 +6537,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   // ordinary CG event on the next available simulation iteration.
   const pendingArtificialLightning = [];
   let manualLightningActiveUntil = -1;
+  let precipToolForcedUntil = 0; // iteration until which the droplet pass stays on after a Precipitation-tool stroke
   function queueArtificialLightningAtClientPoint(clientX, clientY)
   {
     if (pendingArtificialLightning.length >= 16) {
@@ -6513,7 +6559,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return false;
     // A ground click uses a high source; a sky click chooses its altitude.
     const originY = clamp(y > minOrigin ? y : Math.max(0.6, minOrigin), minOrigin, 0.98);
-    pendingArtificialLightning.push({ x, y : originY });
+    pendingArtificialLightning.push({ x, y : originY, tipY : (surfaceCell + 1) / sim_res_y });
     artificialLightningStatus.status = 'Queued: ' + pendingArtificialLightning.length;
     return true;
   }
@@ -6857,8 +6903,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.39'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.39')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.40'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.40')
   ]);
 
   const [
@@ -7805,7 +7851,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.39');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.40');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8421,6 +8467,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         else if (guiControls.tool == 'TOOL_VEGETATION')
           inputType = 22;
 
+        // Precipitation tool: paint rain/snow into the air
+        else if (guiControls.tool == 'TOOL_PRECIPITATION')
+          inputType = 23;
+
         var intensity = guiControls.brushIntensity;
 
         if (ctrlPressed) {
@@ -8582,7 +8632,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             gl.clearBufferfv(gl.COLOR, 0, zeroColorClearValue);
             gl.clearBufferfv(gl.COLOR, 1, zeroColorClearValue);
 
-            if (guiControls.enablePrecipitation) { // move precipitation, HUGE PERFORMANCE BOTTLENECK!
+            // move precipitation (HUGE PERFORMANCE BOTTLENECK). The Precipitation
+            // tool paints real droplets, so painting forces the pass on, and it
+            // stays on for a full-column fall time after the last stroke so
+            // painted droplets always land.
+            const paintingPrecipNow = leftMousePressed && guiControls.tool == 'TOOL_PRECIPITATION' && iterNum > 0;
+            if (paintingPrecipNow)
+              precipToolForcedUntil = iterNum + 3600;
+            if (guiControls.enablePrecipitation || iterNum <= precipToolForcedUntil) {
               if (precipitationEven) {
                 srcVAO = precipitationVao_0;
                 destTF = precipitationTF_1;
@@ -8596,6 +8653,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               // cloud-density lightning is owned by the precipitation shader
               // (lightningCloudDensityThreshold / lightningChanceMultiplier)
               gl.uniform1f(getUniformLoc(precipitationProgram, 'legacyLightningGate'), 1.0);
+              // Precipitation tool: release droplets inside the brush even without
+              // cloud cover, so painting the tool makes it rain/snow there. Ctrl
+              // erases the painted precipitation field instead.
+              const precipToolPainting = leftMousePressed && guiControls.tool == 'TOOL_PRECIPITATION' && iterNum > 0;
+              const precipBrushX = guiControls.wrapHorizontally ? mod(mouseXinSim, 1.0) : clamp(mouseXinSim, 0.0, 1.0);
+              const precipBrushIntensity = ctrlPressed ? -guiControls.brushIntensity : guiControls.brushIntensity;
+              gl.uniform4f(getUniformLoc(precipitationProgram, 'precipBrush'),
+                           precipToolPainting ? precipBrushX : 0.0, precipToolPainting ? mouseYinSim : 0.0,
+                           guiControls.brushSize * 0.5, precipToolPainting ? precipBrushIntensity : 0.0);
+              gl.uniform1i(getUniformLoc(precipitationProgram, 'precipBrushActive'), precipToolPainting ? 1 : 0);
+              gl.uniform1i(getUniformLoc(precipitationProgram, 'precipBrushWrap'), guiControls.wrapHorizontally ? 1 : 0);
               gl.enable(gl.BLEND);
               gl.blendFunc(gl.ONE, gl.ONE); // add everything together
               gl.activeTexture(gl.TEXTURE0);
@@ -8646,6 +8714,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               const manualStrike = !artificialAttemptedThisFrame && iterNum > 0 ? pendingArtificialLightning[0] : null;
               gl.uniform4f(getUniformLoc(lightningLocationProgram, 'artificialStrike'),
                            manualStrike ? manualStrike.x : 0, manualStrike ? manualStrike.y : 0, 2.8, manualStrike ? 1 : 0);
+              gl.uniform1f(getUniformLoc(lightningLocationProgram, 'artificialStrikeVariant'),
+                           artificialVariantUniforms[guiControls.artificialLightningVariant] ?? 0);
+              gl.uniform1f(getUniformLoc(lightningLocationProgram, 'artificialStrikeTipY'),
+                           manualStrike && manualStrike.tipY !== undefined ? manualStrike.tipY : 0);
               uploadLightningRodUniforms(lightningLocationProgram); // rods capture CG strikes
 
               gl.activeTexture(gl.TEXTURE0);
@@ -9832,7 +9904,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.39');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.40');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

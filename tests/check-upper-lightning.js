@@ -18,7 +18,7 @@ function check(name, ok) {
 
 check('all probabilities are applied only during creation of an occupied slot, once on metadata row',
   /if \(hasNewStrike && !duplicate && slot == freeSlot\)/.test(location) &&
-  /if \(row == 1\) \{[\s\S]*?0\.00014/.test(location));
+  /if \(row == 1 && !artificialMeta\(result\.z\)\) \{[\s\S]*?0\.00014/.test(location));
 check('storm gate requires cloud water, cold origin, and tall storm in physical meters',
   /originTempK < CtoK\(-10\.0\)/.test(location) && /incoming\.y \* simHeightMeters >= 4000\.0/.test(location) &&
   /cloudTopMeters >= 7000\.0/.test(location) && /\[CLOUD\] > 0\.02/.test(location) &&

@@ -42,13 +42,15 @@ check('slot pass and sound readback run for super rods even with precipitation d
 check('upward GC is distinct from CC, renders as a rising forked leader from the actual tip, and lights its rod',
   /bool isGroundToCloud = abs\(lightningMeta\.y - 5\.0\) < 0\.25/.test(display) &&
   /isCloudToCloud = !isFlash && lightningMeta\.y >= 1\.5 && !isGroundToCloud/.test(display) &&
-  /displayGroundToCloud\(lightningPos, lightningMeta\.z, lightningTime, currentLightningIntensity\)/.test(display) &&
-  /vec2 prev = vec2\(0\.0, 0\.0\);[\s\S]{0,600}span \* k \/ 9\.0/.test(display) &&
+  /displayGroundToCloud\(lightningPos, metaRawZ, lightningTime, currentLightningIntensity\)/.test(display) &&
+  /vec2 q0 = vec2\(0\.0\);[\s\S]{0,200}vec2 q2 = vec2\(lean, span\)/.test(display) &&
+  /float forkGrowth = clamp\(\(headKm - fRootT \* trunkLen\)/.test(display) &&
+  /ccEvalBranch\(p, fRoot, forkDir, forkLen/.test(display) &&
   /isUpwardStrike \? \(iterNum - strikeData\[START_ITERNUM\]\) \/ 40\.0/.test(display));
 check('upward slot lifetime and display time use matching scaling without changing manual CG',
   /abs\(meta\.y - 5\.0\) < 0\.25\)\s*\n\s*end = strike\[START_ITERNUM\] \+ \(end - strike\[START_ITERNUM\]\) \* 8\.0/.test(common) &&
   /isGroundToCloud \? \(iterNum - lightningStartIterNum\) \/ 40\.0/.test(display) &&
-  /meta\.z < -0\.5\)\s*\n\s*end = strike\[START_ITERNUM\] \+ \(end - strike\[START_ITERNUM\]\) \* 4\.0/.test(common));
+  /artificialMeta\(meta\.z\)\)\s*\n\s*end = strike\[START_ITERNUM\] \+ \(end - strike\[START_ITERNUM\]\) \* 4\.0/.test(common));
 // 40 * (1.5 + 2.924) is the minimum parent duration at intensity 2.2:
 // even at 50 iterations/frame and 3-frame readbacks it spans more than 150 steps.
 check('shortest upward event spans a three-frame readback at maximum simulation speed',

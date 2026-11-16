@@ -79,9 +79,12 @@ check('super rod extends reach, guaranteed capture, visible height, tip terminat
   /cursor\.w >= 5\.0/.test(cursor));
 check('superbolt rod capture still preserves 9–37 km range',
   /float minRangeMeters = isSuperboltExt \? 9000\.0 : 5500\.0;/.test(location) && /float maxRangeMeters = isSuperboltExt \? 37000\.0 : 34000\.0;/.test(location) && /rodRangeMeters < minRangeMeters \|\| rodRangeMeters > maxRangeMeters/.test(location));
-check('manual strikes prioritize an ordinary CG slot and still use rod capture',
-  /if \(isArtificial\) \{[\s\S]{0,240}vec4 forcedStrike = attractToRod\(incoming\);[\s\S]{0,100}vec4\(originX, 0\.0, -1\.0, 0\.0\)/.test(location) &&
-  /incoming = vec4\(artificialStrike\.xy, iterNum, artificialStrike\.z\)/.test(location));
+check('manual strikes use the variant picker with rod capture for the ground-striking variants',
+  /incoming = vec4\(artificialStrike\.xy, iterNum, artificialStrike\.z\)/.test(location) &&
+  /float variant = artificialStrikeVariant;/.test(location) &&
+  (location.match(/artData = attractToRod\(artData\);/g) || []).length >= 4 &&
+  /\/\/ ordinary cloud-to-ground \(default\)[\s\S]{0,120}artData = attractToRod\(artData\);/.test(location) &&
+  /vec4 artMeta = vec4\(originX, 0\.0, -1\.0, 0\.0\)/.test(location));
 check('full slots cause a retry next frame, not lost clicks or overwritten events',
   /!artificialAttemptedThisFrame[^\n]*pendingArtificialLightning\[0\]/.test(app) &&
   /if \(acceptedSlot >= 0\)\s*\{\s*pendingArtificialLightning\.shift\(\)/.test(app) &&
@@ -91,7 +94,7 @@ check('manual strike pass runs when precipitation is disabled and acknowledges o
   /gl\.readPixels\(0, 0, numLightningSlots, 1, gl\.RGBA, gl\.FLOAT, manualSlotReadback\)/.test(app) &&
   /countedSlotStartIter\[acceptedSlot\] = iterNum/.test(app) && /soundSystem\.soundThunder\(targetX, manualSlotReadback/.test(app));
 check('artificial channel and rod share the same extended animation clock and lifetime',
-  /meta\.z < -0\.5[\s\S]{0,130}\* 4\.0/.test(common) &&
+  /artificialMeta\(meta\.z\)[\s\S]{0,120}\* 4\.0/.test(common) &&
   /\(iterNum - lightningStartIterNum\) \/ 20\.0/.test(display) &&
   /\(iterNum - strikeData\[START_ITERNUM\]\) \/ 20\.0/.test(display));
 check('crawler connects the IC origin to the anvil and propagates staggered leaders',
@@ -100,21 +103,31 @@ check('crawler connects the IC origin to the anvil and propagates staggered lead
   /mix\(vec2\(0\.0, originY\), root, k \/ 4\.0\)/.test(display) &&
   /lane < 3/.test(display) && /\(time - 0\.3 - f \* 0\.12\) \/ 1\.25/.test(display) &&
   /mix\(prev, next, growth\)/.test(display) && /float head =/.test(display) &&
-  /branchProgress = clamp\(progress - k, 0\.0, 2\.0\)/.test(display) &&
+  /branchProgress = clamp\(progress - k, 0\.0, 2\.6\)/.test(display) &&
   /channelGlow\(p, elbow, mix\(elbow, tip, second\)/.test(display) &&
+  /pair > 0\.0/.test(display) &&
+  /channelGlow\(p, elbow, mix\(elbow, fingerA, pair\)/.test(display) &&
+  /min\(glow \* confine, 2\.0\)/.test(display) &&
   /smoothstep\(1\.6, 2\.5, time\)/.test(display));
+check('crawler is confined to the cloud interior with only a kilometre-scale leak past the edge',
+  /float cloudHere = texture\(waterTex, uv\)\[CLOUD\]/.test(display) &&
+  /leakUV = vec2\(1\.7e3 \/ \(cellHeight \* resolution\.x\), 0\.95e3 \/ \(cellHeight \* resolution\.y\)\)/.test(display) &&
+  /float confine = smoothstep\(0\.015, 0\.085, cloudHere\)/.test(display) &&
+  /float leak = smoothstep\(0\.015, 0\.085, nearCloud\) \* \(1\.0 - confine\)/.test(display) &&
+  /confine = max\(confine, 0\.38 \* leak\)/.test(display));
 // Propagation remains attached, including every sub-branch; growth begins only
 // after the feeder reaches the root and the relevant parent joint is complete.
 let connected = true, visible = false;
-for (let time = 0; time <= 2.5; time += 0.005) for (let lane = 0; lane < 3; lane++) for (let k = 2; k <= 7; k++) {
+for (let time = 0; time <= 2.5; time += 0.005) for (let lane = 0; lane < 3; lane++) for (let k = 2; k <= 8; k++) {
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
   const feeder = clamp(time / 0.3, 0, 1);
   const progress = clamp((time - 0.3 - lane * 0.12) / 1.25, 0, 1) * 9;
   const parent = clamp(progress - (k - 1), 0, 1);
-  const branch = clamp(progress - k, 0, 2);
-  const first = clamp(branch, 0, 1), second = clamp(branch - 1, 0, 1);
-  connected &&= (!progress || feeder === 1) && (!first || parent === 1) && (!second || first === 1);
-  visible ||= first > 0 && second > 0;
+  const branch = clamp(progress - k, 0, 2.6);   // clamp(progress - k, 0.0, 2.6) in the shader
+  const first = clamp(branch, 0, 1), second = clamp(branch - 1, 0, 1), pair = clamp(branch - 2, 0, 1);
+  const hasFork = (k + lane) % 2 < 0.5;
+  connected &&= (!progress || feeder === 1) && (!first || parent === 1) && (!second || first === 1) && (!pair || second === 1);
+  visible ||= hasFork && first > 0 && second > 0 && pair > 0;
 }
 check('all leader and branch levels grow from completed connections', connected && visible);
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

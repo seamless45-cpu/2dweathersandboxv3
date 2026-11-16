@@ -294,6 +294,23 @@ float strikeAnimEnd(vec4 strike)
   return start + 5.0 * (repeatPeriod * numFlashes + 2.924);
 }
 
+// Artificial (manually triggered) strikes store their meta.z with an offset of
+// 10.0 so the slot manager, the rod-capture pass and the display can tell a
+// manual click apart from a natural strike and still recover the real value:
+//   meta.z < -0.5  -> artificial, the z field is unused (it stores -1)
+//   meta.z >= 10.0 -> artificial, the real z is meta.z - 10.0
+// Natural strikes never produce either encoding: their z is a normalized
+// height in the range [0, 1).
+bool artificialMeta(float metaZ)
+{
+  return metaZ < -0.5 || metaZ >= 10.0;
+}
+
+float artificialMetaRawZ(float metaZ)
+{
+  return metaZ >= 10.0 ? metaZ - 10.0 : metaZ;
+}
+
 // Optical effects need enough simulation steps to be seen at up to 50 steps
 // per rendered frame. Ordinary strikes and superbolts retain their own timing.
 float lightningSlotEnd(vec4 strike, vec4 meta)
@@ -305,7 +322,7 @@ float lightningSlotEnd(vec4 strike, vec4 meta)
   // channel at quarter speed so a manual click survives high iteration rates.
   if (abs(meta.y - 5.0) < 0.25)
     end = strike[START_ITERNUM] + (end - strike[START_ITERNUM]) * 8.0;
-  else if (meta.z < -0.5)
+  else if (artificialMeta(meta.z))
     end = strike[START_ITERNUM] + (end - strike[START_ITERNUM]) * 4.0;
   if (fract(meta.w) > 0.0)
     end = max(end, strike[START_ITERNUM] + 100.0);
