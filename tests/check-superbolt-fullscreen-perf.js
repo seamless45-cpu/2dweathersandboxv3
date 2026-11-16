@@ -113,7 +113,7 @@ check('realisticDisplayShader.frag reuses fetched field state in computeAirColor
 /* ------------------------------------------- 3. Superbolt positive CG */
 
 check('only external positive CG can receive the 7.2% superbolt flag',
-  /bool isSuperboltExt = superboltWorldWidthMeters\(\) \* 0\.4999 >= 9000\.0 &&/.test(locationShader) &&
+  /bool isSuperboltExt = externalRangeFits\(originX, 9000\.0\) &&/.test(locationShader) &&
   /random2d\(vec2\(originX \* 89\.3 \+ incoming\.y \* 47\.1, iterNum \* 1\.13\)\) < 0\.072/.test(locationShader) &&
   /vec4\(originX, 1\.0, 0\.0, isSuperboltExt \? 1\.0 : 0\.0\)/.test(locationShader) &&
   /vec4\(originX, 0\.0, 0\.0, 0\.0\)/.test(locationShader) &&
@@ -159,40 +159,44 @@ check('app.js implements 40 Hz decaying random-axis camera shake triggered only 
     (rate * 100).toFixed(2) + '% of ' + extTotal);
 }
 
-// Exercise world-height scaling, periodic seams, narrow worlds, and rods that
-// attempt to move endpoints outside the allowed range. Mirrors the shader math.
+// Model the same-tile selector and pre-filtered rod capture at varied world
+// widths and origins, including worlds too narrow for one or both classes.
 {
-  check('physical range and rod checks are wired to the configured sim height',
-    /uniform float simHeightMeters;/.test(locationShader) &&
+  check('physical range and same-tile rod checks use configured sim height',
     /simHeightMeters \* resolution\.x \/ max\(resolution\.y, 1\.0\)/.test(locationShader) &&
-    /float minDx = 9000\.0 \/ widthMeters;/.test(locationShader) &&
-    /float maxDx = min\(42000\.0 \/ widthMeters, 0\.4999\);/.test(locationShader) &&
-    /rodRangeMeters >= 9000\.0 && rodRangeMeters <= 42000\.0/.test(locationShader) &&
+    /externalRangeFits\(originX, 5500\.0\)/.test(locationShader) &&
+    /externalRangeFits\(originX, 9000\.0\)/.test(locationShader) &&
+    /isSuperboltExt \? 37000\.0 : 34000\.0/.test(locationShader) &&
+    /rodRangeMeters < minRangeMeters \|\| rodRangeMeters > maxRangeMeters/.test(locationShader) &&
     /uniform1f\(gl\.getUniformLocation\(lightningLocationProgram, 'simHeightMeters'\), guiControls\.simHeight\)/.test(appSource));
-  const wrappedDist = (a,b) => Math.abs(glslMod(a - b + 0.5, 1) - 0.5);
-  let valid = true, minFound = Infinity, maxFound = 0, crossing = false;
-  for (const [height, rx, ry] of [[12000, 2000, 300], [5000, 1000, 200], [15000, 1600, 200]]) {
-    const width = height * rx / ry;
-    const lo = 9000 / width, hi = Math.min(42000 / width, 0.4999);
-    for (let i = 0; i <= 1000; i++) {
-      const origin = i % 2 ? 0.99 : 0.01;
-      const target = fract(origin + (i % 3 ? 1 : -1) * mix(lo, hi, i / 1000));
-      const distance = wrappedDist(origin, target) * width;
-      valid &&= distance >= 8999.999 && distance <= 42000.001;
-      crossing ||= Math.abs(origin - target) > 0.5;
-      minFound = Math.min(minFound, distance); maxFound = Math.max(maxFound, distance);
-      for (const rod of [origin, fract(origin + 0.125), fract(origin + 0.49)]) {
-        const rodDistance = wrappedDist(origin, rod) * width;
-        const final = rodDistance >= 9000 && rodDistance <= 42000 ? rod : target;
-        const finalDist = wrappedDist(origin, final) * width;
-        valid &&= finalDist >= 8999.999 && finalDist <= 42000.001;
+  let valid = true, count = 0, minFound = Infinity, maxFound = 0, cannotFit = 0;
+  for (const width of [5000, 10000, 18000, 25000, 80000, 120000])
+    for (const origin of [0.001, 0.1, 0.5, 0.9, 0.999])
+      for (const [minM, maxM] of [[5500, 34000], [9000, 37000]]) {
+        const fits = Math.max(origin, 0.999999 - origin) * width >= minM;
+        if (!fits) { cannotFit++; continue; }
+        for (const side of [-1, 1]) {
+          const available = side > 0 ? 0.999999 - origin : origin;
+          const lo = minM / width, hi = Math.min(maxM / width, available);
+          if (hi < lo) continue;
+          for (const fraction of [0, 0.1, 0.5, 0.9, 1]) {
+            const target = origin + side * mix(lo, hi, fraction);
+            const distance = Math.abs(target - origin) * width;
+            valid &&= target >= 0 && target < 1 && distance >= minM - 1e-6 && distance <= maxM + 1e-6;
+            count++; if (minM === 9000) { minFound = Math.min(minFound, distance); maxFound = Math.max(maxFound, distance); }
+            for (const rod of [0.001, 0.1, 0.5, 0.9, 0.999]) {
+              const rodDist = Math.abs(rod - origin) * width;
+              const final = rodDist >= minM && rodDist <= maxM ? rod : target;
+              valid &&= Math.abs(final - origin) * width >= minM - 1e-6 && Math.abs(final - origin) * width <= maxM + 1e-6;
+            }
+          }
+        }
       }
-    }
-  }
-  check('9–42 km distances hold at multiple heights, across seams and after rod capture',
-    valid && crossing && Math.abs(minFound - 9000) < 0.001 && Math.abs(maxFound - 42000) < 0.001);
-  check('narrow periodic worlds reject superbolts instead of violating minimum distance',
-    18000 * 0.4999 < 9000 && 20000 * 0.4999 >= 9000);
+  check('external targets and possible rods honor 5.5–34 km / 9–37 km without wrapping',
+    valid && count > 100 && Math.abs(minFound - 9000) < 0.001 && Math.abs(maxFound - 37000) < 0.001);
+  check('narrow or centrally positioned sources without enough same-tile room decline that class', cannotFit > 0 &&
+    Math.max(0.5, 0.999999 - 0.5) * 17999 < 9000 &&
+    Math.max(0.01, 0.999999 - 0.01) * 10000 >= 9000);
 }
 
 // Independently integrate a 52,000 K Planck spectrum against analytic CIE

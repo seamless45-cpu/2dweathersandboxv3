@@ -151,10 +151,18 @@ float findCapturedRodTipY(float strikeX)
   for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
     if (i >= rodCount)
       break;
-    if (abs(mod(strikeX - rodPositions[i].x + 0.5, 1.0) - 0.5) < 1e-5)
+    if (abs(strikeX - rodPositions[i].x) < 1e-5)
       return rodPositions[i].y + rodHeight * (rodTypes[i] > 0.5 ? 1.8 : 1.0) / max(resolution.y, 1.0);
   }
   return -1.0;
+}
+
+// Preserve saturated channel radiance while suppressing low-coverage haze.
+// Gradual coverage remains nonzero for thin, minified branches.
+float lightningCoverage(float sampleValue, float threshold)
+{
+  float coverage = clamp((sampleValue - threshold) / (1.0 - threshold), 0.0, 1.0);
+  return pow(coverage, 1.7);
 }
 
 // The cloud-to-ground channel: fires immediately on trigger with no fixed
@@ -177,7 +185,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   float scaleMult = 1. / spanY; // 1.0 means lightning is as tall as the simheight
 
   vec2 lightningTexCoord;
-  lightningTexCoord.x = mod(texCoord.x - pos.x + 0.5, 1.0) - 0.5;
+  lightningTexCoord.x = fract(texCoord.x) - pos.x;
   lightningTexCoord.y = texCoord.y - topY;
 
   lightningTexCoord.x *= scaleMult * aspectRatios[0] / lightningTexAspect;
@@ -206,7 +214,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   const float brightnessThreshold = 0.004;
   currentLightningIntensity *= mainBoltBrightness;
 
-  pixVal = max(pixVal - brightnessThreshold, 0.0) * (0.05 / (1.0 - brightnessThreshold));
+  pixVal = 0.05 * lightningCoverage(pixVal, brightnessThreshold);
 
   pixVal *= currentLightningIntensity;
 
@@ -248,7 +256,7 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
   float flashDir = random2d(vec2(pos.y * 3.77, 1.23)) < 0.5 ? -1. : 1.;
   float flashFlip = random2d(vec2(pos.x * 5.11, 7.77)) < 0.5 ? -1. : 1.;
 
-  vec2 flashCoord = vec2(0.5 + flashDir * (texCoord.x - mod(pos.x, 1.)) / flashSpan.x,
+  vec2 flashCoord = vec2(0.5 + flashDir * (fract(texCoord.x) - pos.x) / flashSpan.x,
                          0.5 + flashFlip * (texCoord.y - pos.y) / flashSpan.y);
 
   if (flashCoord.x < 0.004 || flashCoord.x > 0.996 || flashCoord.y < 0.004 || flashCoord.y > 0.996)
@@ -261,10 +269,7 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
   const float brightnessThreshold = flashThreshold;
   currentLightningIntensity *= mainBoltBrightness;
 
-  pixVal -= brightnessThreshold;
-
-  pixVal = max(pixVal, 0.0);
-
+  pixVal = (1.0 - brightnessThreshold) * lightningCoverage(pixVal, brightnessThreshold);
   pixVal *= currentLightningIntensity;
 
   const vec3 lightningCol = vec3(0.70, 0.57, 1.0); // 0.584, 0.576, 1.0
@@ -290,7 +295,7 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
   float flashDir = random2d(vec2(pos.y * 4.91, 2.37)) < 0.5 ? -1. : 1.;
   float flashFlip = random2d(vec2(pos.x * 6.73, 8.91)) < 0.5 ? -1. : 1.;
 
-  vec2 flashCoord = vec2(0.5 + flashDir * (texCoord.x - mod(pos.x, 1.)) / flashSpan.x,
+  vec2 flashCoord = vec2(0.5 + flashDir * (fract(texCoord.x) - pos.x) / flashSpan.x,
                          0.5 + flashFlip * (texCoord.y - pos.y) / flashSpan.y);
 
   if (flashCoord.x < 0.004 || flashCoord.x > 0.996 || flashCoord.y < 0.004 || flashCoord.y > 0.996)
@@ -303,8 +308,7 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
   const float brightnessThreshold = flashThreshold;
   currentLightningIntensity *= mainBoltBrightness;
 
-  pixVal -= brightnessThreshold;
-  pixVal = max(pixVal, 0.0);
+  pixVal = (1.0 - brightnessThreshold) * lightningCoverage(pixVal, brightnessThreshold);
   pixVal *= currentLightningIntensity;
 
   const vec3 positiveIcCol = vec3(1.0, 0.88, 0.80);
@@ -341,8 +345,8 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
 {
   float rodTipY = findCapturedRodTipY(groundPos.x);
   float endY = rodTipY >= 0.0 ? rodTipY : 0.0;
-  float relX = mod(texCoord.x - groundPos.x + 0.5, 1.0) - 0.5;
-  float dxWrap = mod(originX - groundPos.x + 0.5, 1.0) - 0.5;
+  float relX = fract(texCoord.x) - groundPos.x;
+  float dxWrap = originX - groundPos.x;
   float Hw = dxWrap * aspectRatios[0];
   float topY = rodTipY >= 0.0 ? max(groundPos.y, endY + 0.04) : groundPos.y;
   float V = max(topY - endY, 0.05);
@@ -410,10 +414,9 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   // Preserve the full-white peak and existing positive-CG fade and color.
   const float extBoltBrightness = 200000.;
   const float brightnessThreshold = 0.004;
-  const float cgExcessScale = 0.05 / (1.0 - brightnessThreshold);
   float intensity = currentLightningIntensity * extBoltBrightness;
 
-  pixVal = max(pixVal - brightnessThreshold, 0.0) * cgExcessScale;
+  pixVal = 0.05 * lightningCoverage(pixVal, brightnessThreshold);
   pixVal *= intensity;
 
   return max(pixVal * lightningColor, vec3(0.0));
@@ -506,8 +509,8 @@ vec2 ccEvalBranch(vec2 target, vec2 bStart, vec2 bDir, float bLen, float curveSi
 vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiveCC,
                                   float lightningTime, float ccCurve)
 {
-  float relX = mod(texCoord.x - targetPos.x + 0.5, 1.0) - 0.5;
-  float dxWrap = mod(originPos.x - targetPos.x + 0.5, 1.0) - 0.5;
+  float relX = fract(texCoord.x) - targetPos.x;
+  float dxWrap = originPos.x - targetPos.x;
   vec2 p0 = vec2(dxWrap * aspectRatios[0], originPos.y);
   vec2 p3 = vec2(0.0, targetPos.y);
   vec2 target = vec2(relX * aspectRatios[0], texCoord.y);
@@ -672,7 +675,7 @@ float channelGlow(vec2 p, vec2 a, vec2 b, float width)
   float heightKm = cellHeight * resolution.y * 0.001;
   float pixelKm = max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)),
                       length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * heightKm;
-  float filteredWidth = sqrt(width * width + 0.25 * pixelKm * pixelKm);
+  float filteredWidth = sqrt(width * width + 0.1225 * pixelKm * pixelKm);
   return (width / filteredWidth) * exp(-d * d / (filteredWidth * filteredWidth));
 }
 
@@ -681,7 +684,7 @@ float channelGlow(vec2 p, vec2 a, vec2 b, float width)
 vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
 {
   float heightKm = cellHeight * resolution.y * 0.001;
-  vec2 p = vec2((mod(texCoord.x - pos.x + 0.5, 1.0) - 0.5) * aspectRatios.x * heightKm,
+  vec2 p = vec2((fract(texCoord.x) - pos.x) * aspectRatios.x * heightKm,
                 (texCoord.y - tipY) * heightKm);
   float span = max((pos.y - tipY) * heightKm, 0.05);
   if (abs(p.x) > 3.5 || p.y < 0.0 || p.y > span + 1.0)
@@ -714,7 +717,7 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
 vec3 drawAnvilCrawler(vec2 origin, float top, float time)
 {
   float heightKm = cellHeight * resolution.y * 0.001;
-  vec2 p = vec2((mod(texCoord.x - origin.x + 0.5, 1.0) - 0.5) * aspectRatios.x * heightKm,
+  vec2 p = vec2((fract(texCoord.x) - origin.x) * aspectRatios.x * heightKm,
                 (texCoord.y - top) * heightKm);
   float originY = (origin.y - top) * heightKm;
   if (abs(p.x) > 27.0 || p.y < min(originY, -5.5) - 1.0 || p.y > 5.5 || time < 0.0 || time > 2.5)
@@ -792,7 +795,7 @@ vec3 drawUpperAtmosphereLightning()
     float t = (iterNum - data[START_ITERNUM]) / 40.0;
     if (t > 2.5)
       continue;
-    float dx = (mod(texCoord.x - data.x + 0.5, 1.0) - 0.5) * aspectRatios.x * heightKm;
+    float dx = (fract(texCoord.x) - data.x) * aspectRatios.x * heightKm;
     if (hasOpticalEffect(meta.w, 2.0) && altitude >= 45.0 && altitude <= 90.0 && abs(dx) < 14.0) {
       // A delayed red sprite: diffuse upper body with fine downward tendrils.
       float fade = smoothstep(0.15, 0.40, t) * (1.0 - smoothstep(1.1, 2.1, t));
@@ -1008,27 +1011,27 @@ vec4 computeAirColor(vec2 bndFragCoord)
       // lobe is centred on the strike, reaches twice as far and is twice as bright,
       // because what a player sees of an intra-cloud flash from outside the cloud is
       // mostly this - the deck glowing from the inside - with the network on top.
-      vec2 flashDist = vec2((lightningPos.x - texCoord.x) * aspectRatios[0], texCoord.y - lightningPos.y);
+      vec2 flashDist = vec2((lightningPos.x - fract(texCoord.x)) * aspectRatios[0], texCoord.y - lightningPos.y);
       lightningOnLight = lightningOnLightBrightness * 2.0 / (pow(length(flashDist) * 0.5, 2.) + 0.03);
       if (isPositiveIC)
         lightningOnLight *= 1.5;
     } else if (isGroundToCloud) {
-      float dx = mod(lightningPos.x - texCoord.x + 0.5, 1.0) - 0.5;
+      float dx = lightningPos.x - fract(texCoord.x);
       vec2 dist = vec2(dx * aspectRatios.x, texCoord.y - 0.5 * (lightningPos.y + lightningMeta.z));
       lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03);
     } else if (isCloudToCloud) {
-      vec2 ccTargetDist = vec2((mod(lightningPos.x - texCoord.x + 0.5, 1.0) - 0.5) * aspectRatios[0],
+      vec2 ccTargetDist = vec2((lightningPos.x - fract(texCoord.x)) * aspectRatios[0],
                                texCoord.y - lightningMeta.z);
       lightningOnLight = lightningOnLightBrightness * 1.4 / (pow(length(ccTargetDist) * 0.5, 2.) + 0.03) * ccIntensityGain * ccTailFade;
-      float ccOriginDx = mod(lightningMeta.x - texCoord.x + 0.5, 1.0) - 0.5;
+      float ccOriginDx = lightningMeta.x - fract(texCoord.x);
       vec2 ccOriginDist = vec2(ccOriginDx * aspectRatios[0], texCoord.y - lightningPos.y);
-      float ccMidDx = mod(lightningPos.x + 0.5 * (mod(lightningMeta.x - lightningPos.x + 0.5, 1.0) - 0.5) - texCoord.x + 0.5, 1.0) - 0.5;
+      float ccMidDx = 0.5 * (lightningPos.x + lightningMeta.x) - fract(texCoord.x);
       vec2 ccMidDist = vec2(ccMidDx * aspectRatios[0], texCoord.y - 0.5 * (lightningPos.y + lightningMeta.z));
       onLight += vec3(lightningOnLightBrightness * 1.4 / (pow(length(ccOriginDist) * 0.5, 2.) + 0.03) * ccIntensityGain * ccTailFade * currentLightningIntensity);
       onLight += vec3(lightningOnLightBrightness * 0.9 / (pow(length(ccMidDist) * 0.55, 2.) + 0.035) * ccIntensityGain * ccTailFade * currentLightningIntensity);
     } else {
-      // The one lobe the app shipped with, wrapped horizontally across the periodic boundary.
-      float cgDx = mod(lightningPos.x - texCoord.x + 0.5, 1.0) - 0.5;
+      // The ground lobe remains in the same world tile as the strike.
+      float cgDx = lightningPos.x - fract(texCoord.x);
       vec2 dist = vec2(cgDx, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1), 0.));
       dist.x *= aspectRatios[0];
       lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03);
@@ -1042,7 +1045,7 @@ vec4 computeAirColor(vec2 bndFragCoord)
     onLight += lightningIlluminationTint * lightningOnLight;
     if (isExternalPositive) {
       onLight += lightningIlluminationTint * lightningOnLight;
-      float originDx = mod(lightningMeta.x - texCoord.x + 0.5, 1.0) - 0.5;
+      float originDx = lightningMeta.x - fract(texCoord.x);
       vec2 originDist = vec2(originDx * aspectRatios[0], texCoord.y - lightningPos.y);
       onLight += lightningIlluminationTint * (lightningOnLightBrightness * 2.0 / (pow(length(originDist) * 0.7, 2.) + 0.03) * extCurve * (isSuperbolt ? superboltBrightnessMult : 1.0));
     }
@@ -1416,7 +1419,7 @@ void main()
     float strikeGlow = 0.0;
     for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
       vec4 strikeData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
-      if (strikeData[START_ITERNUM] <= 0.0 || abs(mod(strikeData.x - rod.x + 0.5, 1.0) - 0.5) > 1e-5)
+      if (strikeData[START_ITERNUM] <= 0.0 || abs(strikeData.x - rod.x) > 1e-5)
         continue;
       vec4 strikeMeta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
       bool isUpwardStrike = abs(strikeMeta.y - 5.0) < 0.25;

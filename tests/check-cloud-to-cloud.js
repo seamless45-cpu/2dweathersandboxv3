@@ -14,7 +14,7 @@
 //      with fewer branches on +CC (0-1 sparse branch, higher mainThreshold) than -CC
 //      (4 explicit branches + lower threshold).
 //   4. Uses zero conditional fwidth()/dFdx()/dFdy() calls, handles periodic x=0/1
-//      wrapping cleanly, and drives cloud-to-cloud thunder audio in app.js.
+//      avoiding seam crossings, and drives cloud-to-cloud thunder audio in app.js.
 //
 // Usage: node tests/check-cloud-to-cloud.js
 
@@ -158,8 +158,9 @@ function selectCloudToCloudTarget(originX, originY, iter, densityFn, wallFn = ()
 
   for (let k = 0; k < 8; k++) {
     const dx = dxList[k];
-    const cx = fract(originX + dx);
-    const mx = fract(originX + 0.5 * dx);
+    const cx = originX + dx;
+    if (cx < 0 || cx >= 1) continue;
+    const mx = originX + 0.5 * dx;
     for (let yi = 0; yi < 4; yi++) {
       const cy = yList[yi];
       if (wallFn(cx, cy) >= 500.0) continue;
@@ -203,24 +204,23 @@ function selectCloudToCloudTarget(originX, originY, iter, densityFn, wallFn = ()
     mountainHits === 0, mountainHits + ' targets inside terrain');
 }
 
-// 2b. Bridges across a clear sky gap to a neighboring storm cell (including across seam)
+// Cloud-to-cloud may bridge neighboring same-tile cells but never a seam.
 {
-  const twoStorms = (x, y) => {
-    const d1 = Math.min(Math.abs(x - 0.94), 1 - Math.abs(x - 0.94));
-    const d2 = Math.min(Math.abs(x - 0.06), 1 - Math.abs(x - 0.06));
-    if (y >= 0.10 && y <= 0.50 && (d1 < 0.03 || d2 < 0.03)) return 2.2;
-    return 0.0;
-  };
-  let bridged = 0;
+  let sameTile = 0, seamHits = 0;
   for (let i = 0; i < 400; i++) {
-    const res = selectCloudToCloudTarget(0.94, 0.30, 400 + i, twoStorms);
-    if (res[2] > 0.5) {
-      const dToStorm2 = Math.min(Math.abs(res[0] - 0.06), 1 - Math.abs(res[0] - 0.06));
-      if (dToStorm2 < 0.03) bridged++;
-    }
+    const same = selectCloudToCloudTarget(0.5, 0.30, 400 + i,
+      (x, y) => y >= 0.1 && y <= 0.5 && Math.abs(x - 0.62) < 0.035 ? 2.2 : 0);
+    if (same[2] > 0.5) sameTile++;
+    const edge = selectCloudToCloudTarget(0.94, 0.30, 400 + i,
+      (x, y) => y >= 0.1 && y <= 0.5 && Math.abs(x - 0.06) < 0.03 ? 2.2 : 0);
+    if (edge[2] > 0.5) seamHits++;
   }
-  check('two separated storm cells across the periodic seam bridge cleanly via CC',
-    bridged > 350, bridged + ' of 400 bridged to neighboring storm');
+  check('CC bridges same-tile clouds but never selects the opposite edge',
+    sameTile > 100 && seamHits === 0 &&
+    /if \(cx < 0\.0 \|\| cx >= 1\.0\)/.test(locationShader) &&
+    /float dxWrap = originPos\.x - targetPos\.x;/.test(displayShader) &&
+    /const midX = 0\.5 \* \(targetX \+ originX\)/.test(appSource),
+    'same-tile ' + sameTile + ', seam ' + seamHits);
 }
 
 /* --------------------- 3. polarity mix, single-stroke +CC, 1.5x brightness */

@@ -16,16 +16,15 @@ check('super rods scale base attraction radius by 2.5 while keeping height and c
   /rodTypes\[rodIdx\] > 0\.5 \? 2\.5 : 1\.0/.test(location) &&
   /return rodAttractRadius \* reachMultiplier \* heightFactor \* currentFactor;/.test(location) &&
   /cursorType >= 5\.0 \? SUPER_LIGHTNING_ROD_REACH_MULT : 1\.0/.test(app));
-// Preview shows base reach capped at half the wrapped world; actual capture
-// additionally depends on mast height and strike current.
-const wrapDist = (a, b) => Math.abs(((a - b + 1.5) % 1) - 0.5);
+// Preview shows base reach (currently below its cap) and is clipped at tile
+// edges; actual capture also depends on mast height and strike current.
 const normalRadius = 0.11 * 1.1 * 1.1, superRadius = 0.11 * 2.5 * 1.1 * 1.1;
-check('2.5-fold base reach does not automatically cover the periodic domain',
+check('2.5-fold base reach does not capture across the world edge',
   Math.abs(superRadius / normalRadius - 2.5) < 1e-12 && superRadius < 0.5 &&
-  wrapDist(0.99, 0.01) < 0.021 && 0.5 > superRadius &&
+  Math.abs(0.99 - 0.01) > superRadius && /return abs\(a - b\)/.test(location) &&
   /Math\.min\(0\.5, LIGHTNING_ROD_ATTRACT_RADIUS/.test(app));
-check('superbolt attraction keeps its original 9–42 km ground range',
-  /rodRangeMeters >= 9000\.0 && rodRangeMeters <= 42000\.0/.test(location));
+check('superbolt attraction keeps its updated 9–37 km ground range',
+  /float minRangeMeters = isSuperboltExt \? 9000\.0 : 5500\.0;/.test(location) && /float maxRangeMeters = isSuperboltExt \? 37000\.0 : 34000\.0;/.test(location) && /rodRangeMeters < minRangeMeters \|\| rodRangeMeters > maxRangeMeters/.test(location));
 check('upward initiation requires a super rod, a free slot, an overhead cold dense storm and a periodic probability',
   /float upwardLeaderCloudTarget\(/.test(location) && /water\[CLOUD\] >= 0\.15/.test(location) &&
   /water\[CLOUD\] \+ water\[PRECIPITATION\] >= 0\.72/.test(location) &&

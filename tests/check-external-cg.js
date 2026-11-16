@@ -10,8 +10,7 @@
 //   4. Carry elevated positive-CG current ([2.8, 4.5] > LIGHTNING_IC_MAX_INTENSITY)
 //      and remain capturable by distant lightning rods out in clear air.
 //   5. Arc smoothly and deterministically in displayExternalLightning() from
-//      (originX, originY) inside the cloud to (groundPos.x, 0) even across the
-//      periodic x = 0 / 1 seam, producing finite non-NaN emission.
+//      (originX, originY) inside the cloud to (groundPos.x, 0) without crossing the world seam, producing finite non-NaN emission.
 //
 // Usage: node tests/check-external-cg.js
 
@@ -115,26 +114,22 @@ check('realisticDisplayShader.frag draws external positive CG via displayExterna
 /* ------------------------------------------- 2. location & targeting port */
 
 function selectExternalStrikeTarget(originX, originY, iter, stormScoreFn, resX = 2000, resY = 300) {
-  const aspect = Math.max(resX / Math.max(resY, 1.0), 1.0);
-  const minWorld = 5.5 / 12.0;
-  const maxWorld = 39.0 / 12.0;
+  const widthMeters = 12000 * resX / resY;
+  const minDx = 5500 / widthMeters;
   const yMid = clamp(originY * 0.55, 0.08, 0.45);
-
-  let bestX = fract(originX + clamp(minWorld / aspect, 0.03, 0.4875));
+  let bestX = originX + (originX >= 0.5 ? -minDx : minDx);
   let bestScore = 1e9;
   for (let k = 0; k < 6; k++) {
+    const side = ((k % 2) === 0) ? 1 : -1;
+    const available = side > 0 ? 0.999999 - originX : originX;
+    const maxDx = Math.min(34000 / widthMeters, available);
+    if (maxDx < minDx) continue;
     const rDist = random2d(originX * 23.7 + k * 11.3,
                            originY * 17.9 + iter * 2.13 + k * 3.7);
-    const worldDist = mix(minWorld, maxWorld, rDist);
-    const dx = clamp(worldDist / aspect, 0.03, 0.4875);
-    const side = ((k % 2) === 0) ? 1.0 : -1.0;
-    const cx = fract(originX + side * dx);
+    const cx = originX + side * mix(minDx, maxDx, rDist);
     const tieBias = 0.02 * random2d(originX * 17.3 + k * 5.7, iter * 1.9 + k);
     const score = stormScoreFn(cx, yMid) + tieBias;
-    if (score < bestScore) {
-      bestScore = score;
-      bestX = cx;
-    }
+    if (score < bestScore) { bestScore = score; bestX = cx; }
   }
   return bestX;
 }
@@ -228,12 +223,12 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
     const out = resolveStrike([ox, oy, 500 + i, inten], () => 0);
     if (out.row1[1] > 0.5) {
       extCount++;
-      const dx = wrappedDist(out.row0[0], out.row1[0]);
+      const dx = Math.abs(out.row0[0] - out.row1[0]);
       minOffset = Math.min(minOffset, dx);
       maxOffset = Math.max(maxOffset, dx);
       minExtIntensity = Math.min(minExtIntensity, out.row0[3]);
       maxExtIntensity = Math.max(maxExtIntensity, out.row0[3]);
-      const signed = ((out.row0[0] - out.row1[0] + 1.5) % 1) - 0.5;
+      const signed = out.row0[0] - out.row1[0];
       if (signed < 0) leftHits++; else rightHits++;
     }
   }
@@ -241,8 +236,8 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
   check('external positive CG share in a tall storm stays realistic (12%-26%)',
     rate >= 0.12 && rate <= 0.26,
     (rate * 100).toFixed(1) + '% (' + extCount + ' of ' + total + ')');
-  check('external positive CG strikes randomly across the full minimal-to-maximum range (~5.5 km to ~39 km / 0.06875 to 0.4875 domain width)',
-    minOffset >= 0.068 && minOffset <= 0.09 && maxOffset <= 0.488 && maxOffset >= 0.46,
+  check('external positive CG strikes randomly across the full minimal-to-maximum range (5.5 km to 34 km at default width)',
+    minOffset >= 0.068 && minOffset <= 0.09 && maxOffset <= 0.425 && maxOffset >= 0.40,
     'offset range ' + minOffset.toFixed(4) + ' .. ' + maxOffset.toFixed(4));
   check('clear-air left/right targeting is balanced when both sides are clear',
     leftHits > extCount * 0.35 && rightHits > extCount * 0.35,
@@ -260,7 +255,7 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
   const extB = extMatch ? Number(extMatch[1]) : NaN;
   check('displayExternalLightning uses 200000 brightness (2x normal CG 100000) and smooth tail fade',
     Number.isFinite(mainB) && Number.isFinite(extB) && extB === 200000 && extB === mainB * 2 &&
-    /const float cgExcessScale = 0\.05 \/ \(1\.0 - brightnessThreshold\);/.test(displayShader) &&
+    /pixVal = 0\.05 \* lightningCoverage\(pixVal, brightnessThreshold\);/.test(displayShader) &&
     /float extBaseIntensity = clamp\(mix\(1\.8, 3\.4,/.test(displayShader) &&
     /float extTailFade = pow\(smoothstep\(2\.924, 1\.15, tailT\), 2\.4\);/.test(displayShader) &&
     /float extCurve = currentLightningIntensity \* extIntensityGain \* extTailFade;/.test(displayShader),
@@ -388,13 +383,13 @@ function evalExtArc(t, Hw, V) {
   const cases = [
     { originX : 0.30, groundX : 0.48, groundY : 0.50 }, // right-going
     { originX : 0.70, groundX : 0.52, groundY : 0.42 }, // left-going
-    { originX : 0.94, groundX : 0.08, groundY : 0.55 }  // wraps across x=0/1 seam!
+    { originX : 0.60, groundX : 0.15, groundY : 0.55 }  // long same-tile arc
   ];
   let endpointsOk = true;
   let finiteOk = true;
   const aspect = 2000 / 300;
   for (const c of cases) {
-    const dxWrap = (((c.originX - c.groundX + 0.5) % 1) + 1) % 1 - 0.5;
+    const dxWrap = c.originX - c.groundX;
     const Hw = dxWrap * aspect;
     const V = Math.max(c.groundY, 0.05);
     const pStart = evalExtArc(0.0, Hw, V);
@@ -406,7 +401,7 @@ function evalExtArc(t, Hw, V) {
       if (!Number.isFinite(pt[0]) || !Number.isFinite(pt[1])) finiteOk = false;
     }
   }
-  check('displayExternalLightning arc begins at storm origin and terminates cleanly at groundX (including seam wraps)',
+  check('displayExternalLightning arc begins at storm origin and terminates cleanly at groundX (without wrapping)',
     endpointsOk && finiteOk);
 }
 

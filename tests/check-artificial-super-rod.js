@@ -77,8 +77,8 @@ check('super rod extends reach, guaranteed capture, visible height, tip terminat
   /rodHeight \* \(rodTypes\[i\] > 0\.5 \? 1\.8 : 1\.0\)/.test(display) &&
   /float thisRodHeight = rodHeight \* \(isSuperRod \? 1\.8 : 1\.0\)/.test(display) &&
   /cursor\.w >= 5\.0/.test(cursor));
-check('superbolt rod capture still preserves 9–42 km range',
-  /rodRangeMeters >= 9000\.0 && rodRangeMeters <= 42000\.0/.test(location));
+check('superbolt rod capture still preserves 9–37 km range',
+  /float minRangeMeters = isSuperboltExt \? 9000\.0 : 5500\.0;/.test(location) && /float maxRangeMeters = isSuperboltExt \? 37000\.0 : 34000\.0;/.test(location) && /rodRangeMeters < minRangeMeters \|\| rodRangeMeters > maxRangeMeters/.test(location));
 check('manual strikes prioritize an ordinary CG slot and still use rod capture',
   /if \(isArtificial\) \{[\s\S]{0,240}vec4 forcedStrike = attractToRod\(incoming\);[\s\S]{0,100}vec4\(originX, 0\.0, -1\.0, 0\.0\)/.test(location) &&
   /incoming = vec4\(artificialStrike\.xy, iterNum, artificialStrike\.z\)/.test(location));
