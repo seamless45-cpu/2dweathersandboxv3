@@ -137,9 +137,9 @@ check('the bolt is still attenuated by the cloud it is born in',
   'light inside a cloud is scattered by it, not painted over the top of it');
 
 // The light of every strike is drawn in the scene pass, in one fragment, and the
-// only blending there is the ordinary source-over of the scene.
+// only blending there is the ordinary premultiplied source-over of the scene.
 check('lightning is drawn once, in the scene fragment',
-  /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emittedLight\), opacity\)/
+  /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight \* opacity, 0\.0\) \+ emittedLight\), opacity\)/
     .test(displayShader) &&
   /gl\.drawArrays\(gl\.TRIANGLE_STRIP, 0, 4\); \/\/ draw to hdr framebuffer/.test(appSource),
   'one draw of the display program, and the bolt is in the fragment it writes');
@@ -179,19 +179,21 @@ const softHdrClamp = (value) => {
     boltBrightness > HDR_CEILING * 1.5,
     'stroke ' + boltBrightness + ', ceiling ' + HDR_CEILING);
   check('the scene fragment is written through that compression, not a clamp',
-    /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight, 0\.\) \+ emittedLight\), opacity\);/
+    /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight \* opacity, 0\.0\) \+ emittedLight\), opacity\);/
       .test(displayShader) && !/const float hdrCeiling/.test(displayShader));
 
-  // The emitted light - the bolt - was added to the fragment colour and then
-  // multiplied by the fragment's alpha by the blend, the way the original app
-  // wrote it. (Later rounds premultiplied it to stop a violet smear on the sky;
-  // the original look is back, and this is what the original looked like.)
+  // The emitted light - the bolt - is added to the fragment colour as pure
+  // additive light on top of a surface colour that is premultiplied by its own
+  // coverage, and the pass is drawn with (ONE, ONE_MINUS_SRC_ALPHA). The old
+  // unpremultiplied alpha multiplied the destination by (1 - a) in the SRC_ALPHA
+  // blend without adding light back, leaving a dark fringe ringing every channel.
   check('the emitted light is written straight into the fragment',
     /\+ emittedLight\), opacity\);/.test(displayShader) &&
     !/emitted \/ max\(opacity/.test(displayShader),
-    'no premultiplication in the fragment the original wrote');
-  check('the emission alpha cannot run past opaque',
-    /opacity = clamp\(opacity \+ length\(emittedLight\), 0\.0, 1\.0\)/.test(displayShader));
+    'the bolt rides on top of the premultiplied surface, additively');
+  check('the coverage alpha cannot run past opaque',
+    /opacity = clamp\(opacity, 0\.0, 1\.0\)/.test(displayShader) && !/length\(emittedLight\)/.test((displayShader.match(/fragmentColor = vec4[\s\S]*/) || [''])[0]) &&
+    !/clamp\(opacity \+ length\(emittedLight\)/.test(displayShader));
 
   // the compression itself
   let monotonic = true, previous = -1;
