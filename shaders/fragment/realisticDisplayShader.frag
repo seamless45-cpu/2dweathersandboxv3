@@ -1260,7 +1260,9 @@ void main()
   if (texCoord.y > 1.0) { // above simulation area
     vec3 upperAtmosphereLight = drawUpperAtmosphereLightning();
     if (rodCount == 0) {
-      fragmentColor = vec4(softHdrClamp(upperAtmosphereLight), clamp(length(upperAtmosphereLight), 0.0, 1.0));
+      // Pure additive transient over the sky background: alpha 0 so a premultiplied
+      // blend leaves the destination untouched and adds the emitted light on top.
+      fragmentColor = vec4(softHdrClamp(upperAtmosphereLight), 0.0);
       drawCursor(cursor, view);
       return;
     }
@@ -1696,29 +1698,29 @@ void main()
   finalLight += vec3(shadowLight) + onLight;
 
   /*
-   * The light and the alpha both have to stay inside what the buffer can hold.
+   * The light has to stay inside what the buffer can hold.
    *
    * The scene is rendered into an RGBA16F framebuffer, whose largest finite
    * value is 65504, and it is alpha blended. A CG return stroke is written at a
    * hundred thousand HDR units and more (see displayLightning), so on its own it
-   * overflows the buffer to infinity, and the alpha below - length(emittedLight),
-   * also in the hundred thousands - makes the blend multiply the destination by
-   * (1 - alpha), i.e. by a large negative number. Both come back out of the
+   * overflows the buffer to infinity. Both come back out of the
    * tonemap divided by itself: NaN, which the bloom, FXAA and temporal AA passes
    * then smear over the frame as dead pixels.
    *
-   * softHdrClamp() (common.glsl) is the answer, and it is not a clamp: it
-   * compresses the top of the range instead of cutting it off, so a stroke can
-   * still be written far past white and arrive in the bloom pass brighter than
-   * one that only just overflowed. That extra light is the whole of "brighter
-   * than white" - the tonemap flattens everything over ~3 to white, so the only
-   * place a bolt's surplus energy can show is the halo it scatters, and the halo
-   * is made from this buffer. The alpha is still cut at 1: nothing is more than
-   * fully opaque.
+   * Two things fix this together. softHdrClamp() (common.glsl) is not a clamp:
+   * it compresses the top of the range instead of cutting it off, so a stroke
+   * can still be written far past white and arrive in the bloom pass brighter
+   * than one that only just overflowed. And this pass is drawn with premultiplied
+   * blending (ONE, ONE_MINUS_SRC_ALPHA) instead of SRC_ALPHA/ONE_MINUS_SRC_ALPHA:
+   * the surface colour is multiplied by its own coverage, while emittedLight is
+   * added on top as pure additive light. Unpremultiplied alpha on a
+   * SRC_ALPHA blend made every dim halo fragment multiply the destination by
+   * (1 - a) without adding back light, so each bolt was ringed by a dark fringe -
+   * the emitted light now simply adds to whatever is behind it.
    */
-  opacity = clamp(opacity + length(emittedLight), 0.0, 1.0);
+  opacity = clamp(opacity, 0.0, 1.0);
 
-  fragmentColor = vec4(softHdrClamp(max(color * finalLight, 0.) + emittedLight), opacity);
+  fragmentColor = vec4(softHdrClamp(max(color * finalLight * opacity, 0.0) + emittedLight), opacity);
 
   drawCursor(cursor, view); // over everything else
 }
