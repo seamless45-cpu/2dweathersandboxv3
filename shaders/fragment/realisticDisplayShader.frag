@@ -81,6 +81,9 @@ vec3 emittedLight = vec3(0.); // pure light, like lightning
 float shadowLight;
 
 vec3 onLight; // extra light that lights up objects, just like sunlight and shadowlight
+// Derivatives captured before any divergent strike, terrain or cloud branches.
+// These describe one actual HDR render-target pixel, including render scale/zoom.
+vec2 screenTexDx, screenTexDy;
 
 
 const vec3 bareDrySoilCol = pow(vec3(0.85, 0.60, 0.40), vec3(GAMMA));
@@ -186,20 +189,24 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   if (lightningTexCoord.x < 0.01 || lightningTexCoord.x > 1.01 || lightningTexCoord.y < 0.01 || lightningTexCoord.y > 1.01) // prevent edge effect when mipmapping
     return vec3(0);
 
-  // Level 0 of the tile, one bilinear fetch: the shipped read. It lands on the
-  // channel or beside it from one screen row to the next, which is why a bolt has
-  // always been a slightly dashed line - and it is fine, because a stroke is drawn
-  // over dark ground.
-  float pixVal = textureLod(lightningTex, lightningTexCoord, 0.0).r;
+  // Explicit gradients avoid undefined derivatives in the divergent slot loop.
+  // Include the rod-tip shear so mip selection tracks the actual projected tile.
+  float shear = rodHit && lightningTexCoord.y > 0.0 && lightningTexCoord.y < 1.0
+    ? (lightningBottomU - 0.5) * 1.25 * pow(lightningTexCoord.y, 0.25) : 0.0;
+  vec2 gradX = vec2(screenTexDx.x * scaleMult * aspectRatios[0] / lightningTexAspect
+                    - shear * screenTexDx.y * scaleMult, -screenTexDx.y * scaleMult);
+  vec2 gradY = vec2(screenTexDy.x * scaleMult * aspectRatios[0] / lightningTexAspect
+                    - shear * screenTexDy.y * scaleMult, -screenTexDy.y * scaleMult);
+  float pixVal = textureGrad(lightningTex, lightningTexCoord, gradX, gradY).r;
 
   const float mainBoltBrightness = 100000.; // 100000.
 
-  const float brightnessThreshold = 0.95;
+  // A high cutoff erased averaged subpixel channels. Keep full-white peak
+  // radiance unchanged while allowing filtered partial coverage to survive.
+  const float brightnessThreshold = 0.004;
   currentLightningIntensity *= mainBoltBrightness;
 
-  pixVal -= brightnessThreshold;
-
-  pixVal = max(pixVal, 0.0);
+  pixVal = max(pixVal - brightnessThreshold, 0.0) * (0.05 / (1.0 - brightnessThreshold));
 
   pixVal *= currentLightningIntensity;
 
@@ -247,7 +254,9 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
   if (flashCoord.x < 0.004 || flashCoord.x > 0.996 || flashCoord.y < 0.004 || flashCoord.y > 0.996)
     return vec3(0);
 
-  float pixVal = texture(lightningNetworkTex, flashCoord).r; // mip-filtered: a network of fine channels
+  vec2 gradX = vec2(flashDir * screenTexDx.x / flashSpan.x, flashFlip * screenTexDx.y / flashSpan.y);
+  vec2 gradY = vec2(flashDir * screenTexDy.x / flashSpan.x, flashFlip * screenTexDy.y / flashSpan.y);
+  float pixVal = textureGrad(lightningNetworkTex, flashCoord, gradX, gradY).r;
 
   const float brightnessThreshold = flashThreshold;
   currentLightningIntensity *= mainBoltBrightness;
@@ -274,7 +283,7 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
   const float networkTexAspect = networkTexRes.x / networkTexRes.y; // 2.0
   const float flashHeight = 0.095;
   vec2 flashSpan = vec2(flashHeight * networkTexAspect / aspectRatios[0], flashHeight);
-  const float flashThreshold = 0.045;
+  const float flashThreshold = 0.01;
 
   const float mainBoltBrightness = 10500.;
 
@@ -287,7 +296,9 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
   if (flashCoord.x < 0.004 || flashCoord.x > 0.996 || flashCoord.y < 0.004 || flashCoord.y > 0.996)
     return vec3(0);
 
-  float pixVal = texture(lightningNetworkTex, flashCoord).r;
+  vec2 gradX = vec2(flashDir * screenTexDx.x / flashSpan.x, flashFlip * screenTexDx.y / flashSpan.y);
+  vec2 gradY = vec2(flashDir * screenTexDy.x / flashSpan.x, flashFlip * screenTexDy.y / flashSpan.y);
+  float pixVal = textureGrad(lightningNetworkTex, flashCoord, gradX, gradY).r;
 
   const float brightnessThreshold = flashThreshold;
   currentLightningIntensity *= mainBoltBrightness;
@@ -385,20 +396,20 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   if (v < 0.005 || v > 0.998 || u < 0.01 || u > 0.99)
     return vec3(0.0);
 
-  // Sub-pixel cross-channel antialiasing without conditional fwidth() derivatives,
-  // keeping the arched bolt continuous against bright daytime sky at 1x zoom.
-  float du = clamp(0.24 * aspectRatios[0] / (1400.0 * max(view[2], 0.5) * scaleLen * lightningTexAspect),
-                   0.0005, 0.0028);
-  float c0 = textureLod(lightningTex, vec2(u, v), 0.0).r;
-  float c1 = textureLod(lightningTex, vec2(clamp(u - du, 0.01, 0.99), v), 0.0).r;
-  float c2 = textureLod(lightningTex, vec2(clamp(u + du, 0.01, 0.99), v), 0.0).r;
-  float pixVal = max(c0, max(c1, c2) * 0.90);
+  // Conservative projected footprint in artwork texels. The closest-point
+  // arc mapping is nonlinear, so estimate from the real HDR pixel footprint
+  // rather than evaluating derivatives inside nonuniform control flow.
+  vec2 pixelX = vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y);
+  vec2 pixelY = vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y);
+  float pixelWorld = max(length(pixelX), length(pixelY));
+  float footprint = pixelWorld * max(lightningTexRes.x / (scaleLen * lightningTexAspect),
+                                     lightningTexRes.y / max(length(vec2(Hw, V)), 0.25));
+  float lod = clamp(log2(max(footprint, 1.0)), 0.0, 12.0);
+  float pixVal = textureLod(lightningTex, vec2(u, v), lod).r;
 
-  // Reduced to 200000. (2x mainBoltBrightness = 100000.) and normalize channel
-  // excess onto displayLightning()'s (1.0 - 0.95) scale so positive CG shares
-  // normal CG's smooth HDR fade curve rather than snapping off harshly.
+  // Preserve the full-white peak and existing positive-CG fade and color.
   const float extBoltBrightness = 200000.;
-  const float brightnessThreshold = 0.88;
+  const float brightnessThreshold = 0.004;
   const float cgExcessScale = 0.05 / (1.0 - brightnessThreshold);
   float intensity = currentLightningIntensity * extBoltBrightness;
 
@@ -559,7 +570,8 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
   float spineSlope = spineDisp.y * spineEnv;
   float distMain = abs(dPerp) * inversesqrt(1.0 + clamp(spineSlope * spineSlope, 0.0, 6.25));
 
-  float worldPix = aspectRatios[0] / (1400.0 * max(view[2], 0.5));
+  float worldPix = max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)),
+                       length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y)));
   float coreW = max(0.0018, worldPix * 0.90) * (isPositiveCC ? 1.28 : 1.0);
   float edgeFade = smoothstep(0.0, 0.025, t) * smoothstep(1.0, 0.975, t);
   float mainCore = smoothstep(coreW * 1.50, coreW * 0.15, distMain) * edgeFade;
@@ -655,7 +667,13 @@ float channelGlow(vec2 p, vec2 a, vec2 b, float width)
   vec2 ab = b - a;
   float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 0.0001), 0.0, 1.0);
   float d = length(p - (a + t * ab));
-  return exp(-d * d / (width * width));
+  // Gaussian pixel-footprint integration keeps procedural channels from
+  // breaking into dots at low HDR resolutions while preserving line energy.
+  float heightKm = cellHeight * resolution.y * 0.001;
+  float pixelKm = max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)),
+                      length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * heightKm;
+  float filteredWidth = sqrt(width * width + 0.25 * pixelKm * pixelKm);
+  return (width / filteredWidth) * exp(-d * d / (filteredWidth * filteredWidth));
 }
 
 // Rising ground-to-cloud leader, rooted at the actual super-rod tip. Fine
@@ -691,54 +709,67 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
   return vec3(0.62, 0.76, 1.0) * glow * min(intensity, 30.0) * 250.0;
 }
 
-// A stepped network spreads through the anvil: three independent leaders
-// advance outward, then fork from completed joints into smaller tributaries.
-// All coordinates are in km; the seeded geometry stays fixed during a flash.
+// The crawler connects its parent IC flash to the anvil before staggered
+// leaders sweep outward. Branches grow from established joints, not free air.
 vec3 drawAnvilCrawler(vec2 origin, float top, float time)
 {
   float heightKm = cellHeight * resolution.y * 0.001;
   vec2 p = vec2((mod(texCoord.x - origin.x + 0.5, 1.0) - 0.5) * aspectRatios.x * heightKm,
-                texCoord.y * heightKm - top * heightKm);
-  if (abs(p.x) > 27.0 || abs(p.y) > 7.0 || time < 0.0 || time > 2.5)
+                (texCoord.y - top) * heightKm);
+  float originY = (origin.y - top) * heightKm;
+  if (abs(p.x) > 27.0 || p.y < min(originY, -5.5) - 1.0 || p.y > 5.5 || time < 0.0 || time > 2.5)
     return vec3(0.0);
-  float glow = 0.0;
   float seed = random2d(origin * 91.7);
+  float glow = 0.0;
+  vec2 root = vec2(0.0, -0.7);
+  vec2 prev = vec2(0.0, originY);
+  float feederProgress = clamp(time / 0.3, 0.0, 1.0) * 4.0;
+  for (int i = 1; i <= 4; i++) {
+    float k = float(i);
+    float jitter = (random2d(vec2(seed * 23.0, k * 9.3)) - 0.5) * 0.7 * sin(PI * k / 4.0);
+    vec2 next = mix(vec2(0.0, originY), root, k / 4.0) + vec2(jitter, 0.0);
+    float growth = clamp(feederProgress - (k - 1.0), 0.0, 1.0);
+    if (growth > 0.0)
+      glow += channelGlow(p, prev, mix(prev, next, growth), 0.045) * 0.85;
+    prev = next;
+  }
   for (int lane = 0; lane < 3; lane++) {
     float f = float(lane);
     float side = lane == 0 ? -1.0 : 1.0;
-    float lengthKm = 11.0 + 8.0 * random2d(vec2(seed + f * 1.31, origin.x * 37.0));
-    float slope = (random2d(vec2(seed + f * 7.1, origin.y * 19.0)) - 0.5) * 2.2;
-    float progress = clamp((time - f * 0.13) * 0.8, 0.0, 1.0) * 10.0;
-    vec2 prev = vec2(0.0, -0.55);
-    for (int i = 1; i <= 10; i++) {
+    float lengthKm = 10.0 + 8.0 * random2d(vec2(seed + f * 1.31, origin.x * 37.0));
+    float drift = (random2d(vec2(seed + f * 7.1, origin.y * 19.0)) - 0.5) * 2.4;
+    float progress = clamp((time - 0.3 - f * 0.12) / 1.25, 0.0, 1.0) * 9.0;
+    prev = root;
+    for (int i = 1; i <= 9; i++) {
       float k = float(i);
       float n = random2d(vec2(seed * 11.0 + f * 3.7, k * 17.3 + origin.y));
-      vec2 next = vec2(side * lengthKm * k / 10.0,
-                       -0.55 + slope * k / 10.0 + (n - 0.5) * 1.5);
-      float segmentGrowth = clamp(progress - (k - 1.0), 0.0, 1.0);
-      if (segmentGrowth > 0.0) {
-        glow += channelGlow(p, prev, mix(prev, next, segmentGrowth), 0.055 - 0.018 * k / 10.0);
+      float along = k / 9.0;
+      vec2 next = root + vec2(side * lengthKm * along,
+                              drift * along + 0.55 * sin(along * 5.0 + f * 2.0) * sin(PI * along) + (n - 0.5) * 1.1);
+      float growth = clamp(progress - (k - 1.0), 0.0, 1.0);
+      if (growth > 0.0) {
+        vec2 end = mix(prev, next, growth);
+        // A brighter head travels along the established dimmer channel.
+        float head = 0.65 + 0.35 * (1.0 - smoothstep(0.0, 2.0, progress - k));
+        glow += channelGlow(p, prev, end, mix(0.055, 0.030, along)) * head;
       }
-      // A fork cannot start until its parent joint exists; its second twig
-      // similarly waits for the first segment, avoiding detached flashes.
-      if (i >= 2 && i <= 8 && mod(k + f, 3.0) < 0.5) {
+      if (i >= 2 && i <= 7 && mod(k + f, 3.0) < 0.5) {
         float branchProgress = clamp(progress - k, 0.0, 2.0);
-        float forkDir = n > 0.5 ? 1.0 : -1.0;
-        vec2 forkEnd = next + vec2(side * (1.2 + n * 1.5), forkDir * (0.8 + n));
-        float firstGrowth = clamp(branchProgress, 0.0, 1.0);
-        float secondGrowth = clamp(branchProgress - 1.0, 0.0, 1.0);
-        if (firstGrowth > 0.0)
-          glow += channelGlow(p, next, mix(next, forkEnd, firstGrowth), 0.032) * 0.75;
-        if (secondGrowth > 0.0) {
-          vec2 twigEnd = forkEnd + vec2(side * 1.0, forkDir * 0.65);
-          glow += channelGlow(p, forkEnd, mix(forkEnd, twigEnd, secondGrowth), 0.022) * 0.48;
-        }
+        float branchSide = n > 0.5 ? 1.0 : -1.0;
+        vec2 elbow = next + vec2(side * (0.8 + n), branchSide * (0.6 + n * 0.8));
+        vec2 tip = elbow + vec2(side * (0.9 + n), branchSide * (0.3 + (1.0 - n) * 0.7));
+        float first = clamp(branchProgress, 0.0, 1.0);
+        float second = clamp(branchProgress - 1.0, 0.0, 1.0);
+        if (first > 0.0)
+          glow += channelGlow(p, next, mix(next, elbow, first), 0.030) * 0.7;
+        if (second > 0.0)
+          glow += channelGlow(p, elbow, mix(elbow, tip, second), 0.022) * 0.5;
       }
       prev = next;
     }
   }
-  float fade = 1.0 - smoothstep(1.55, 2.5, time);
-  float pulse = 0.82 + 0.18 * sin(time * 17.0 + seed * 6.283);
+  float fade = 1.0 - smoothstep(1.6, 2.5, time);
+  float pulse = 0.84 + 0.16 * sin(time * 13.0 + seed * 6.283);
   return vec3(0.68, 0.78, 1.0) * min(glow, 2.0) * fade * pulse * 2500.0;
 }
 
@@ -1036,6 +1067,8 @@ float rand(float n) { return fract(sin(n) * 43758.5453123); }
 
 void main()
 {
+  screenTexDx = dFdx(texCoord);
+  screenTexDy = dFdy(texCoord);
   color = vec3(0.0);
   opacity = 1.0;
   emittedLight = vec3(0.0);

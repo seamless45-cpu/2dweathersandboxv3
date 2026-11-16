@@ -104,7 +104,7 @@ function updatePerformanceEstimate(simResX, simResY)
  * chain about 10.7 - **163 bytes a cell**.
  *
  * At the default 2000 x 300 that is 93 MB, which is still more than everything else in
- * the app put together (the surface map is 10.5 MB, the bolt artwork 25 MB, and the
+ * the app put together (the surface map is 10.5 MB, the bolt artwork about 33 MB with mipmaps, and the
  * HDR and bloom targets about 10 MB at a 1600 x 900 window). At 3000 x 300 - what
  * this app used to ask for before anybody counted - it is 140 MB, and that request
  * on top of everything else is what took the graphics context down at load. It is
@@ -644,18 +644,6 @@ var cellHeight = 12000. / 300.; // guiControls.simHeight / sim_res_y;  // in met
 var frameNum = 0;
 var lastClockContrastSampleTime = -Infinity;
 const sceneContrastSamples = new Uint8Array(9 * 9 * 4);
-function interpolateTextColor(fromColor, toColor, progress)
-{
-  const t = clamp(progress, 0, 1);
-  const easedT = t * t * (3 - 2 * t);
-  const from = [1, 3, 5].map(index => parseInt(fromColor.slice(index, index + 2), 16));
-  const to = [1, 3, 5].map(index => parseInt(toColor.slice(index, index + 2), 16));
-  const channels = from.map((channel, index) =>
-    Math.round(channel + (to[index] - channel) * easedT).toString(16).padStart(2, '0')
-  );
-  return '#' + channels.join('');
-}
-
 function getSceneContrastTextColor(screenX, screenY)
 {
   if (!gl || !canvas || gl.isContextLost() || canvas.width < 1 || canvas.height < 1)
@@ -1250,10 +1238,6 @@ class Weatherstation
   #height = 125;
   #mainDiv;
   #menuPage = 0;
-  #menuFromPage = 0;
-  #menuTransitionDirection = 0;
-  #menuTransitionStart = null;
-  #menuTransitionDuration = 320;
   #canvas;
   #c; // 2d canvas context
   #menuHint;
@@ -1296,9 +1280,6 @@ class Weatherstation
   #skyCondition = 'CLR';
   #weatherIconElement;
   #textColor = '#ffffff';
-  #textColorFrom = '#ffffff';
-  #textColorTarget = '#ffffff';
-  #textColorTransitionStartTime = -Infinity;
   #lastContrastSampleTime = -Infinity;
 
   #netIRpow = 0;
@@ -1900,13 +1881,8 @@ class Weatherstation
 
   #scrollMenu(deltaY)
   {
-    const now = performance.now();
-    if (this.#menuTransitionStart !== null && now - this.#menuTransitionStart < this.#menuTransitionDuration)
-      return;
-    this.#menuTransitionDuration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 320;
-    this.#menuFromPage = this.#menuPage;
-    this.#menuTransitionDirection = deltaY > 0 ? 1 : -1;
-    this.#menuTransitionStart = now;
+    if (deltaY !== 0)
+      this.#menuPage = 1 - this.#menuPage;
   }
 
   updateCanvas()
@@ -1919,19 +1895,9 @@ class Weatherstation
     this.#mainDiv.style.top = screenY + 'px';
     const contrastSampleTime = performance.now();
     if (contrastSampleTime - this.#lastContrastSampleTime >= 1000) {
-      const targetTextColor = getSceneContrastTextColor(screenX + this.#width / 2, screenY + this.#height * 0.4);
-      if (targetTextColor != this.#textColorTarget) {
-        this.#textColorFrom = this.#textColor;
-        this.#textColorTarget = targetTextColor;
-        this.#textColorTransitionStartTime = contrastSampleTime;
-      }
+      this.#textColor = getSceneContrastTextColor(screenX + this.#width / 2, screenY + this.#height * 0.4);
       this.#lastContrastSampleTime = contrastSampleTime;
     }
-    this.#textColor = interpolateTextColor(
-      this.#textColorFrom,
-      this.#textColorTarget,
-      (contrastSampleTime - this.#textColorTransitionStartTime) / 500
-    );
     this.#stationMarkerLabel.style.color = this.#textColor;
     this.#menuHint.dataset.contrast = this.#textColor == '#111820' ? 'dark' : 'light';
     // this.#canvas.style.left = screenX + 'px';
@@ -1981,22 +1947,6 @@ class Weatherstation
       ['Peak 1-hour rate', convertRainAmount(this.#peakHourlyRainRate).toFixed(2) + ' ' + rainRateUnit],
       ['Sky', cloudText]
     ];
-    const now = performance.now();
-    let activePage = this.#menuPage;
-    let transitionProgress = 1;
-    if (this.#menuTransitionStart !== null) {
-      transitionProgress = clamp((now - this.#menuTransitionStart) / this.#menuTransitionDuration, 0, 1);
-      transitionProgress = 1 - Math.pow(1 - transitionProgress, 3);
-      if (transitionProgress >= 1) {
-        this.#menuPage = 1 - this.#menuFromPage;
-        this.#menuTransitionStart = null;
-        this.#menuTransitionDirection = 0;
-        activePage = this.#menuPage;
-      }
-    }
-    const markerVisibility = this.#menuTransitionStart === null ? 1 : Math.abs(2 * transitionProgress - 1);
-    this.#stationMarker.style.opacity = markerVisibility;
-    this.#mainDiv.style.setProperty('--weather-marker-transition-y', -12 * (1 - markerVisibility) + 'px');
     const drawMenuPage = (page, offsetY) => {
       c.save();
       c.beginPath();
@@ -2040,13 +1990,7 @@ class Weatherstation
     c.textAlign = 'left';
     c.textBaseline = 'alphabetic';
     c.globalAlpha = 1;
-    if (this.#menuTransitionStart !== null) {
-      const offset = this.#menuTransitionDirection * (this.#height - 20);
-      drawMenuPage(this.#menuFromPage, -offset * transitionProgress);
-      drawMenuPage(1 - this.#menuFromPage, offset * (1 - transitionProgress));
-    } else {
-      drawMenuPage(activePage, 0);
-    }
+    drawMenuPage(this.#menuPage, 0);
 
     //  }
   }
@@ -2294,13 +2238,10 @@ class LoadingBar
   async remove(completed = false)
   {
     if (completed) {
-      document.body.classList.add('is-finishing');
-      if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches)
-        await new Promise(resolve => setTimeout(resolve, 700));
       document.getElementById('IntroScreen')?.remove();
     }
     this.#screen.remove();
-    document.body.classList.remove('is-loading', 'is-finishing');
+    document.body.classList.remove('is-loading');
     if (loadingBar == this)
       loadingBar = null;
   }
@@ -2311,14 +2252,7 @@ async function setLoadingBar(task)
 {
   if (!loadingBar) {
     loadingBar = new LoadingBar(0);
-    await new Promise(resolve => {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          document.body.classList.add('is-loading');
-          setTimeout(resolve, 350);
-        });
-      });
-    });
+    document.body.classList.add('is-loading');
   }
   if (task)
     await loadingBar.set(loadingBar.percent, task);
@@ -2395,7 +2329,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   let displayModeController;
   let fullscreenModeController;
   let previousDisplayMode = guiControls_default.displayMode;
-  let displayModeOverlay;
   let displayModeToast;
   let displayModeTransitionTimer;
   let capeHoverTooltip;
@@ -2421,26 +2354,16 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       }
     }
     const modeName = option ? option.textContent.replace(/^\d+\s*/, '') : mode.replace(/^DISP_/, '').replace(/_/g, ' ');
-    if (!displayModeOverlay) {
-      displayModeOverlay = document.createElement('div');
-      displayModeOverlay.className = 'display-mode-overlay';
-      displayModeOverlay.setAttribute('aria-hidden', 'true');
-      document.body.appendChild(displayModeOverlay);
+    if (!displayModeToast) {
       displayModeToast = document.createElement('div');
       displayModeToast.className = 'display-mode-toast';
       displayModeToast.setAttribute('aria-live', 'polite');
       document.body.appendChild(displayModeToast);
     }
-
     clearTimeout(displayModeTransitionTimer);
-    displayModeOverlay.classList.remove('is-transitioning');
-    displayModeToast.classList.remove('is-visible');
-    void displayModeOverlay.offsetWidth;
     displayModeToast.textContent = modeName;
-    displayModeOverlay.classList.add('is-transitioning');
     displayModeToast.classList.add('is-visible');
     displayModeTransitionTimer = setTimeout(function() {
-      displayModeOverlay.classList.remove('is-transitioning');
       displayModeToast.classList.remove('is-visible');
     }, 850);
   }
@@ -5216,31 +5139,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     let previousWindPushControlsVisibility;
     let previousWindPushTemperatureVisibility;
     let previousWindPushHumidityVisibility;
-    let windPushExtrasAnimationFrame = 0;
     function setWindPushExtrasVisibility(visible)
     {
-      cancelAnimationFrame(windPushExtrasAnimationFrame);
-      if (visible) {
-        windPushExtrasRow.style.height = 'auto';
-        const expandedHeight = windPushExtrasRow.scrollHeight;
-        windPushExtrasRow.style.height = '0px';
-        windPushExtrasRow.offsetHeight;
-        windPushExtrasAnimationFrame = requestAnimationFrame(() => {
-          windPushExtrasRow.style.height = expandedHeight + 'px';
-        });
-      } else {
-        windPushExtrasRow.style.height = windPushExtrasRow.getBoundingClientRect().height + 'px';
-        windPushExtrasRow.offsetHeight;
-        windPushExtrasRow.style.height = '0px';
-      }
+      windPushExtrasRow.style.height = visible ? 'auto' : '0px';
     }
-
-    windPushExtrasRow.addEventListener('transitionend', event => {
-      if (event.target === windPushExtrasRow && event.propertyName === 'height' &&
-          guiControls.tool == 'TOOL_WIND_PUSH') {
-        windPushExtrasRow.style.height = 'auto';
-      }
-    });
 
     function updateWindPushControlsVisibility()
     {
@@ -6955,8 +6857,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-12-06.36'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.36')
+    loadSourceFile('shaders/common.glsl?v=2026-12-06.37'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-12-06.37')
   ]);
 
   const [
@@ -7484,17 +7386,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   /*
    * How many bolt artworks to keep resident, and how the app decides.
    *
-   * One tile is a whole bolt at 2500 x 5000 R8: **12.5 MB of texture memory**. That
-   * is the single largest allocation in the app - the HDR target at 1080p is 16 MB
-   * and the entire bloom chain about the same, so two tiles are a quarter of the
-   * whole renderer's budget and four were half of it. The original ten were 125 MB,
-   * which is what made a modest GPU drop the context on load.
-   *
-   * Two is what this keeps: enough that a storm has two shapes to alternate through,
-   * small enough to leave room for everything else. And if a context is ever lost -
-   * the browser's way of saying the budget was exceeded - the next load starts with
-   * a single tile, because at that point the machine has told us what its budget is
-   * and 12.5 MB is as low as the artwork goes without changing it.
+   * One 2500 x 5000 R8 tile uses 12.5 MB for its base and roughly 16.7 MB
+   * including mips. Two provide variety while limiting GPU memory pressure.
+   * If a graphics context is lost, the next load uses one tile instead.
    */
   const lightningTileMemoryKey = 'lightningTileBudget';
   function readLightningTileBudget()
@@ -7826,13 +7720,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     // never sees the 50 MB RGBA picture the canvas had.
     gl.bindTexture(gl.TEXTURE_2D, lightningTextures[i]);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, artwork.width, artwork.height, 0, gl.RED, gl.UNSIGNED_BYTE, artwork.data);
-    // No mip chain on the bolt tiles. A stroke reads level 0 explicitly
-    // (textureLod 0.0, see displayLightning) and always has, and an intra-cloud
-    // flash reads the network tile, not this one - so the chain was 33% of 12.5 MB
-    // per tile, plus a generateMipmap over four megatexels right after each upload,
-    // for nothing. The flash network, which *is* sampled mip-filtered, keeps its
-    // own chain (it costs a few hundred kilobytes).
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    // Mips filter thin channels to the actual HDR pixel footprint at each zoom.
+    // Cost: about one third of the 12.5 MB R8 base tile per ready bolt.
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -7914,7 +7805,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.36');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-12-06.37');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8420,7 +8311,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   setTimeout(startLightningTextureWorker, 1200);
   requestAnimationFrame(draw);
   await loadingBar.set(100, 'Simulation ready');
-  await new Promise(resolve => setTimeout(resolve, 350));
   await loadingBar.remove(true);
   resizeSimulationCanvases();
 
@@ -9943,7 +9833,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.36');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-12-06.37');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

@@ -78,7 +78,7 @@ check('a flash is not masked to the cloud it was born in',
   /emittedLight \+= lightningBoltLight \/ \(1\. \+ cloudDensity \* 100\.0\);/.test(displayShader),
   'a channel that leaves one deck and crosses to the next is cloud-to-cloud lightning; the cloud filters the light, it does not cut the channel');
 check('a flash reads its own artwork, mip-filtered, over a slab of the sky at true aspect ratio',
-  /float pixVal = texture\(lightningNetworkTex, flashCoord\)\.r;/.test(displayShader) &&
+  /float pixVal = textureGrad\(lightningNetworkTex, flashCoord, gradX, gradY\)\.r;/.test(displayShader) &&
   /const float networkTexAspect = networkTexRes\.x \/ networkTexRes\.y;/.test(displayShader) &&
   /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader) &&
   /texCoord\.x - mod\(pos\.x, 1\.\)\) \/ flashSpan\.x/.test(displayShader) &&
@@ -89,15 +89,18 @@ check('a flash lights the slab it lives in and a stroke lights the cloud under i
   /vec2 flashDist = vec2\(\(lightningPos\.x - texCoord\.x\) \* aspectRatios\[0\], texCoord\.y - lightningPos\.y\);/.test(displayShader) &&
   /float cgDx = mod\(lightningPos\.x - texCoord\.x \+ 0\.5, 1\.0\) - 0\.5;\s*\n\s*vec2 dist = vec2\(cgDx, max\(\(abs\(lightningPos\.y \/ 2\. - texCoord\.y\) - 0\.1\), 0\.\)\);/.test(displayShader),
   'the shipped lobe is a point below the strike (wrapped across x=0/1); a network is a slab');
-check('a stroke still takes the shipped level-0 fetch of the bolt tile',
-  /float pixVal = textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.r;/.test(displayShader) &&
-  !/mipped/.test(displayShader) && !/flash \? texture/.test(displayShader),
-  'the stroke path must stay the code the app shipped with');
-check('the network tile has a mip chain, and the bolt tiles do not need one',
-  /gl\.generateMipmap\(gl\.TEXTURE_2D\);/.test(appSource) &&
-  /gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR/.test(appSource) &&
-  /textureLod\(lightningTex, lightningTexCoord, 0\.0\)/.test(displayShader),
-  'a flash reads the network averaged; a stroke reads level 0 of the bolt, so its chain was 33% of 12.5 MB for nothing');
+check('stroke uses explicit screen-space gradients and preserves its own bolt artwork',
+  /textureGrad\(lightningTex, lightningTexCoord, gradX, gradY\)/.test(displayShader) &&
+  /screenTexDx = dFdx\(texCoord\)/.test(displayShader) &&
+  !/flash \? texture/.test(displayShader));
+check('both network and bolt artwork have mip-filtered textures',
+  ['generateLightningTexture', 'generateLightningNetworkTexture'].every(name => {
+    const start = appSource.indexOf('function ' + name);
+    const end = appSource.indexOf('\n  }', start);
+    const section = appSource.slice(start, end);
+    return /gl\.generateMipmap\(gl\.TEXTURE_2D\)/.test(section) &&
+      /gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR/.test(section);
+  }));
 
 /*
  * One artwork.

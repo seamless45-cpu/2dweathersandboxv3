@@ -278,12 +278,12 @@ check('and the trunk stays inside the sprite',
     /localStorage\.setItem\('lightningTileBudget', '1'\)/.test(app) &&
     /if \(graphicsContextLost\)\s*\/\/ nothing can be uploaded/.test(workerBlock),
     'the browser does not say how much memory it wanted; it says no');
-  check('the bolt tiles carry no mip chain, because nothing samples one',
-    !/gl\.generateMipmap\(gl\.TEXTURE_2D\);\s*\n\s*gl\.texParameteri\(gl\.TEXTURE_2D, gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR\);/
+  check('bolt tile mips match the explicit gradient sampling used for minification',
+    /gl\.generateMipmap\(gl\.TEXTURE_2D\);\s*\n\s*gl\.texParameteri\(gl\.TEXTURE_2D, gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR\);/
       .test(app.split('function generateLightningTexture')[1].split('function generateLightningNetworkTexture')[0]) &&
-    /textureLod\(lightningTex, lightningTexCoord, 0\.0\)/
+    /textureGrad\(lightningTex, lightningTexCoord, gradX, gradY\)/
       .test(fs.readFileSync(path.join(ROOT, 'shaders/fragment/realisticDisplayShader.frag'), 'utf8')),
-    '33% of 12.5 MB a tile, plus a generateMipmap over four megatexels, for nothing');
+    'mipmap cost is about one third of the base R8 tile');
   check('the flash network is one small tile, asked for after the first bolt',
     /kind : 'network'/.test(workerBlock) &&
     /kind : 'network', width : 512, height : 256/.test(workerBlock) &&
@@ -320,8 +320,8 @@ check('and the trunk stays inside the sprite',
  *
  * `displayLightning` subtracts a threshold from the tile's red channel and
  * multiplies what is left by a hundred thousand; on the main stroke that threshold
- * is 0.95, so a texel below 243/255 contributes nothing and a trunk drawn dimmer
- * than that would be a bolt that is not there. The trunk is written at
+ * is 0.004, preserving mip-filtered partial coverage. A saturated trunk also
+ * retains the original full-white peak after normalization. The trunk is written at
  * `12 * lineWidth^2` on a 9 pixel channel, which saturates, and this is the check
  * that it still does after anything touches the generator. */
 const boltArtwork = gen.generateLightningBolt(TILE_W, TILE_H);
@@ -334,7 +334,7 @@ const trunkPeaks = [0.2, 0.5, 0.8].map((yFraction) => {
 });
 check('the trunk is bright enough to survive the display threshold',
   trunkPeaks.every((peak) => peak >= 245),
-  'peaks ' + trunkPeaks.join(', ') + ' out of 255; the display subtracts 0.95 before it draws anything');
+  'peaks ' + trunkPeaks.join(', ') + ' out of 255; full-white source peaks retain the original radiance');
 
 const networkArtwork = gen.generateLightningNetwork(512, 256);
 check('the flash network carries light too',
