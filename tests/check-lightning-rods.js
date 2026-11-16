@@ -81,13 +81,13 @@ check('a flash reads its own artwork, mip-filtered, over a slab of the sky at tr
   /float pixVal = textureGrad\(lightningNetworkTex, flashCoord, gradX, gradY\)\.r;/.test(displayShader) &&
   /const float networkTexAspect = networkTexRes\.x \/ networkTexRes\.y;/.test(displayShader) &&
   /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader) &&
-  /fract\(texCoord\.x\) - pos\.x\) \/ flashSpan\.x/.test(displayShader) &&
+  /texCoord\.x - pos\.x\) \/ flashSpan\.x/.test(displayShader) &&
   /0\.5 \+ flashFlip \* \(texCoord\.y - pos\.y\) \/ flashSpan\.y/.test(displayShader),
   'the network artwork must keep its 2:1 world aspect ratio via aspectRatios[0] instead of squashing vertically');
 check('a flash lights the slab it lives in and a stroke lights the cloud under it',
   /if \(isFlash\) \{\s*\n\s*\/\/ A flash lights the whole slab/.test(displayShader) &&
-  /vec2 flashDist = vec2\(\(lightningPos\.x - fract\(texCoord\.x\)\) \* aspectRatios\[0\], texCoord\.y - lightningPos\.y\);/.test(displayShader) &&
-  /float cgDx = lightningPos\.x - fract\(texCoord\.x\);\s*\n\s*vec2 dist = vec2\(cgDx, max\(\(abs\(lightningPos\.y \/ 2\. - texCoord\.y\) - 0\.1\), 0\.\)\);/.test(displayShader),
+  /vec2 flashDist = vec2\(\(lightningPos\.x - texCoord\.x\) \* aspectRatios\[0\], texCoord\.y - lightningPos\.y\);/.test(displayShader) &&
+  /float cgDx = lightningPos\.x - texCoord\.x;\s*\n\s*vec2 dist = vec2\(cgDx, max\(\(abs\(lightningPos\.y \/ 2\. - texCoord\.y\) - 0\.1\), 0\.\)\);/.test(displayShader),
   'the shipped lobe is a point below the strike (clipped at the tile edge); a network is a slab');
 check('stroke uses explicit screen-space gradients and preserves its own bolt artwork',
   /textureGrad\(lightningTex, lightningTexCoord, gradX, gradY\)/.test(displayShader) &&
