@@ -36,9 +36,9 @@ uniform int rodCount;
 uniform float rodHeight;        // mast height, in cells
 uniform float rodAttractRadius; // horizontal reach, normalized sim width
 
-float wrappedHorizontalDist(float a, float b)
+float lightningHorizontalDist(float a, float b)
 {
-  return abs(mod(a - b + 0.5, 1.0) - 0.5);
+  return abs(a - b);
 }
 
 float rodEffectiveRadius(int rodIdx, float intensity)
@@ -55,7 +55,7 @@ bool hasNearbyLightningRod(float strikeX, float intensity)
   for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
     if (i >= rodCount)
       break;
-    if (wrappedHorizontalDist(strikeX, rodPositions[i].x) < rodEffectiveRadius(i, intensity))
+    if (lightningHorizontalDist(strikeX, rodPositions[i].x) < rodEffectiveRadius(i, intensity))
       return true;
   }
   return false;
@@ -84,12 +84,14 @@ bool slotBusy(vec4 data, vec4 meta)
   return data[START_ITERNUM] > 0.0 && iterNum < lightningSlotEnd(data, meta);
 }
 
+float superboltWorldWidthMeters();
+
 // Pull any CG strike (normal -CG or external +CG) onto the nearest reachable rod.
 // Uses an electrogeometric reach scaled by rod elevation/height and stroke current:
 // inside the inner protective cone (35% for normal, 70% for super rods) capture
 // is guaranteed, tapering
-// smoothly toward the outer boundary across periodic seam wraps.
-vec4 attractToRod(vec4 strike)
+// smoothly toward the outer boundary without jumping the world seam.
+vec4 attractToRodWithinRange(vec4 strike, float originX, float minRangeMeters, float maxRangeMeters)
 {
   if (strike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY)
     return strike; // intra-cloud: no ground contact, so nothing to attract
@@ -99,8 +101,11 @@ vec4 attractToRod(vec4 strike)
   for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
     if (i >= rodCount)
       break;
+    float rodRangeMeters = lightningHorizontalDist(originX, rodPositions[i].x) * superboltWorldWidthMeters();
+    if (rodRangeMeters < minRangeMeters || rodRangeMeters > maxRangeMeters)
+      continue;
     float effRadius = max(rodEffectiveRadius(i, strike[INTENSITY]), 1e-5);
-    float dx = wrappedHorizontalDist(strike.x, rodPositions[i].x);
+    float dx = lightningHorizontalDist(strike.x, rodPositions[i].x);
     float normDist = dx / effRadius;
     if (normDist < bestNormalizedDist) {
       bestNormalizedDist = normDist;
@@ -123,11 +128,16 @@ vec4 attractToRod(vec4 strike)
   return strike;
 }
 
+vec4 attractToRod(vec4 strike)
+{
+  return attractToRodWithinRange(strike, strike.x, 0.0, superboltWorldWidthMeters());
+}
+
 float stormScoreAt(float cx, float yMid)
 {
-  float wx = fract(cx);
-  float wxL = fract(cx - 0.03);
-  float wxR = fract(cx + 0.03);
+  float wx = clamp(cx, 0.0, 0.999999);
+  float wxL = clamp(cx - 0.03, 0.0, 0.999999);
+  float wxR = clamp(cx + 0.03, 0.0, 0.999999);
   vec4 wMid = texture(waterTex, vec2(wx, yMid));
   vec4 wLow = texture(waterTex, vec2(wx, 0.08));
   vec4 wSkirtL = texture(waterTex, vec2(wxL, 0.14));
@@ -138,59 +148,35 @@ float stormScoreAt(float cx, float yMid)
          0.45 * max(wSkirtR[CLOUD] + wSkirtR[PRECIPITATION], 0.0);
 }
 
-// Choose a ground strike location in clear air outside the main storm core for
-// an external positive CG ("bolt from the blue"), sampling uniformly at random
-// across the full 5.5 km - 39.0 km range (0.4583 - 3.25 world height units at
-// 12 km sim height, clamped < 0.4875 domain width so periodic wrapping never
-// flips sides) while steering clear of dense cloud/rain cells.
-float selectExternalStrikeTarget(vec2 originPos, float iter)
-{
-  float aspect = max(resolution.x / max(resolution.y, 1.0), 1.0);
-  const float minWorld = 5.5 / 12.0;  // ~5.5 km minimum lateral travel
-  const float maxWorld = 39.0 / 12.0; // ~39.0 km maximum lateral travel
-  float yMid = clamp(originPos.y * 0.55, 0.08, 0.45);
-
-  float bestX = fract(originPos.x + clamp(minWorld / aspect, 0.03, 0.4875));
-  float bestScore = 1e9;
-  for (int k = 0; k < 6; k++) {
-    float rDist = random2d(vec2(originPos.x * 23.7 + float(k) * 11.3,
-                                originPos.y * 17.9 + iter * 2.13 + float(k) * 3.7));
-    float worldDist = mix(minWorld, maxWorld, rDist);
-    float dx = clamp(worldDist / aspect, 0.03, 0.4875);
-    float side = ((k % 2) == 0) ? 1.0 : -1.0;
-    float cx = fract(originPos.x + side * dx);
-    float tieBias = 0.02 * random2d(vec2(originPos.x * 17.3 + float(k) * 5.7, iter * 1.9 + float(k)));
-    float score = stormScoreAt(cx, yMid) + tieBias;
-    if (score < bestScore) {
-      bestScore = score;
-      bestX = cx;
-    }
-  }
-  return bestX;
-}
-
-// Superbolts travel 9–42 km laterally, measured along the shortest periodic
-// path. A narrow world cannot represent the full range; use its available span
-// and do not generate a superbolt at all if it cannot represent 9 km.
+// Physical world width, independent of grid resolution and simulation height.
 float superboltWorldWidthMeters()
 {
   return simHeightMeters * resolution.x / max(resolution.y, 1.0);
 }
 
-float selectSuperboltStrikeTarget(vec2 originPos, float iter)
+// A strike may use either side only when the full minimum distance fits in
+// that side of the *same* world tile. Do not cross the periodic seam.
+bool externalRangeFits(float originX, float minMeters)
+{
+  return max(originX, 0.999999 - originX) * superboltWorldWidthMeters() >= minMeters;
+}
+
+float selectExternalStrikeTarget(vec2 originPos, float iter, float minMeters, float maxMeters)
 {
   float widthMeters = superboltWorldWidthMeters();
-  float minDx = 9000.0 / widthMeters;
-  float maxDx = min(42000.0 / widthMeters, 0.4999);
+  float minDx = minMeters / widthMeters;
   float yMid = clamp(originPos.y * 0.55, 0.08, 0.45);
-  float bestX = fract(originPos.x + minDx);
+  float bestX = originPos.x + (originPos.x >= 0.5 ? -minDx : minDx);
   float bestScore = 1e9;
   for (int k = 0; k < 6; k++) {
+    float side = ((k % 2) == 0) ? 1.0 : -1.0;
+    float available = side > 0.0 ? 0.999999 - originPos.x : originPos.x;
+    float maxDx = min(maxMeters / widthMeters, available);
+    if (maxDx < minDx)
+      continue;
     float rDist = random2d(vec2(originPos.x * 23.7 + float(k) * 11.3,
                                 originPos.y * 17.9 + iter * 2.13 + float(k) * 3.7));
-    float dx = mix(minDx, maxDx, rDist);
-    float side = ((k % 2) == 0) ? 1.0 : -1.0;
-    float cx = fract(originPos.x + side * dx);
+    float cx = originPos.x + side * mix(minDx, maxDx, rDist);
     float tieBias = 0.02 * random2d(vec2(originPos.x * 17.3 + float(k) * 5.7, iter * 1.9 + float(k)));
     float score = stormScoreAt(cx, yMid) + tieBias;
     if (score < bestScore) {
@@ -279,8 +265,10 @@ vec3 selectCloudToCloudTarget(vec2 originPos, float iter)
 
   for (int k = 0; k < 8; k++) {
     float dx = dxList[k];
-    float cx = fract(originPos.x + dx);
-    float mx = fract(originPos.x + 0.5 * dx);
+    float cx = originPos.x + dx;
+    if (cx < 0.0 || cx >= 1.0)
+      continue;
+    float mx = originPos.x + 0.5 * dx;
     for (int yi = 0; yi < 4; yi++) {
       float cy = yList[yi];
       if (texture(baseTex, vec2(cx, cy))[TEMPERATURE] >= 500.0)
@@ -403,27 +391,23 @@ void main()
       float coldFactor = clamp((-25.0 - originTempC) / 30.0, 0.0, 1.0);
       float posChance = mix(0.14, 0.26, coldFactor);
       bool isExternalPositive = incoming.y >= 0.18 &&
+                                externalRangeFits(originX, 5500.0) &&
                                 originTempK > 50.0 &&
                                 originTempK < CtoK(-25.0) &&
                                 random2d(vec2(originX * 31.7 + incoming.y * 59.3, iterNum * 0.73)) < posChance;
       if (isExternalPositive) {
-        // Roll only for external positive CG. Worlds narrower than 18 km cannot
-        // represent a 9 km shortest periodic path and keep ordinary external CG.
-        bool isSuperboltExt = superboltWorldWidthMeters() * 0.4999 >= 9000.0 &&
+        // Roll only when a 9 km same-tile path fits. Otherwise keep an
+        // ordinary external CG; if even 5.5 km cannot fit, use the normal branch.
+        bool isSuperboltExt = externalRangeFits(originX, 9000.0) &&
           random2d(vec2(originX * 89.3 + incoming.y * 47.1, iterNum * 1.13)) < 0.072;
+        float minRangeMeters = isSuperboltExt ? 9000.0 : 5500.0;
+        float maxRangeMeters = isSuperboltExt ? 37000.0 : 34000.0;
         vec4 extStrike = incoming;
-        extStrike.x = isSuperboltExt
-          ? selectSuperboltStrikeTarget(vec2(originX, incoming.y), iterNum)
-          : selectExternalStrikeTarget(vec2(originX, incoming.y), iterNum);
-        // Encode external positive CG in (4.5, 5.4] so lightningFlickers() selects
-        // a single return stroke (0 restrikes most of the time, rare 1 restroke)
-        // while remaining bounded well inside the maximum slot lifetime.
+        extStrike.x = selectExternalStrikeTarget(vec2(originX, incoming.y), iterNum, minRangeMeters, maxRangeMeters);
+        // Encode external positive CG in (4.5, 5.4] for its single-stroke preference.
         extStrike[INTENSITY] = clamp(4.6 + (incoming[INTENSITY] - 0.75) * 0.25, 4.6, 5.4);
-        vec4 rodStrike = attractToRod(extStrike);
-        float rodRangeMeters = wrappedHorizontalDist(originX, rodStrike.x) * superboltWorldWidthMeters();
-        // Do not let rod attraction move a superbolt outside its allowed range.
-        if (!isSuperboltExt || (rodRangeMeters >= 9000.0 && rodRangeMeters <= 42000.0))
-          extStrike = rodStrike;
+        // Filter rods before picking the nearest so an invalid rod cannot hide a valid one.
+        extStrike = attractToRodWithinRange(extStrike, originX, minRangeMeters, maxRangeMeters);
         result = (row == 0) ? extStrike : vec4(originX, 1.0, 0.0, isSuperboltExt ? 1.0 : 0.0);
       } else {
         bool cgTriggerNearRod = incoming[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY &&

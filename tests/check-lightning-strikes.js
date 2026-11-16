@@ -267,7 +267,7 @@ check('the slot count agrees between app.js, common.glsl and this test',
     !/channelBrightness/.test(displayShader) && !/lightningCurvePeak/.test(displayShader),
     'the curve goes straight into the gain, as it did in the shipped shader');
   check('CG channel threshold is active immediately on trigger without waiting for a leader crawl',
-    /const float brightnessThreshold = 0\.004;/.test(cgSection) && /0\.05 \/ \(1\.0 - brightnessThreshold\)/.test(cgSection) &&
+    /const float brightnessThreshold = 0\.004;/.test(cgSection) && /0\.05 \* lightningCoverage\(pixVal, brightnessThreshold\)/.test(cgSection) &&
     !/brightnessThreshold = 1\. - lightningTime \* branchShowFactor;/.test(displayShader),
     'the full bolt reaches ground immediately when triggered');
 

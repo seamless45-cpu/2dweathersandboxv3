@@ -19,9 +19,8 @@ void drawCursor(vec4 cursor, vec3 view)            // OFF: cursor.w < 1       No
 {
   if (cursor.w >= 1.) {                            // draw cursor enabled
     if (cursor.w >= 4.) {                          // lightning rod placement preview (cursor[2] = rodAttractRadius)
-      float dx = cursor.x - texCoord.x;
-      if (cursorWrapHorizontally)
-        dx = mod(dx + 0.5, 1.0) - 0.5;
+      // Each displayed tile has its own rod preview; the reach clips at its seam.
+      float dx = cursor.x - (cursorWrapHorizontally ? fract(texCoord.x) : texCoord.x);
       float horizontalDist = abs(dx);
       float edgeTolX = max(0.0016 / max(view[2], 0.25), texelSize.x * 0.35);
       float edgeTolY = edgeTolX * (resolution.x / max(resolution.y, 1.0));

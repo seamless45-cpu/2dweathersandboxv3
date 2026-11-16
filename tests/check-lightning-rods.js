@@ -81,14 +81,14 @@ check('a flash reads its own artwork, mip-filtered, over a slab of the sky at tr
   /float pixVal = textureGrad\(lightningNetworkTex, flashCoord, gradX, gradY\)\.r;/.test(displayShader) &&
   /const float networkTexAspect = networkTexRes\.x \/ networkTexRes\.y;/.test(displayShader) &&
   /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader) &&
-  /texCoord\.x - mod\(pos\.x, 1\.\)\) \/ flashSpan\.x/.test(displayShader) &&
+  /fract\(texCoord\.x\) - pos\.x\) \/ flashSpan\.x/.test(displayShader) &&
   /0\.5 \+ flashFlip \* \(texCoord\.y - pos\.y\) \/ flashSpan\.y/.test(displayShader),
   'the network artwork must keep its 2:1 world aspect ratio via aspectRatios[0] instead of squashing vertically');
 check('a flash lights the slab it lives in and a stroke lights the cloud under it',
   /if \(isFlash\) \{\s*\n\s*\/\/ A flash lights the whole slab/.test(displayShader) &&
-  /vec2 flashDist = vec2\(\(lightningPos\.x - texCoord\.x\) \* aspectRatios\[0\], texCoord\.y - lightningPos\.y\);/.test(displayShader) &&
-  /float cgDx = mod\(lightningPos\.x - texCoord\.x \+ 0\.5, 1\.0\) - 0\.5;\s*\n\s*vec2 dist = vec2\(cgDx, max\(\(abs\(lightningPos\.y \/ 2\. - texCoord\.y\) - 0\.1\), 0\.\)\);/.test(displayShader),
-  'the shipped lobe is a point below the strike (wrapped across x=0/1); a network is a slab');
+  /vec2 flashDist = vec2\(\(lightningPos\.x - fract\(texCoord\.x\)\) \* aspectRatios\[0\], texCoord\.y - lightningPos\.y\);/.test(displayShader) &&
+  /float cgDx = lightningPos\.x - fract\(texCoord\.x\);\s*\n\s*vec2 dist = vec2\(cgDx, max\(\(abs\(lightningPos\.y \/ 2\. - texCoord\.y\) - 0\.1\), 0\.\)\);/.test(displayShader),
+  'the shipped lobe is a point below the strike (clipped at the tile edge); a network is a slab');
 check('stroke uses explicit screen-space gradients and preserves its own bolt artwork',
   /textureGrad\(lightningTex, lightningTexCoord, gradX, gradY\)/.test(displayShader) &&
   /screenTexDx = dFdx\(texCoord\)/.test(displayShader) &&
@@ -300,10 +300,10 @@ const softHdrClamp = (value) => {
 
 check('rod snaps are gated to cloud-to-ground strikes and attract both normal -CG and external +CG',
   locationShader.includes('strike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY') &&
-  /float wrappedHorizontalDist\(/.test(locationShader) &&
+  /float lightningHorizontalDist\(/.test(locationShader) &&
   /float rodEffectiveRadius\(/.test(locationShader) &&
   /bool hasNearbyLightningRod\(/.test(locationShader) &&
-  /vec4 rodStrike = attractToRod\(extStrike\);/.test(locationShader) &&
+  /extStrike = attractToRodWithinRange\(extStrike, originX, minRangeMeters, maxRangeMeters\);/.test(locationShader) &&
   /vec4 normalStrike = attractToRod\(incoming\);/.test(locationShader));
 
 const commonDisplay = fs.readFileSync(path.join(ROOT, 'shaders', 'commonDisplay.glsl'), 'utf8');
@@ -368,10 +368,7 @@ const DEFAULT_SIM_HEIGHT_CELLS = 300.0;
 const START_ITERNUM = 2;
 const INTENSITY = 3;
 
-const wrappedHorizontalDist = (a, b) => {
-  const d = (a - b + 0.5);
-  return Math.abs(d - Math.floor(d) - 0.5);
-};
+const lightningHorizontalDist = (a, b) => Math.abs(a - b);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const fract = (v) => v - Math.floor(v);
 
@@ -392,7 +389,7 @@ function attractToRod(strike, rods, radius = ROD_ATTRACT_RADIUS) {
   let bestNormalizedDist = 1.0;
   for (let i = 0; i < rods.length && i < MAX_LIGHTNING_RODS; i++) {
     const effRadius = Math.max(rodEffectiveRadius(rods[i], result[INTENSITY], radius), 1e-5);
-    const dx = wrappedHorizontalDist(result[0], rods[i].x);
+    const dx = lightningHorizontalDist(result[0], rods[i].x);
     const normDist = dx / effRadius;
     if (normDist < bestNormalizedDist) {
       bestNormalizedDist = normDist;
@@ -471,7 +468,7 @@ check('every captured strike is a full return stroke', weakIntensity === 0, weak
     innerHits === trials, innerHits + ' of ' + trials);
 }
 
-// periodic boundary wrap capture (rod near x=0.99 captures CG at x=0.01)
+// A rod on the opposite world edge must not attract a strike across the seam.
 {
   const seamRod = [{x: 0.99, y: 0.02}];
   let seamHits = 0;
@@ -479,8 +476,8 @@ check('every captured strike is a full return stroke', weakIntensity === 0, weak
     const strike = [0.01, 0.45, 50 + i, 3.0];
     if (attractToRod(strike, seamRod)[0] === 0.99) seamHits++;
   }
-  check('lightning rod captures CG strikes across the periodic x=0/1 boundary',
-    seamHits === 200, seamHits + ' of 200');
+  check('lightning rod does not capture CG strikes across the periodic x=0/1 boundary',
+    seamHits === 0, seamHits + ' of 200');
 }
 
 // elevated rods and stronger CG currents extend electrogeometric reach
