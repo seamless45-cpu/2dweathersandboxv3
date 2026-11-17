@@ -329,41 +329,9 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
   return max(pixVal * positiveIcCol, vec3(0));
 }
 
-// Smooth fractal noise for channel shapes. One octave is a 1-D gradient
-// (Perlin) lattice with a quintic fade: the curve is C1 end to end, so a
-// channel undulates in broad meandering sweeps instead of kinking through a
-// corner every octave the way a triangle wave does. Returns vec2(value,
-// analytic slope), the slope taken with respect to the argument.
-vec2 channelNoise1(float x, float seed)
+float extTriWave(float x)
 {
-  float i = floor(x);
-  float f = x - i;
-  float u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-  float du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
-  float a = random2d(vec2(i, seed)) * 2.0 - 1.0;
-  float b = random2d(vec2(i + 1.0, seed)) * 2.0 - 1.0;
-  float value = mix(a * f, b * (f - 1.0), u);
-  float slope = a * (1.0 - u) + b * u + (b * (f - 1.0) - a * f) * du;
-  return vec2(value, slope);
-}
-
-// Four octaves of channelNoise1 at a 2.13 lacunarity and 0.55 gain, normalized.
-// The low octaves carry the broad meander of the channel; the high ones fold in
-// the fine tortuosity a stepped leader actually shows, without ever creasing.
-vec2 channelFractal(float x, float seed)
-{
-  float amp = 1.0;
-  float freq = 1.0;
-  float norm = 0.0;
-  vec2 acc = vec2(0.0);
-  for (int oct = 0; oct < 4; oct++) {
-    vec2 n = channelNoise1(x * freq, seed + float(oct) * 17.31);
-    acc += vec2(n.x, n.y * freq) * amp;
-    norm += amp;
-    amp *= 0.55;
-    freq *= 2.13;
-  }
-  return acc / norm;
+  return 4.0 * abs(fract(x) - 0.5) - 1.0;
 }
 
 vec2 evalExtArc(float t, float Hw, float V)
@@ -435,9 +403,11 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
 
   float dPerp = dot(target - c, normDir);
   float seed = random2d(vec2(originX * 19.3, groundPos.y * 23.7)) * 4.0 + 0.5;
-  float jagScale = clamp(min(abs(Hw), V) * 0.10, 0.06, 0.75);
+  float jagScale = clamp(min(abs(Hw), V) * 0.14, 0.025, 0.055);
   float jagEnv = sin(PI * t);
-  float jag = channelFractal(t * 3.4 + seed, seed * 1.9 + 0.7).x * jagScale * jagEnv;
+  float jag = (0.65 * extTriWave(t * 3.8 + seed) +
+               0.32 * extTriWave(t * 9.3 + seed * 1.9) +
+               0.14 * extTriWave(t * 21.0 + seed * 3.1)) * jagScale * jagEnv;
   dPerp += jag;
 
   float scaleLen = max(V, 0.25);
@@ -492,24 +462,29 @@ vec2 ccRotate(vec2 v, float angle)
   return vec2(c * v.x - s * v.y, s * v.x + c * v.y);
 }
 
-// Displacement of a channel at arc position s (in kilometres), with the
-// analytic slope d(disp)/d(s) for the distance-field correction. The spectrum
-// is absolute - broad three-kilometre lazy arcs down to thirty-metre kinks -
-// scaled by jagScale, so a bridge and a super-rod channel share one texture
-// of tortuosity instead of the octaves stretching to fit whatever span the
-// caller happens to pass. The span argument stays for call-site envelopes.
 vec2 ccFractalDisp(float s, float span, float jagPhase, float jagScale)
 {
-  float j = jagPhase;
-  vec2 n1 = channelNoise1(s * 0.30 + j,             j * 1.71 + 3.7);
-  vec2 n2 = channelNoise1(s * 0.68 + j * 1.37 + 0.31, j * 2.13 + 7.1);
-  vec2 n3 = channelNoise1(s * 1.55 + j * 2.91 + 0.67, j * 2.91 + 11.3);
-  vec2 n4 = channelNoise1(s * 3.30 + j * 4.37 + 0.19, j * 4.37 + 17.7);
+  float normLen = max(span, 0.18);
+  float f1 = 2.3 / normLen;
+  float f2 = 6.1 / normLen;
+  float f3 = 14.8 / normLen;
+  float f4 = 33.5 / normLen;
 
-  float d = 0.46 * n1.x + 0.27 * n2.x + 0.16 * n3.x + 0.11 * n4.x;
-  float slope = 0.46 * n1.y * 0.30 + 0.27 * n2.y * 0.68 +
-                0.16 * n3.y * 1.55 + 0.11 * n4.y * 3.30;
-  return vec2(d * jagScale, clamp(slope * jagScale, -2.5, 2.5));
+  float x1 = s * f1 + jagPhase;
+  float x2 = s * f2 + jagPhase * 1.73 + 0.31;
+  float x3 = s * f3 + jagPhase * 2.91 + 0.67;
+  float x4 = s * f4 + jagPhase * 4.37 + 0.19;
+
+  float d = (0.58 * extTriWave(x1) +
+             0.28 * extTriWave(x2) +
+             0.13 * extTriWave(x3) +
+             0.06 * extTriWave(x4)) * jagScale;
+
+  float sgn1 = fract(x1) < 0.5 ? 4.0 : -4.0;
+  float sgn2 = fract(x2) < 0.5 ? 4.0 : -4.0;
+  float sgn3 = fract(x3) < 0.5 ? 4.0 : -4.0;
+  float slope = (0.58 * sgn1 * f1 + 0.28 * sgn2 * f2 + 0.13 * sgn3 * f3) * jagScale;
+  return vec2(d, clamp(slope, -2.5, 2.5));
 }
 
 // Signed-distance core + sheath evaluation for a forked CC side branch.
@@ -526,7 +501,7 @@ vec2 ccEvalBranch(vec2 target, vec2 bStart, vec2 bDir, float bLen, float curveSi
 
   float bt = clamp(along / max(bLen, 1e-4), 0.0, 1.0);
   float arch = curveSign * 0.11 * bLen * sin(PI * bt);
-  float jagScale = clamp(bLen * 0.16, 0.10, 0.60);
+  float jagScale = clamp(bLen * 0.095, 0.008, 0.028);
   vec2 jag = ccFractalDisp(along, max(bLen, 0.12), seed * 11.3, jagScale);
   float rootPin = smoothstep(0.0, 0.08, bt) * (1.0 - 0.30 * bt);
   float centerPerp = arch + jag.x * rootPin;
@@ -608,7 +583,7 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
   vec2 tanDir = dLen > 1e-5 ? dC / dLen : vec2(1.0, 0.0);
   vec2 normDir = vec2(-tanDir.y, tanDir.x);
 
-  float jagScale = clamp(span * 0.055, 0.30, 0.85);
+  float jagScale = clamp(span * 0.068, 0.015, 0.052);
   float jagPhase = seed * 7.0 + 0.5;
   vec2 spineDisp = ccFractalDisp(t * span, span, jagPhase, jagScale);
   float spineEnv = sin(PI * t);
@@ -654,7 +629,7 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
     if (!isPositiveCC && (b == 1 || b == 2)) {
       float subAlong = 0.44 * bLen;
       float subArch = sideSign * 0.11 * bLen * sin(PI * 0.44);
-      float subJagScale = clamp(bLen * 0.14, 0.08, 0.45);
+      float subJagScale = clamp(bLen * 0.095, 0.008, 0.028);
       vec2 subJag = ccFractalDisp(subAlong, max(bLen, 0.12), (seed + float(b) * 1.37) * 11.3, subJagScale);
       vec2 bNorm = vec2(-bDir.y, bDir.x);
       vec2 subStart = bStart + bDir * subAlong + bNorm * (subArch + subJag.x * 0.868);
@@ -741,11 +716,13 @@ vec2 gcSpinePoint(float t, float span, float lean, float phase)
 {
   t = clamp(t, 0.0, 1.0);
   float env = sin(PI * t);
-  // Four octaves of gradient noise over the pinned envelope: the broad sweep
-  // both anchors share, and the fine tortuosity of a stepped leader. No
-  // corners anywhere, so the channel reads as plasma, not as a polyline.
-  vec2 meander = channelFractal(t * 2.35, phase);
-  float x = lean * t + env * max(0.12, span * 0.10) * meander.x;
+  float x = lean * t +
+            env * (0.115 * sin(3.15 * t + phase) +
+                   0.052 * sin(8.4 * t + phase * 1.73) +
+                   0.026 * extTriWave(11.0 * t + phase * 0.61));
+  // A high-frequency triangular octave gives the channel broad knees rather
+  // than a smooth Bezier lean. The pinned envelope keeps both anchors exact.
+  x += 0.013 * env * extTriWave(21.0 * t + phase * 1.91);
   return vec2(x, span * t);
 }
 
@@ -790,11 +767,10 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
   float mainHalo = 0.0;
   float mainSheath = 0.0;
   vec2 previous = vec2(0.0);
-  const float gcSegments = 24.0; // was 18: enough to render the spine's own knees, not just its arc
-  for (int i = 1; i <= 24; i++) {
-    float t = float(i) / gcSegments;
+  for (int i = 1; i <= 18; i++) {
+    float t = float(i) / 18.0;
     vec2 current = gcSpinePoint(t, span, lean, phase);
-    float local = clamp((headT - (float(i - 1) / gcSegments)) * gcSegments, 0.0, 1.0);
+    float local = clamp((headT - (float(i - 1) / 18.0)) * 18.0, 0.0, 1.0);
     if (local <= 0.0) {
       previous = current;
       continue;
@@ -909,9 +885,10 @@ vec2 crawlerLeaderPoint(vec2 root, float side, float lengthKm, float along,
 {
   along = clamp(along, 0.0, 1.0);
   float envelope = sin(PI * along);
-  vec2 meander = channelFractal(along * 3.1, phase);
   float y = (drift + lift) * along - droop * along * along +
-            envelope * max(0.12, lengthKm * 0.085) * meander.x;
+            envelope * (0.22 * sin(4.8 * along + phase) +
+                        0.17 * extTriWave(6.0 * along + phase * 0.63) +
+                        0.060 * extTriWave(12.5 * along + phase * 1.71));
   return root + vec2(side * lengthKm * along, y);
 }
 
