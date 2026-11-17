@@ -99,16 +99,20 @@ check('artificial channel and rod share the same extended animation clock and li
   /\(iterNum - strikeData\[START_ITERNUM\]\) \/ 20\.0/.test(display));
 check('crawler connects the IC origin to the anvil and propagates staggered leaders',
   /originY = \(origin.y - top\) \* heightKm/.test(display) &&
-  /feederProgress = clamp\(time \/ 0\.3, 0\.0, 1\.0\) \* 4\.0/.test(display) &&
-  /mix\(vec2\(0\.0, originY\), root, k \/ 4\.0\)/.test(display) &&
-  /lane < 3/.test(display) && /\(time - 0\.3 - f \* 0\.12\) \/ 1\.25/.test(display) &&
-  /mix\(prev, next, growth\)/.test(display) && /float head =/.test(display) &&
-  /branchProgress = clamp\(progress - k, 0\.0, 2\.6\)/.test(display) &&
-  /channelGlow\(p, elbow, mix\(elbow, tip, second\)/.test(display) &&
-  /pair > 0\.0/.test(display) &&
-  /channelGlow\(p, elbow, mix\(elbow, fingerA, pair\)/.test(display) &&
-  /min\(glow \* confine, 2\.0\)/.test(display) &&
-  /smoothstep\(1\.6, 2\.5, time\)/.test(display));
+  /float rise = clamp\(time \/ 0\.34, 0\.0, 1\.0\)/.test(display) &&
+  /mix\(parent, anvilEntry, t\)/.test(display) &&
+  /for \(int lane = 0; lane < 4/.test(display) &&
+  /vec2 root = anvilEntry/.test(display) &&
+  /float delay = 0\.34 \+ rank \* 0\.15/.test(display) &&
+  /crawlerLeaderPoint\(root, side, lengthKm, along/.test(display) &&
+  /branchStep = clamp\(\(headStep \* nodeCount - k\) \/ 3\.1/.test(display) &&
+  /fingerStep = clamp\(\(established - joint\) \/ max\(branchLen \* 0\.34, 0\.032\)/.test(display) &&
+  /float leaderLive = 1\.0/.test(display) &&
+  /vec2 nextUV = vec2\(origin\.x \+ next\.x \/ \(aspectRatios\.x \* heightKm\)/.test(display) &&
+  /leaderLive = min\(leaderLive, smoothstep\(0\.015, 0\.085, nextCloud\)\)/.test(display) &&
+  /leaderGain = laneGain \* \(0\.72 \+ 0\.28 \* \(1\.0 - along\)\) \* \(0\.68 \+ 0\.32 \* parentPulse\) \* leaderLive/.test(display) &&
+  /min\(glow \* confine \* parentPulse, 2\.35\)/.test(display) &&
+  /smoothstep\(1\.74, 2\.42, time\)/.test(display));
 check('crawler is confined to the cloud interior with only a kilometre-scale leak past the edge',
   /float cloudHere = texture\(waterTex, uv\)\[CLOUD\]/.test(display) &&
   /leakUV = vec2\(1\.7e3 \/ \(cellHeight \* resolution\.x\), 0\.95e3 \/ \(cellHeight \* resolution\.y\)\)/.test(display) &&
@@ -116,18 +120,29 @@ check('crawler is confined to the cloud interior with only a kilometre-scale lea
   /float leak = smoothstep\(0\.015, 0\.085, nearCloud\) \* \(1\.0 - confine\)/.test(display) &&
   /confine = max\(confine, 0\.38 \* leak\)/.test(display));
 // Propagation remains attached, including every sub-branch; growth begins only
-// after the feeder reaches the root and the relevant parent joint is complete.
+// after the feeder reaches the common anvil root and the relevant parent joint is complete.
+const smoothstep = (edge0, edge1, value) => {
+  const x = Math.max(0, Math.min(1, (value - edge0) / (edge1 - edge0)));
+  return x * x * (3 - 2 * x);
+};
+const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 let connected = true, visible = false;
-for (let time = 0; time <= 2.5; time += 0.005) for (let lane = 0; lane < 3; lane++) for (let k = 2; k <= 8; k++) {
-  const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
-  const feeder = clamp(time / 0.3, 0, 1);
-  const progress = clamp((time - 0.3 - lane * 0.12) / 1.25, 0, 1) * 9;
-  const parent = clamp(progress - (k - 1), 0, 1);
-  const branch = clamp(progress - k, 0, 2.6);   // clamp(progress - k, 0.0, 2.6) in the shader
-  const first = clamp(branch, 0, 1), second = clamp(branch - 1, 0, 1), pair = clamp(branch - 2, 0, 1);
-  const hasFork = (k + lane) % 2 < 0.5;
-  connected &&= (!progress || feeder === 1) && (!first || parent === 1) && (!second || first === 1) && (!pair || second === 1);
-  visible ||= hasFork && first > 0 && second > 0 && pair > 0;
+for (let time = 0; time <= 2.5; time += 0.005) for (let lane = 0; lane < 4; lane++) for (let k = 2; k <= 8; k++) {
+  const rank = lane % 2;
+  const sideSign = lane < 2 ? -1 : 1;
+  const delay = 0.34 + rank * 0.15 + (sideSign > 0 ? 0.055 : 0);
+  const feeder = clamp(time / 0.34, 0, 1);
+  const raw = clamp((time - delay) / 1.16, 0, 1);
+  const phase = raw * 11;
+  const progress = (Math.floor(phase) + smoothstep(0.03, 0.34, phase - Math.floor(phase))) / 11;
+  const parent = clamp((progress - (k - 1) / 11) * 11, 0, 1);
+  const branch = clamp((progress * 11 - k) / 3.1, 0, 1); // branchStep in the shader
+  const established = 3.8 * branch;                       // branchLen * branchStep, for representative reach
+  const joint = 3.8 * 0.46;
+  const finger = clamp((established - joint) / (3.8 * 0.34), 0, 1);
+  const hasFork = (k + lane) % 3 < 0.52;
+  connected &&= (!raw || feeder === 1) && (!branch || parent === 1) && (!finger || branch > 0) && (!finger || parent === 1);
+  visible ||= hasFork && branch > 0 && finger > 0;
 }
 check('all leader and branch levels grow from completed connections', connected && visible);
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

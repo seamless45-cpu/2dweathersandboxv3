@@ -697,23 +697,43 @@ float channelGlow(vec2 p, vec2 a, vec2 b, float width)
   return (width / filteredWidth) * exp(-d * d / (filteredWidth * filteredWidth));
 }
 
-// Rising ground-to-cloud leader, rooted at the actual super-rod tip.
-// Reworked as a tortuous, dendritic channel: the primary leader follows a
-// leaning, fractal-displaced spine (slope-corrected distance, no conditional
-// derivatives), two levels of forward-diverging forks break away from the
-// trunk as it advances, and a bright head travels along the established
-// channel. Forks only start growing once the trunk head has passed their
-// joint, and sub-forks only after their fork has - growth stays connected
-// end to end, exactly as in the intra-cloud and crawler channels.
-vec2 evalGcQuad(float t, vec2 p0, vec2 p1, vec2 p2)
+// Rising ground-to-cloud leader from the actual super-rod tip.
+//
+// A super rod initiates a positive upward leader, and it does not look like a
+// tapered arc drawn once. It is a cold, highly branched leader that climbs in
+// stop-start bursts: the hidden tip extends in discrete steps, the root is
+// faint until the leader approaches cloud base, and only after attachment does
+// the hot return stroke race back down the established tree. The tree itself is
+// conical, with the densest forks in the upper half and every joint splitting
+// into shorter daughter leaders.
+//
+// This implementation keeps those stages: a connected forward-stepped spine,
+// an advancing tip flare, first- and second-generation forks grown only behind
+// it, and a descending return-stroke wash after attachment. The time argument is
+// the ordinary lightning clock (quarter rate for artificial events), so natural
+// strikes retain their flicker and manual clicks remain visible.
+vec2 gcSpinePoint(float t, float span, float lean, float phase)
 {
-  float om = 1.0 - t;
-  return om * om * p0 + 2.0 * om * t * p1 + t * t * p2;
+  t = clamp(t, 0.0, 1.0);
+  float env = sin(PI * t);
+  float x = lean * t +
+            env * (0.115 * sin(3.15 * t + phase) +
+                   0.052 * sin(8.4 * t + phase * 1.73) +
+                   0.026 * extTriWave(11.0 * t + phase * 0.61));
+  // A high-frequency triangular octave gives the channel broad knees rather
+  // than a smooth Bezier lean. The pinned envelope keeps both anchors exact.
+  x += 0.013 * env * extTriWave(21.0 * t + phase * 1.91);
+  return vec2(x, span * t);
 }
 
-vec2 evalGcQuadDeriv(float t, vec2 p0, vec2 p1, vec2 p2)
+float gcLeaderClock(float time)
 {
-  return 2.0 * (1.0 - t) * (p1 - p0) + 2.0 * t * (p2 - p1);
+  float raw = clamp(time / 0.82, 0.0, 1.0);
+  const float stepCount = 18.0;
+  float phase = raw * stepCount;
+  // The pauses make the extension behave like a dart: a short burst, a brief
+  // pause, then the next segment appears. Nothing extends before its burst.
+  return clamp((floor(phase) + smoothstep(0.02, 0.36, fract(phase))) / stepCount, 0.0, 1.0);
 }
 
 vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
@@ -726,131 +746,153 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
   float span = max((pos.y - tipY) * heightKm, 0.05);
   float seed = random2d(pos * 81.3);
   float s2 = random2d(vec2(seed * 3.71, pos.y * 7.93));
-  float lean = (s2 - 0.5) * span * 0.55; // the cloud target is rarely dead overhead
-  if (abs(p.x - 0.5 * lean) > span * 0.85 + 1.7 || p.y < -0.6 || p.y > span * 1.15 + 1.1)
+  float lean = (s2 - 0.5) * span * 0.38;
+  float phase = seed * 17.0 + s2 * 4.0;
+  float trunkLen = sqrt(span * span + lean * lean);
+  float headT = gcLeaderClock(time);
+  float pixelKm = max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)),
+                      length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * heightKm;
+
+  if (abs(p.x - lean * 0.5) > span * 0.66 + 2.1 || p.y < -0.55 || p.y > span * 1.18 + 1.0 ||
+      time < 0.0 || time > 2.35)
     return vec3(0.0);
 
-  // Growth clock: the trunk advances over the first ~65% of the animation,
-  // forks trail the trunk head, sub-forks trail their fork.
-  float growth = clamp(time * 1.55 + 0.08, 0.0, 1.0);
-  float trunkLen = max(length(vec2(lean, span)), 0.05);
-  float headKm = growth * trunkLen;
-  float headT = clamp(headKm / trunkLen, 0.0, 1.0);
+  // The return stroke begins at cloud attachment and races toward the rod.
+  float returnClock = clamp((time - 0.78) / 0.25, 0.0, 1.0);
+  float returnFront = 1.0 - returnClock;
+  float returnActive = 1.0 - smoothstep(0.91, 1.02, time);
+  float strokeShock = exp(-pow((time - 0.91) / 0.075, 2.0)); // hot dart at the ground
 
-  // Spine: quadratic bezier from the rod tip to the cloud base, sampled in the
-  // underdisplaced frame with a perpendicular fractal offset on top.
-  vec2 q0 = vec2(0.0);
-  vec2 q1 = vec2(lean * 0.32, span * 0.58);
-  vec2 q2 = vec2(lean, span);
-  float jagPhase = seed * 9.0 + 0.35;
-  float jagScale = clamp(trunkLen * 0.052, 0.012, 0.045);
-
-  float bestT = 0.0;
-  float bestD2 = 1e9;
-  for (int k = 0; k < 6; k++) {
-    float tc = float(k) / 5.0;
-    vec2 diff = evalGcQuad(tc, q0, q1, q2) - p;
-    float d2 = dot(diff, diff);
-    if (d2 < bestD2) {
-      bestD2 = d2;
-      bestT = tc;
+  float mainCore = 0.0;
+  float mainHalo = 0.0;
+  float mainSheath = 0.0;
+  vec2 previous = vec2(0.0);
+  for (int i = 1; i <= 18; i++) {
+    float t = float(i) / 18.0;
+    vec2 current = gcSpinePoint(t, span, lean, phase);
+    float local = clamp((headT - (float(i - 1) / 18.0)) * 18.0, 0.0, 1.0);
+    if (local <= 0.0) {
+      previous = current;
+      continue;
     }
+    vec2 end = mix(previous, current, local);
+    float passed = smoothstep(returnFront - 0.10, returnFront + 0.08, t);
+    float now = exp(-pow((t - returnFront) / 0.060, 2.0)) * returnClock * returnActive;
+    float returnGain = returnClock * (0.42 + 1.05 * passed + 2.35 * now);
+    // Positive leaders are narrow at the advancing tip and thicker farther
+    // back. The hot return stroke fills the whole established channel.
+    float coreW = max(max(0.0032, pixelKm * 1.18) * mix(1.48, 0.72, t), 0.0016);
+    float segmentGain = (0.62 + returnGain) * mix(1.0, 0.78, t);
+    mainCore += channelGlow(p, previous, end, coreW) * segmentGain;
+    mainHalo += channelGlow(p, previous, end, coreW * 3.8) * (0.115 + 0.24 * returnGain);
+    mainSheath += channelGlow(p, previous, end, coreW * 8.2) * (0.012 + 0.040 * returnGain);
+    previous = current;
   }
-  float t = bestT;
-  for (int it = 0; it < 3; it++) {
-    vec2 r = evalGcQuad(t, q0, q1, q2) - p;
-    vec2 dC = evalGcQuadDeriv(t, q0, q1, q2);
-    float denom = dot(dC, dC) + 1e-6;
-    t = clamp(t - dot(r, dC) / denom, 0.0, 1.0);
-  }
 
-  vec2 c = evalGcQuad(t, q0, q1, q2);
-  vec2 dC = evalGcQuadDeriv(t, q0, q1, q2);
-  float dLen = length(dC);
-  vec2 tanDir = dLen > 1e-5 ? dC / dLen : vec2(0.0, 1.0);
-  vec2 normDir = vec2(-tanDir.y, tanDir.x);
-
-  float spineEnv = pow(sin(PI * clamp(t, 0.0, 1.0)), 0.75); // pinned at both anchors
-  vec2 spineDisp = ccFractalDisp(t * trunkLen, trunkLen, jagPhase, jagScale);
-  float dPerp = dot(p - c, normDir) - spineDisp.x * spineEnv;
-  float slope = spineDisp.y * spineEnv;
-  float distMain = abs(dPerp) * inversesqrt(1.0 + clamp(slope * slope, 0.0, 6.25));
-
-  float worldPix = max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)),
-                       length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * heightKm;
-  float coreW = max(0.0023, worldPix * 1.05);
-  // The trunk only exists behind its advancing head.
-  float growMask = headT <= 1e-4 ? 0.0 : 1.0 - smoothstep(max(headT - 0.10, 0.0), headT, t);
-  float edgeFade = smoothstep(0.0, 0.022, t) * smoothstep(1.0, 0.978, t);
-  float mainCore = smoothstep(coreW * 1.55, coreW * 0.15, distMain) * edgeFade * growMask;
-  float mainHalo = exp(-distMain / max(coreW * 3.4, 0.0050)) * 0.22 * edgeFade * growMask;
-  float mainOuter = exp(-distMain / max(coreW * 8.0, 0.012)) * 0.020 * edgeFade * growMask;
-  float mainSignal = mainCore + mainHalo + mainOuter;
-
-  // A bright head rides the growing tip.
-  float headActive = 1.0 - smoothstep(0.90, 1.0, growth);
-  float headGlow = exp(-pow((t - headT) * trunkLen / 0.32, 2.0)) * headActive * 0.85 * edgeFade;
+  float tipActive = 1.0 - smoothstep(0.64, 0.75, time);
+  vec2 tip = gcSpinePoint(headT, span, lean, phase);
+  float tipDistance = length(p - tip);
+  float tipFlare = exp(-tipDistance / max(0.055 + (1.0 - headT) * 0.34, 0.055)) *
+                   tipActive * (0.82 + 0.18 * sin(time * 24.0 + seed * 6.283));
+  float tipCorona = exp(-tipDistance / 0.32) * tipActive * 0.22;
 
   float branchCore = 0.0;
   float branchSignal = 0.0;
-  for (int fi = 0; fi < 3; fi++) {
+  for (int fi = 0; fi < 5; fi++) {
     float fIdx = float(fi);
-    float fRootT = 0.33 + fIdx * 0.21 + (random2d(vec2(seed * 5.3, fIdx * 3.7)) - 0.5) * 0.07;
-    fRootT = clamp(fRootT, 0.12, 0.86);
-    vec2 fDisp = ccFractalDisp(fRootT * trunkLen, trunkLen, jagPhase, jagScale);
-    vec2 fRoot = evalGcQuad(fRootT, q0, q1, q2);
-    vec2 fTan = evalGcQuadDeriv(fRootT, q0, q1, q2);
-    float fLen = length(fTan);
-    fTan = fLen > 1e-5 ? fTan / fLen : vec2(0.0, 1.0);
-    fRoot += vec2(-fTan.y, fTan.x) * (fDisp.x * pow(sin(PI * fRootT), 0.75));
+    float branchSeed = seed * 7.0 + fIdx * 2.618;
+    float tRoot = clamp(0.17 + fIdx * 0.165 +
+                        (random2d(vec2(branchSeed, 3.7)) - 0.5) * 0.065,
+                        0.13, 0.84);
+    vec2 root = gcSpinePoint(tRoot, span, lean, phase);
+    float side = mod(fIdx, 2.0) < 1.0 ? -1.0 : 1.0;
+    if (random2d(vec2(branchSeed, 9.1)) > 0.82)
+      side = -side;
+    float forkAngle = side * mix(0.43, 0.72,
+                                 random2d(vec2(branchSeed, 13.3)));
+    vec2 forkDir = normalize(vec2(sin(forkAngle), max(cos(forkAngle), 0.20)));
+    float branchLen = span * mix(0.15, 0.31,
+                                 random2d(vec2(branchSeed, 17.9))) *
+                      (1.12 - tRoot * 0.34);
+    float branchKm = max(headT - tRoot, 0.0) * trunkLen;
+    float branchGrowth = clamp(branchKm / max(branchLen * 0.72, 0.05), 0.0, 1.0);
+    if (branchGrowth <= 0.0)
+      continue;
 
-    float sideSign = mod(fIdx + floor(seed * 7.0), 2.0) < 1.0 ? -1.0 : 1.0;
-    float forkAngle = sideSign * mix(0.48, 0.88, random2d(vec2(seed * 7.1, fIdx * 1.9 + 2.3)));
-    vec2 forkDir = ccRotate(fTan, forkAngle);
-    float forkLen = span * mix(0.24, 0.40, random2d(vec2(seed * 3.3, fIdx * 4.7 + 1.1)));
+    float branchPassed = smoothstep(returnFront - 0.10, returnFront + 0.08, tRoot);
+    float branchShock = exp(-pow((tRoot - returnFront) / 0.075, 2.0)) * returnClock * returnActive;
+    float branchWeight = (0.66 + 1.14 * branchPassed + 1.82 * branchShock) *
+                         mix(0.80, 1.10, random2d(vec2(branchSeed, 21.4)));
+    vec2 branchSignalPair = ccEvalBranch(p, root, forkDir, branchLen * branchGrowth,
+                                         -side * (0.24 + 0.24 * random2d(vec2(branchSeed, 5.2))),
+                                         branchSeed * 1.37,
+                                         max(max(0.0018, pixelKm * 0.82), 0.0011),
+                                         branchWeight);
+    branchCore = max(branchCore, branchSignalPair.x);
+    branchSignal = max(branchSignal, branchSignalPair.y);
 
-    // The fork only starts once the trunk head has reached its joint.
-    float forkGrowth = clamp((headKm - fRootT * trunkLen) / max(forkLen * 0.72, 0.05), 0.0, 1.0);
-    if (forkGrowth > 0.0) {
-      vec2 bVal = ccEvalBranch(p, fRoot, forkDir, forkLen * forkGrowth, sideSign,
-                               seed + fIdx * 1.37, coreW * 0.74, mix(0.80, 0.92, random2d(vec2(seed * 11.3, fIdx + 0.6))));
-      branchCore = max(branchCore, bVal.x);
-      branchSignal = max(branchSignal, bVal.y);
-
-      // Sub-fork: splits off the fork once the fork is more than half grown.
-      float subGrowth = clamp((forkGrowth - 0.55) / 0.34, 0.0, 1.0);
-      if (subGrowth > 0.0) {
-        float subAlong = 0.55 * forkLen;
-        float subSideSign = -sideSign;
-        vec2 subDir = ccRotate(forkDir, subSideSign * mix(0.35, 0.62, random2d(vec2(seed * 13.7, fIdx * 3.1 + 5.9))));
-        vec2 subStart = fRoot + forkDir * subAlong;
-        vec2 subVal = ccEvalBranch(p, subStart, subDir, forkLen * 0.52 * subGrowth, subSideSign,
-                                   seed + fIdx * 3.11, coreW * 0.58, 0.66);
-        branchCore = max(branchCore, subVal.x);
-        branchSignal = max(branchSignal, subVal.y);
+    // The fork's own daughters appear only after the leader has crossed half
+    // the branch. One turns toward the trunk's inside, one keeps opening the cone.
+    float establishedKm = branchLen * branchGrowth;
+    float jointKm = branchLen * 0.46;
+    float subGrowth = clamp((establishedKm - jointKm) / max(branchLen * 0.38, 0.035), 0.0, 1.0);
+    if (subGrowth > 0.0) {
+      vec2 joint = root + forkDir * jointKm;
+      for (int finger = 0; finger < 2; finger++) {
+        bool inner = finger == 0;
+        float fingerSide = inner ? -side : side;
+        float fan = inner ? forkAngle * 0.70 : forkAngle * 1.43;
+        vec2 fingerDir = normalize(vec2(fingerSide * sin(fan), max(cos(fan), 0.16)));
+        float fingerLen = branchLen * (inner ? 0.47 : 0.33) * subGrowth;
+        vec2 fingerSignal = ccEvalBranch(p, joint, fingerDir, fingerLen,
+                                         fingerSide * 0.17,
+                                         branchSeed * 2.11 + float(finger) * 3.7,
+                                         max(max(0.0012, pixelKm * 0.62), 0.00075),
+                                         branchWeight * (inner ? 0.74 : 0.56));
+        branchCore = max(branchCore, fingerSignal.x);
+        branchSignal = max(branchSignal, fingerSignal.y);
       }
     }
   }
 
-  float totalSignal = max(mainSignal, branchSignal) + 0.18 * min(mainSignal, branchSignal) + headGlow;
-  float pulse = 0.88 + 0.12 * sin(time * 15.0 + seed * 6.283);
-  float fade = 1.0 - smoothstep(1.8, 2.5, time);
-  vec3 gcCol = vec3(0.66, 0.78, 1.0);
-  return max(totalSignal * min(intensity, 30.0) * 250.0 * pulse * fade * gcCol, vec3(0.0));
+  float totalSignal = mainCore + 0.28 * mainHalo + 0.055 * mainSheath + tipFlare * 1.35 +
+                      tipCorona + branchCore + 0.42 * branchSignal;
+  float pulse = 0.84 + 0.16 * sin(time * 17.0 + seed * 6.283);
+  float strikeSurge = strokeShock * 1.45 + returnClock * 0.42;
+  float coreHeat = clamp(tipFlare * 0.62 + strikeSurge + branchCore * 0.48, 0.0, 1.0);
+  vec3 gcCol = mix(vec3(0.50, 0.64, 1.24), vec3(0.84, 0.91, 1.38), coreHeat);
+  float fade = 1.0 - smoothstep(1.34, 2.18, time);
+  return max(totalSignal * min(intensity, 26.0) * 238.0 * pulse * fade * gcCol,
+             vec3(0.0));
 }
 
 // The crawler connects its parent IC flash to the anvil before staggered
-// leaders sweep outward. Branches grow from established joints, not free air,
-// and every joint sheds a main fork plus a short dendritic pair, so the anvil
-// edge fills in like a real anvil crawler.
+// leaders sweep outward. This is a connected front, not three rotating fans:
+// an ionized feeder rises from the parent channel, then four kilometer-scale
+// leaders fan into the anvil in left/right pairs. Each leader travels through
+// the deck in steps, leaves upper and lower dendrites from established joints,
+// and is gated by the live cloud field, so it spreads where the anvil actually
+// exists and lets go at clear-air boundaries. The parent's flicker is passed in
+// explicitly so the rooted connection brightens with the IC stroke that made it.
 //
-// The whole figure is confined to the cloud. A leader burns through ice and
-// nothing else: inside the anvil the channel is at full strength, a dim leak
-// fringe reaches a kilometre or two past the edge, and beyond that the glow
-// is gone. This is evaluated per fragment from the cloud field itself, not
-// from a fixed range, so the crawler follows the actual deck - turrets,
-// gaps and all - and cannot run far into clear air.
-vec3 drawAnvilCrawler(vec2 origin, float top, float time)
+// A leader burns through ice and nothing else: inside the anvil the channel is
+// at full strength, a dim leak fringe reaches a kilometre or two past the edge,
+// and beyond that the glow is gone. This is evaluated per fragment from the
+// cloud field itself, not from a fixed range, so the crawler follows turrets,
+// gaps and lobe boundaries while retaining only a thin ionized fringe at the edge.
+vec2 crawlerLeaderPoint(vec2 root, float side, float lengthKm, float along,
+                        float drift, float phase, float droop, float lift)
+{
+  along = clamp(along, 0.0, 1.0);
+  float envelope = sin(PI * along);
+  float y = (drift + lift) * along - droop * along * along +
+            envelope * (0.22 * sin(4.8 * along + phase) +
+                        0.17 * extTriWave(6.0 * along + phase * 0.63) +
+                        0.060 * extTriWave(12.5 * along + phase * 1.71));
+  return root + vec2(side * lengthKm * along, y);
+}
+
+vec3 drawAnvilCrawler(vec2 origin, float top, float time, float parentIntensity)
 {
   if (!inLightningWorldTile())
     return vec3(0.0);
@@ -858,7 +900,7 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time)
   vec2 p = vec2((texCoord.x - origin.x) * aspectRatios.x * heightKm,
                 (texCoord.y - top) * heightKm);
   float originY = (origin.y - top) * heightKm;
-  if (abs(p.x) > 27.0 || p.y < min(originY, -5.5) - 1.0 || p.y > 5.5 || time < 0.0 || time > 2.5)
+  if (abs(p.x) > 31.0 || p.y < min(originY, -6.5) - 1.0 || p.y > 5.5 || time < 0.0 || time > 2.5)
     return vec3(0.0);
 
   // Cloud confinement: full strength inside cloud, a short leak just outside.
@@ -881,71 +923,152 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time)
     return vec3(0.0);
 
   float seed = random2d(origin * 91.7);
+  float phase = seed * 23.0 + 0.4;
+  float pixelKm = max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)),
+                      length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * heightKm;
+  // The parent IC flash sets the crawler's baseline brightness. It stays faint
+  // between restrikes, then the whole rooted tree snaps bright with the parent.
+  float parentPulse = clamp(0.46 + parentIntensity / 10.0, 0.46, 1.86);
   float glow = 0.0;
-  vec2 root = vec2(0.0, -0.7);
-  vec2 prev = vec2(0.0, originY);
-  float feederProgress = clamp(time / 0.3, 0.0, 1.0) * 4.0;
-  for (int i = 1; i <= 4; i++) {
-    float k = float(i);
-    float jitter = (random2d(vec2(seed * 23.0, k * 9.3)) - 0.5) * 0.55 * sin(PI * k / 4.0);
-    vec2 next = mix(vec2(0.0, originY), root, k / 4.0) + vec2(jitter, 0.0);
-    next.x += (random2d(vec2(seed * 7.7, k * 3.1 + 1.7)) - 0.5) * 0.34 * sin(PI * k / 4.0); // second-order tortuosity
-    float growth = clamp(feederProgress - (k - 1.0), 0.0, 1.0);
-    if (growth > 0.0)
-      glow += channelGlow(p, prev, mix(prev, next, growth), 0.045) * 0.85;
-    prev = next;
+  float hotCore = 0.0;
+  vec2 parent = vec2(0.0, originY);
+  vec2 anvilEntry = vec2(0.0, -0.48);
+
+  // Connected feeder: three parallel tendrils climb from the parent IC channel
+  // into the anvil deck rather than snapping to four independent horizontal fans.
+  float rise = clamp(time / 0.34, 0.0, 1.0);
+  vec2 previous = parent;
+  for (int i = 1; i <= 6; i++) {
+    float t = float(i) / 6.0;
+    float jitter = (random2d(vec2(seed * 29.0, float(i) * 7.3)) - 0.5) * 0.38 * sin(PI * t);
+    vec2 next = mix(parent, anvilEntry, t) + vec2(jitter, 0.0);
+    next.x += (random2d(vec2(seed * 13.7, float(i) * 3.1)) - 0.5) * 0.20 * sin(PI * t);
+    float local = clamp(rise * 6.0 - float(i - 1), 0.0, 1.0);
+    if (local > 0.0)
+      glow += channelGlow(p, previous, mix(previous, next, local), mix(0.030, 0.048, t)) * 0.80;
+    previous = next;
   }
-  for (int lane = 0; lane < 3; lane++) {
+  float feederHead = clamp(rise * 6.0, 0.0, 6.0);
+  float feederReach = clamp(feederHead / 6.0, 0.0, 1.0);
+  float feederTip = exp(-length(p - mix(parent, anvilEntry, feederReach)) / 0.18) *
+                    (1.0 - smoothstep(0.30, 0.40, time)) * 0.85;
+  glow += feederTip;
+  float rootGlow = exp(-length(p - parent) / 0.45) * parentPulse * 0.75 +
+                   exp(-length(p - anvilEntry) / 0.55) * parentPulse * (0.35 + 0.35 * rise);
+  glow += rootGlow;
+  hotCore += rootGlow * 0.30;
+
+  // Four anvil leaders: two per side. The first of each pair is long and the
+  // second is shorter, lower and more easily swallowed by a ragged deck.
+  for (int lane = 0; lane < 4; lane++) {
     float f = float(lane);
-    float side = lane == 0 ? -1.0 : 1.0;
-    float lengthKm = 9.0 + 9.0 * random2d(vec2(seed + f * 1.31, origin.x * 37.0));
-    float drift = (random2d(vec2(seed + f * 7.1, origin.y * 19.0)) - 0.5) * 2.8;
-    float sag = 0.55 + 1.35 * random2d(vec2(seed + f * 5.3, origin.y * 41.0)); // leaders droop as they reach the anvil edge
-    float undPhase = random2d(vec2(seed + f * 3.9, origin.x * 11.0)) * 6.283;
-    float progress = clamp((time - 0.3 - f * 0.12) / 1.25, 0.0, 1.0) * 9.0;
-    prev = root;
-    for (int i = 1; i <= 9; i++) {
+    float side = lane < 2 ? -1.0 : 1.0;
+    float rank = mod(f, 2.0);
+    float laneSeed = seed * 31.0 + float(lane) * 5.17;
+    float lengthKm = (rank < 0.5 ? 13.2 : 8.4) + random2d(vec2(laneSeed, 1.1)) * 4.2;
+    float lift = rank < 0.5 ? -0.46 - random2d(vec2(laneSeed, 2.3)) * 0.34
+                              : 0.62 + random2d(vec2(laneSeed, 2.3)) * 0.48;
+    vec2 root = anvilEntry;
+    float drift = (random2d(vec2(laneSeed, 3.7)) - 0.5) * 2.2;
+    float droop = 0.42 + 0.62 * random2d(vec2(laneSeed, 4.9));
+    float phaseShift = random2d(vec2(laneSeed, 6.1)) * 6.283;
+    float delay = 0.34 + rank * 0.15 + (side > 0.0 ? 0.055 : 0.0);
+    float raw = clamp((time - delay) / 1.16, 0.0, 1.0);
+    const float nodeCount = 11.0;
+    float phaseClock = raw * nodeCount;
+    // Stop-start leader extension: short bursts with brief pauses, exactly the
+    // way a biased stepped leader behaves in a dense hydrometeor deck.
+    float progress = (floor(phaseClock) + smoothstep(0.03, 0.34, fract(phaseClock))) / nodeCount;
+    float headStep = clamp(progress, 0.0, 1.0);
+    float laneGain = rank < 0.5 ? 1.0 : 0.68;
+    // A leader is severed by a clear-air gap. Track the conductive path
+    // upstream-to-downstream: once the actual deck drops out, no later
+    // segment on this chain can re-connect itself to a downstream turret.
+    float leaderLive = 1.0;
+
+    previous = root;
+    for (int i = 1; i <= 11; i++) {
       float k = float(i);
-      float n = random2d(vec2(seed * 11.0 + f * 3.7, k * 17.3 + origin.y));
-      float along = k / 9.0;
-      vec2 next = root + vec2(side * lengthKm * along,
-                              drift * along + 0.42 * sin(along * 4.6 + f * 2.0 + undPhase) * sin(PI * along) +
-                              (n - 0.5) * 0.72 - sag * along * along);
-      float growth = clamp(progress - (k - 1.0), 0.0, 1.0);
-      if (growth > 0.0) {
-        vec2 end = mix(prev, next, growth);
-        // A brighter head travels along the established dimmer channel.
-        float head = 0.65 + 0.35 * (1.0 - smoothstep(0.0, 2.0, progress - k));
-        glow += channelGlow(p, prev, end, mix(0.055, 0.028, along)) * head;
+      float along = k / nodeCount;
+      vec2 next = crawlerLeaderPoint(root, side, lengthKm, along, drift, phaseShift, droop, lift);
+      vec2 nextUV = vec2(origin.x + next.x / (aspectRatios.x * heightKm),
+                         top + next.y / heightKm);
+      float nextCloud = texture(waterTex, clamp(nextUV, vec2(0.0), vec2(1.0)))[CLOUD];
+      leaderLive = min(leaderLive, smoothstep(0.015, 0.085, nextCloud));
+      float growth = clamp((headStep - (k - 1.0) / nodeCount) * nodeCount, 0.0, 1.0);
+      if (growth <= 0.0) {
+        previous = next;
+        continue;
       }
-      // Every second joint fires a main fork plus a short dendritic pair off
-      // the elbow, so the anvil margin branches the way a real one does.
-      if (i >= 2 && i <= 8 && mod(k + f, 2.0) < 0.5) {
-        float branchProgress = clamp(progress - k, 0.0, 2.6);
-        float branchSide = n > 0.5 ? 1.0 : -1.0;
-        float bLen = (1.6 + 2.6 * n) * (1.0 - 0.4 * along);
-        vec2 elbow = next + normalize(vec2(side * 0.88, branchSide * (0.72 + 0.55 * n))) * bLen * 0.55;
-        vec2 tip = elbow + normalize(vec2(side * 0.80, branchSide * (0.42 + 0.42 * (1.0 - n)))) * bLen * 0.55;
-        float first = clamp(branchProgress, 0.0, 1.0);
-        float second = clamp(branchProgress - 1.0, 0.0, 1.0);
-        float pair = clamp(branchProgress - 2.0, 0.0, 1.0);
-        if (first > 0.0)
-          glow += channelGlow(p, next, mix(next, elbow, first), 0.030) * 0.75;
-        if (second > 0.0)
-          glow += channelGlow(p, elbow, mix(elbow, tip, second), 0.021) * 0.55;
-        if (pair > 0.0) {
-          vec2 fingerA = elbow + normalize(vec2(side * 0.52, branchSide * 1.30)) * bLen * 0.34;
-          vec2 fingerB = elbow + normalize(vec2(side * 0.74, -branchSide * 1.12)) * bLen * 0.30;
-          glow += channelGlow(p, elbow, mix(elbow, fingerA, pair), 0.015) * 0.45;
-          glow += channelGlow(p, elbow, mix(elbow, fingerB, pair), 0.015) * 0.45;
+      vec2 end = mix(previous, next, growth);
+      float width = max(max(0.0032, pixelKm * 1.12) * mix(1.42, 0.76, along), 0.0016);
+      float leaderGain = laneGain * (0.72 + 0.28 * (1.0 - along)) * (0.68 + 0.32 * parentPulse) * leaderLive;
+      glow += channelGlow(p, previous, end, width) * leaderGain;
+      glow += channelGlow(p, previous, end, width * 4.0) * leaderGain * 0.13;
+      hotCore += channelGlow(p, previous, end, width * 1.55) * leaderGain * 0.30;
+
+      // Dendritic fingers grow only behind the established front, in upper and
+      // lower pairs, so each burst expands the margin rather than spraying ahead.
+      if (i >= 2 && i <= 8 && mod(k + f, 3.0) < 0.52) {
+        float branchStep = clamp((headStep * nodeCount - k) / 3.1, 0.0, 1.0);
+        if (branchStep > 0.0) {
+          float bRand = random2d(vec2(laneSeed, k * 4.31));
+          for (int branch = 0; branch < 2; branch++) {
+            bool upper = branch == 0;
+            float vertical = upper ? -1.0 : 1.0;
+            float angle = mix(0.46, 0.92, random2d(vec2(laneSeed + bRand, float(branch) + k)));
+            vec2 branchDir = normalize(vec2(side * cos(angle), vertical * sin(angle)));
+            float branchLen = (1.15 + 2.65 * bRand) * (1.0 - along * 0.32);
+            vec2 branchSignal = ccEvalBranch(p, end, branchDir, branchLen * branchStep,
+                                       vertical * (0.22 + 0.30 * bRand),
+                                       laneSeed + k * 1.71 + float(branch) * 7.9,
+                                       max(max(0.0017, pixelKm * 0.70), 0.00085),
+                                       laneGain * (0.58 + 0.22 * parentPulse) * leaderLive);
+            glow += branchSignal.y * 0.92;
+            hotCore += branchSignal.x * 0.52;
+
+            float established = branchLen * branchStep;
+            float joint = branchLen * 0.46;
+            float fingerStep = clamp((established - joint) / max(branchLen * 0.34, 0.032), 0.0, 1.0);
+            if (fingerStep > 0.0) {
+              vec2 fingerBase = end + branchDir * joint;
+              for (int finger = 0; finger < 2; finger++) {
+                bool inward = finger == 0;
+                float fan = angle + (inward ? 0.38 : -0.19);
+                vec2 fingerDir = normalize(vec2(side * cos(clamp(fan, 0.18, 1.32)),
+                                                vertical * sin(clamp(fan, 0.18, 1.32))));
+                vec2 fingerSignal = ccEvalBranch(p, fingerBase, fingerDir,
+                                                 branchLen * (inward ? 0.46 : 0.32) * fingerStep,
+                                                 (inward ? -vertical : vertical) * 0.16,
+                                                 laneSeed + k * 3.7 + float(branch * 2 + finger) * 2.13,
+                                                 max(max(0.0010, pixelKm * 0.48), 0.00062),
+                                                 laneGain * (0.40 + 0.18 * parentPulse) * leaderLive);
+                glow += fingerSignal.y * 0.66;
+                hotCore += fingerSignal.x * 0.38;
+              }
+            }
+          }
         }
       }
-      prev = next;
+      previous = next;
+    }
+
+    // The advancing tip gets its own corona; the established channel is dimmer
+    // until the parent restrikes through it.
+    float tipAlong = clamp(headStep, 0.0, 1.0);
+    if (tipAlong > 0.0 && raw < 1.0 && leaderLive > 0.004) {
+      vec2 tip = crawlerLeaderPoint(root, side, lengthKm, tipAlong, drift, phaseShift, droop, lift);
+      float reach = exp(-length(p - tip) / 0.24) * (1.0 - smoothstep(0.78, 1.0, raw));
+      glow += reach * laneGain * leaderLive * 1.25;
+      hotCore += reach * laneGain * leaderLive * 0.55;
     }
   }
-  float fade = 1.0 - smoothstep(1.6, 2.5, time);
-  float pulse = 0.84 + 0.16 * sin(time * 13.0 + seed * 6.283);
-  return vec3(0.68, 0.78, 1.0) * min(glow * confine, 2.0) * fade * pulse * 2500.0;
+
+  float fade = 1.0 - smoothstep(1.74, 2.42, time);
+  float pulse = 0.84 + 0.16 * sin(time * 14.0 + seed * 6.283);
+  float heat = clamp(hotCore + parentPulse * 0.22, 0.0, 1.0);
+  vec3 crawlerCol = mix(vec3(0.51, 0.63, 1.22), vec3(0.86, 0.90, 1.34), heat);
+  return vec3(crawlerCol) * min(glow * confine * parentPulse, 2.35) * fade * pulse * 2450.0;
 }
 
 // Optical approximations of upper-atmospheric transients at physical altitudes.
@@ -1102,7 +1225,12 @@ vec4 computeAirColor(vec2 bndFragCoord)
     if (iterNum >= lightningStartIterNum && iterNum < lightningSlotEnd(lightningData, lightningMeta) &&
         lightningData[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY && hasOpticalEffect(lightningMeta.w, 1.0)) {
       float opticalTime = (iterNum - lightningStartIterNum) / 40.0;
-      vec3 crawler = drawAnvilCrawler(vec2(lightningMeta.x, lightningData.y), metaRawZ, opticalTime);
+      // Feed the parent IC's restrike envelope into the crawler so its rooted
+      // trunk brightens with the channel that initiated it.
+      float parentLightningTime = (iterNum - lightningStartIterNum) / (metaArt ? 20.0 : 5.0);
+      float parentIntensity = lightningIntensityOverTime(parentLightningTime, lightningData.xy,
+                                                         lightningData[INTENSITY]);
+      vec3 crawler = drawAnvilCrawler(vec2(lightningMeta.x, lightningData.y), metaRawZ, opticalTime, parentIntensity);
       lightningBoltLight += crawler;
       onLight += crawler * 0.0001;
     }

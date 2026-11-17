@@ -76,8 +76,8 @@
 # November 16, 2026:
 - [x] Precipitation tool: paint rain or snow straight into the air, in any air, with droplets that wet the ground (Ctrl erases the painted precipitation field)
 - [x] Artificial Lightning variant picker (12 events: ordinary CG, IC, +IC, -CC, +CC, +CG, superbolt, ground-to-cloud, anvil crawler, blue jet, red sprite, elve) via in-page option list
-- [x] Reworked ground-to-cloud (GC) leader: leaning Bezier spine, fractal displacement, two-level dendritic forks gated on trunk growth
-- [x] Reworked anvil crawler: tortuous dendritic fingers with counter-diverging pairs; confined to the cloud interior with only a ~1-2 km leak at the edge
+- [x] Rebuilt the ground-to-cloud (GC) leader as a stop-start stepped positive upward leader with advancing tip flare, conical two-generation forks and a descending hot return stroke
+- [x] Rebuilt the anvil crawler as a rooted parent-IC-to-anvil-front: connected feeder tendrils, four left/right stop-start leader chains with upper/lower dendrites, parent restrike flicker, upstream cloud-gap severing and a ~1-2 km edge fringe
 
 # In Progress
 

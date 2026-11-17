@@ -39,13 +39,16 @@ check('slot pass and sound readback run for super rods even with precipitation d
   /hasSuperLightningRods && iterNum % 60 === 0/.test(app) &&
   /enablePrecipitation \|\| hasSuperLightningRods \|\| iterNum <= manualLightningActiveUntil/.test(app) &&
   /Math\.abs\(metaType - 5\.0\) < 0\.25[\s\S]{0,180}soundSystem\.soundThunder/.test(app));
-check('upward GC is distinct from CC, renders as a rising forked leader from the actual tip, and lights its rod',
+check('upward GC is distinct from CC, renders as a rising stepped leader from the actual tip, and lights its rod',
   /bool isGroundToCloud = abs\(lightningMeta\.y - 5\.0\) < 0\.25/.test(display) &&
   /isCloudToCloud = !isFlash && lightningMeta\.y >= 1\.5 && !isGroundToCloud/.test(display) &&
   /displayGroundToCloud\(lightningPos, metaRawZ, lightningTime, currentLightningIntensity\)/.test(display) &&
-  /vec2 q0 = vec2\(0\.0\);[\s\S]{0,200}vec2 q2 = vec2\(lean, span\)/.test(display) &&
-  /float forkGrowth = clamp\(\(headKm - fRootT \* trunkLen\)/.test(display) &&
-  /ccEvalBranch\(p, fRoot, forkDir, forkLen/.test(display) &&
+  /float gcLeaderClock\(float time\)/.test(display) &&
+  /float returnClock = clamp\(\(time - 0\.78\) \/ 0\.25, 0\.0, 1\.0\)/.test(display) &&
+  /vec2 gcSpinePoint\(float t, float span, float lean, float phase\)/.test(display) &&
+  /float branchKm = max\(headT - tRoot, 0\.0\) \* trunkLen/.test(display) &&
+  /ccEvalBranch\(p, root, forkDir, branchLen \* branchGrowth/.test(display) &&
+  /vec2 fingerDir = normalize\(vec2\(fingerSide \* sin\(fan\)/.test(display) &&
   /isUpwardStrike \? \(iterNum - strikeData\[START_ITERNUM\]\) \/ 40\.0/.test(display));
 check('upward slot lifetime and display time use matching scaling without changing manual CG',
   /abs\(meta\.y - 5\.0\) < 0\.25\)\s*\n\s*end = strike\[START_ITERNUM\] \+ \(end - strike\[START_ITERNUM\]\) \* 8\.0/.test(common) &&
