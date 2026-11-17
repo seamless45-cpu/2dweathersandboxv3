@@ -78,6 +78,7 @@
 - [x] Artificial Lightning variant picker (12 events: ordinary CG, IC, +IC, -CC, +CC, +CG, superbolt, ground-to-cloud, anvil crawler, blue jet, red sprite, elve) via in-page option list
 - [x] Rebuilt the ground-to-cloud (GC) leader as a stop-start stepped positive upward leader with advancing tip flare, conical two-generation forks and a descending hot return stroke
 - [x] Rebuilt the anvil crawler as a rooted parent-IC-to-anvil-front: connected feeder tendrils, four left/right stop-start leader chains with upper/lower dendrites, parent restrike flicker, upstream cloud-gap severing and a ~1-2 km edge fringe
+- [x] Made the lightning channels realistic: the CG bolt artwork is now midpoint-displacement fractal (broad arcs, knees at every scale, sparse fading forks), the IC network fades along each strand with a white-hot kernel, and every procedural channel (GC spine, CC bridge, external +CG, crawler lanes) uses smooth fractal gradient noise instead of triangle-wave knees
 
 # In Progress
 
