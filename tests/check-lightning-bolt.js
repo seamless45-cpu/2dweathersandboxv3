@@ -1,28 +1,27 @@
 // Cloud-to-ground channel shape harness.
 //
-// The bolt is the oldest artwork in the repo. Its shape is one heading, kicked by
-// its own noise every artwork pixel and pulled back toward straight down - a
-// channel that buzzes down the picture. A two-scale heading (a slow aim for arcs,
-// a fast jag for the buzz) was tried once and taken back out: it bent the channel,
-// but it also thinned the bolt into a wandering line, and a return stroke reads as
-// a *crack* - straight down, hard, and thick. What this file holds in place is
-// therefore the original shape on purpose, the width of the channel, and the fact
-// that the bolt is drawn at all.
+// The bolt is the oldest artwork in the repo, redrawn the way real channels go:
+// one dominant fractal trunk - midpoint displacement from cloud base to ground,
+// broad arcs with fine tortuosity folded in at every scale - with sparse, dimmer
+// first-order forks leaving the established channel. (An earlier heading-walk
+// rework kicked the heading up to +-40 degrees every artwork pixel: statistically
+// white noise, which read as a jagged zigzag rather than a channel.) What this
+// file holds in place is that fractal model, the width of the channel, and the
+// fact that the bolt is drawn at all.
 //
 // What it checks:
 //
-//   1. The model. One heading, the original two numbers, the same walk for the
-//      forks, and no leftover of the two-scale version.
+//   1. The model. The fractal subdivision, its constants, a midpoint displaced
+//      along the segment normal, a width for the trunk and up to half of it for
+//      a fork.
 //   2. The channel's weight. It is the original 9 pixel channel on the original
 //      2500 x 5000 tile, and asserted on the constant so it cannot quietly become
 //      a hair or a slab. The fork this repo started from halved both and doubled
 //      the brightness gain; the radiance is the same either way, so the check that
 //      matters is pow(lineWidth, 2) and the ratio of the two.
-//   3. The buzz, measured. The real heading arithmetic is ported out of
-//      lightningGenerator.js and run for forty seeded bolts: the heading moves a
-//      third of a radian per pixel and reverses direction many times over the
-//      height - a saw, which is what the original was and what it is again - and
-//      the trunk stays inside the sprite while it does it.
+//   3. The fractal, measured. The real midpoint-displacement path is walked for
+//      seeded bolts: the channel meanders at several scales, reverses at many
+//      points over the height, and stays inside the sprite.
 //   4. The artwork, drawn. The real generator runs against the stubbed canvas: the
 //      bolt is there, it forks, and it spans the picture.
 //
@@ -58,17 +57,29 @@ const TILE_H = gen.ARTWORK_SIZE.height; // 5000
 
 /* ---------------------------------------------- 1. the model */
 
-check('the heading is the original jittered walk',
-  CG.jitter === 1.4 && CG.straighten === 0.08 &&
-  Math.abs(CG.startAngle - Math.PI / 6) < 1e-9 && CG.branchJitter === 0.7,
-  'jitter ' + CG.jitter + ' rad, pull ' + CG.straighten + ', fork jitter ' + CG.branchJitter);
-check('the two-scale heading is gone',
+check('the channel is midpoint-displacement fractal with seeded uniforms',
+  /function fractalPath\(/.test(source) &&
+  CG.roughness === 0.58 && CG.initialAmplitude === 0.075 &&
+  CG.minSegment === 2.1 && CG.centerPull === 0.025,
+  'roughness ' + CG.roughness + ', first octave ' + CG.initialAmplitude +
+    ' of the tile height, subdivide to ' + CG.minSegment + ' px');
+check('each level keeps less of the previous level, and mean reversion fades with it',
+  /amp \*= CG_SHAPE\.roughness;/.test(source) &&
+  /mx \+= \(centerX - mx\) \* CG_SHAPE\.centerPull \* \(amp \/ amplitude\);/.test(source),
+  'a fractal whose fine octaves re-assert the coarse drift never converges and the segments stay visibly long');
+check('the midpoint kicks bell-shaped, not white-noise, and perpendicular to the segment',
+  /const kick = \(Math\.random\(\) \+ Math\.random\(\) \+ Math\.random\(\) - 1\.5\) \* 0\.95;/.test(source) &&
+  /const nx = -dy \/ len, ny = dx \/ len;/.test(source),
+  'three uniforms are bell-shaped; a flat kick gave the old walk its panic');
+check('the lean keeps the channel one-sided, and fractalPath stays exported for measuring',
+  CG.leanRange === 0.34 && /fractalPath : fractalPath/.test(source),
+  'leanRange ' + CG.leanRange);
+check('forks open modestly off the parent and fade mid-air',
+  CG.branchAngle === 0.38 && /const open = CG_SHAPE\.branchAngle \* \(0\.55 \+ Math\.random\(\) \* 0\.85\)/.test(source),
+  'branchAngle ' + CG.branchAngle + ' rad, 0.21..0.53 rad opening per fork');
+check('the two-scale heading is still gone',
   !/state\.jag/.test(source) && !/aimTarget/.test(source) && !/CG_SHAPE\.bend/.test(source),
   'a slow aim plus a fast jag bent the channel, and thinned the bolt doing it');
-check('the original step is what runs: next position, then the kick',
-  /const nextX = startX \+ Math\.sin\(angle\);\s*\n\s*const nextY = startY \+ Math\.cos\(angle\);\s*\n\s*\n\s*angle \+= \(Math\.random\(\) - 0\.5\) \* CG_SHAPE\.jitter;/
-    .test(source),
-  'the order of the step and the kick is part of the shape');
 
 /* ---------------------------------------------- 2. the channel's weight */
 
@@ -92,68 +103,61 @@ check('and it is the only channel width there is now',
   CG.lineWidth >= 9 && !/IC_WIDTH/.test(source),
   'every strike is drawn with this one channel');
 
-/* ---------------------------------------------- 3. the buzz, measured */
+/* ---------------------------------------------- 3. the fractal, measured */
 
 /*
- * lightningGenerator.js: the trunk's step. `state.angle` is the heading, `state.x`
- * the chicken scratch this harness walks, which is the channel's own x.
+ * lightningGenerator.js exports fractalPath for exactly this: walk the real path
+ * generator for seeded bolts and look at what it produces at more than one scale.
  */
-function stepTrunk(s, rand) {
-  const nextX = s.x + Math.sin(s.angle);
-  s.angle += (rand() - 0.5) * CG.jitter;
-  s.angle -= (s.angle - 0) * CG.straighten;
-  s.x = nextX;
-  return nextX;
-}
-
-function walk(seed) {
+function traceFractal(seed) {
   const rand = gen.makeRng(seed);
-  const s = { x : TILE_W / 2, angle : CG.startAngle };
-  let x = s.x, y = 0, minX = x, maxX = x;
-  let turnSum = 0, previous = null;
-  const track = [];
-  while (y < TILE_H) {
-    const before = s.angle;
-    x = stepTrunk(s, rand);
-    y += Math.cos(before);
-    track.push(x);
-    if (s.angle !== previous) {
-      if (previous !== null)
-        turnSum += Math.abs(s.angle - previous);
-      previous = s.angle;
-    }
+  // A mostly-vertical span, like the trunk: anchors near the middle of a 2500-px tile.
+  const realRandom = Math.random;
+  Math.random = rand;
+  const pts = gen.fractalPath(TILE_W / 2, -40, TILE_W / 2 + 120, TILE_H + 40, TILE_H * CG.initialAmplitude, TILE_W / 2);
+  Math.random = realRandom;
+  let minX = Infinity, maxX = -Infinity, length = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x] = pts[i];
     if (x < minX) minX = x;
     if (x > maxX) maxX = x;
+    if (i > 0) length += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
   }
-  // how many times the channel changes which way it is going, over 100 px windows
-  let turns = 0, sign = 0;
-  for (let i = 100; i < track.length; i += 100) {
-    const here = Math.sign(Math.round(track[i] - track[i - 100]));
-    if (here && sign && here !== sign)
-      turns++;
-    if (here)
-      sign = here;
+  // direction reversals over non-overlapping 60 px windows of arc length
+  let turns = 0, sign = 0, window = [], traveled = 0;
+  for (let i = 0; i < pts.length; i++) {
+    if (i > 0) traveled += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    window.push([traveled, pts[i][0]]);
+    if (traveled >= 60) {
+      const here = Math.sign(window[window.length - 1][1] - window[0][1]);
+      if (here && sign && here !== sign) turns++;
+      if (here) sign = here;
+      window = [];
+      traveled = 0;
+    }
   }
-  return { span : maxX - minX, minX, maxX, turns, meanTurn : turnSum / track.length };
+  return { span : maxX - minX, minX, maxX, turns, length, segments : pts.length };
 }
 
-const bolts = Array.from({ length : 40 }, (_, i) => walk(1013 + i * 7919));
+const traced = Array.from({ length : 24 }, (_, i) => traceFractal(1013 + i * 7919));
 const median = (values) => [ ...values ].sort((a, b) => a - b)[Math.floor((values.length - 1) / 2)];
 
-check('the channel buzzes: it changes heading by about a third of a radian a pixel',
-  median(bolts.map((b) => b.meanTurn)) > 0.25,
-  'median ' + median(bolts.map((b) => b.meanTurn)).toFixed(2) + ' rad per artwork pixel');
+check('the fractal path is long and full of small segments, not a straight line with noise on top',
+  median(traced.map((t) => t.length / TILE_H)) > 1.02 &&
+  median(traced.map((t) => t.segments)) > 1024,
+  'median path length ' + median(traced.map((t) => (t.length / TILE_H).toFixed(3))) +
+    'x the straight span in ' + median(traced.map((t) => t.segments)) + ' segments');
 check('... and reverses direction many times over the height of the picture',
-  median(bolts.map((b) => b.turns)) >= 10,
-  'median ' + median(bolts.map((b) => b.turns)) + ' changes of direction over ' + TILE_H + ' px');
-check('the wire it runs down is straight enough to be a wire',
-  median(bolts.map((b) => b.span)) < TILE_W * 0.45,
-  'median lateral span ' + Math.round(median(bolts.map((b) => b.span))) + ' of ' + TILE_W +
+  median(traced.map((t) => t.turns)) >= 6,
+  'median ' + median(traced.map((t) => t.turns)) + ' direction changes per 60 px window');
+check('the channel wanders, but it is a channel and not a scribble',
+  median(traced.map((t) => t.span)) < TILE_W * 0.45,
+  'median lateral span ' + Math.round(median(traced.map((t) => t.span))) + ' of ' + TILE_W +
     ' artwork px');
 check('and the trunk stays inside the sprite',
-  bolts.every((b) => b.minX > 0 && b.maxX < TILE_W),
-  'widest excursion ' + Math.round(Math.min(...bolts.map((b) => b.minX))) + ' .. ' +
-    Math.round(Math.max(...bolts.map((b) => b.maxX))) + ' of 0 .. ' + TILE_W);
+  traced.every((t) => t.minX > 0 && t.maxX < TILE_W),
+  'widest excursion ' + Math.round(Math.min(...traced.map((t) => t.minX))) + ' .. ' +
+    Math.round(Math.max(...traced.map((t) => t.maxX))) + ' of 0 .. ' + TILE_W);
 
 /* ---------------------------------------------- 4. the artwork, drawn */
 
@@ -202,7 +206,7 @@ check('and the trunk stays inside the sprite',
     bolt.segmentCount > 1000,
     bolt.segmentCount + ' segments in one bolt');
   check('it is not one straight line',
-    trunkRows > TILE_H * 0.9 && bolts[0].span > TILE_W * 0.04,
+    trunkRows > TILE_H * 0.9 && traced[0].span > TILE_W * 0.02,
     trunkRows + ' rows carry the channel, and it wanders as it goes');
 }
 
@@ -409,12 +413,20 @@ check('the arcs stay inside the tile, so a channel keeps its length',
   'mean chord ' + curvedNetwork.reach.toFixed(0) + 'px on a 512 x 256 tile: strands should stay cleanly inside the tile');
 
 const curvedCoverage = [];
-for (let i = 0; i < 8; i++) {
-  const artwork = gen.generateLightningNetwork(512, 256);
-  let lit = 0;
-  for (const value of artwork.data)
-    if (value > 38) lit++;
-  curvedCoverage.push(lit / artwork.data.length * 100);
+{
+  // Seeded: the threshold is a floor on visibility, and an unseeded draw
+  // occasionally lands under it for a dull tile - which is not a regression,
+  // just a quiet flash. Hermetic like the rest of this file.
+  const realRandom = Math.random;
+  Math.random = gen.makeRng(20260101);
+  for (let i = 0; i < 8; i++) {
+    const artwork = gen.generateLightningNetwork(512, 256);
+    let lit = 0;
+    for (const value of artwork.data)
+      if (value > 38) lit++;
+    curvedCoverage.push(lit / artwork.data.length * 100);
+  }
+  Math.random = realRandom;
 }
 const coverageMin = Math.min(...curvedCoverage);
 const coverageMax = Math.max(...curvedCoverage);

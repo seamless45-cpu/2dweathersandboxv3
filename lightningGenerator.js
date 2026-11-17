@@ -2,15 +2,14 @@
  * lightningGenerator.js — procedural lightning artwork, generated off the main
  * thread and transferred as an ImageBitmap.
  *
- * There is one kind of artwork: a cloud-to-ground bolt. One dominant channel
- * grows downward with the classic dendritic forks, drawn the way the original app
- * drew it - one heading, step, kick, pull back toward vertical, and a 9 pixel
- * channel on a 2500 x 5000 tile (see CG_SHAPE and ARTWORK_SIZE).
+ * There is one kind of artwork: a cloud-to-ground bolt. One dominant fractal
+ * channel grows downward with dendritic forks - midpoint displacement, not a
+ * one-pixel heading walk - and a 9 pixel trunk on a 2500 x 5000 tile (see
+ * CG_SHAPE and ARTWORK_SIZE).
  *
- * Every strike uses it. Intra-cloud flashes used to be a separate network of
- * hair-thin filaments, drawn from eight artwork tiles through their own additive
- * light pass; they are drawn with this bolt now, at this bright, and the filament
- * artwork is gone with the pass that used it (see realisticDisplayShader.frag).
+ * CG strikes draw it. Intra-cloud flashes draw the second shape further down -
+ * the curved-leader network in IC_SHAPE (see displayFlash in
+ * realisticDisplayShader.frag) - not the bolt rotated.
  *
  * Protocol:
  *   worker.postMessage({width, height})                  -> bolt artwork
@@ -89,41 +88,95 @@ function makeRng(seed) {
 /* ===================== cloud-to-ground bolt ============================== */
 
 /*
- * The shape of a cloud-to-ground channel: the original one, unchanged.
+ * The shape of a cloud-to-ground channel: a fractal, not a one-pixel walk.
  *
- * One heading, turned every step by its own noise (`(rand - 0.5) * 1.4`, up to
- * +-40 degrees a pixel) and pulled back toward straight down by 8% a step. The
- * result is a channel that buzzes down the picture: high-frequency kinks with no
- * long arc to them, which is what makes it read as a return stroke rather than as
- * a filament.
+ * A real return stroke is broad sweeping arcs with fine tortuosity folded into
+ * them, which is what midpoint displacement produces: anchor two ends of the
+ * channel, displace the midpoint perpendicular to the segment, and subdivide
+ * until the segments are about two artwork pixels long. Each level keeps
+ * `roughness` of the previous level's displacement, so the path carries energy
+ * at every scale - long arcs, knees, and the hair-fine kinks a stepped leader
+ * shows when it attaches. A gentle mean reversion toward the vertical axis
+ * keeps the fractal from ever walking out of the sprite.
  *
- * This is the artwork the app shipped with, and it is where it stays: the shapes
- * and widths tried on top of it (a two-scale heading, a hair-thin channel) were
- * taken back out when the look was restored. The numbers are the original ones -
- * 9 artwork pixels for the trunk, half of that at most for a fork, and a fork that
- * sheds a fifth of a pixel every time it narrows - and they are named here only so
- * tests/check-lightning-bolt.js can hold them.
+ * This replaces a walk that kicked the heading by up to +-40 degrees every
+ * single artwork pixel: statistically white-noise, so the channel buzzed down
+ * the picture with no arc to it at any scale - which is what read as "jagged".
  *
- * The tile is the original one too: 2500 by 5000. This repo's fork of the app had
- * halved both the tile and the channel (1250 x 2500, 4.5 pixels) and doubled the
- * brightness gain to compensate, which keeps the relative width but throws away
- * half the texels - the channel is softer and breaks up sooner when the camera
- * pulls back. The radiance is unchanged by the rescale: pow(lineWidth, 2) is 81
- * for the trunk either way.
+ * Forks leave the trunk at 25..52 degrees off vertical (the original opening of
+ * roughly this range) with the same displacement at a smaller scale, taper as
+ * they run, and either fade into the air or run to the ground and fork again.
  *
- * Numbers are in artwork pixels per step; a step is one pixel.
+ * The tile is the original one: 2500 by 5000. The fork this repo started from
+ * halved both and doubled the brightness gain (1250 x 2500 at 4.5 px); that
+ * keeps the relative width but loses half the texels, so the channel is
+ * softer and breaks up sooner when the camera pulls back. The radiance is
+ * unchanged by the rescale: pow(lineWidth, 2) is 81 for the trunk either way.
+ *
+ * Numbers are fractions of the tile (displacement) or artwork pixels (width).
  */
 const ARTWORK_SIZE = { width : 2500, height : 5000 }; // the original tile, in pixels
 
 const CG_SHAPE = {
   startAngle : Math.PI / 6., // the channel leaves the cloud leaning
-  jitter : 1.4,              // the kick it takes every step, rad
-  straighten : 0.08,         // ... and the pull back toward straight down
-  branchJitter : 0.7,        // the same, for a fork
+  leanRange : 0.34,          // overall end drift, as a fraction of tile height at most
+  roughness : 0.58,          // fraction of the previous level's displacement kept per subdivision
+  initialAmplitude : 0.075,  // first displaced octave, fraction of tile height
+  minSegment : 2.1,          // subdivision stops once segments are this small, in artwork pixels
+  centerPull : 0.025,        // mean reversion toward the vertical axis, per level
+  branchAngle : 0.38,        // base fork opening off the parent channel, rad (scaled per fork)
+  branchAmplitude : 0.10,    // a fork's first octave, fraction of its own span
   lineWidth : 9.0,           // artwork pixels - the original trunk width
   branchWidthRatio : 0.5,    // the original fork width: up to half the trunk
   taper : 0.2                // artwork pixels a fork sheds each time it narrows
 };
+
+/*
+ * Midpoint displacement between two anchors. Returns the full polyline.
+ * `amplitude` is the first level's displacement; it is scaled by
+ * `roughness` at every level, and each level also pulls every new point a
+ * little back toward `centerX` so the fractal stays inside the sprite.
+ * Uses Math.random() throughout: the test harness seeds Math.random to make
+ * a stable artwork, and so can any caller.
+ */
+function fractalPath(x0, y0, x1, y1, amplitude, centerX)
+{
+  let points = [[x0, y0], [x1, y1]];
+  let amp = amplitude;
+  for (let level = 0; level < 14; level++) {
+    let maxLen = 0;
+    for (let i = 0; i + 1 < points.length; i++) {
+      const dx = points[i + 1][0] - points[i][0];
+      const dy = points[i + 1][1] - points[i][1];
+      const len = Math.hypot(dx, dy);
+      if (len > maxLen) maxLen = len;
+    }
+    if (maxLen <= CG_SHAPE.minSegment)
+      break;
+    const next = new Array(points.length * 2 - 1);
+    next[0] = points[0];
+    let w = 1;
+    for (let i = 0; i + 1 < points.length; i++) {
+      const a = points[i], b = points[i + 1];
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len, ny = dx / len;
+      // Gaussian-ish kick: the sum of three uniforms is bell-shaped, which
+      // gives the channel its mix of long quiet reaches and hard kicks.
+      const kick = (Math.random() + Math.random() + Math.random() - 1.5) * 0.95;
+      let mx = (a[0] + b[0]) * 0.5 + nx * kick * amp;
+      let my = (a[1] + b[1]) * 0.5 + ny * kick * amp;
+      // Mean reversion belongs to the coarse octaves: scale it by the level's
+      // share of the first-octave amplitude, or deep levels never converge.
+      mx += (centerX - mx) * CG_SHAPE.centerPull * (amp / amplitude);
+      next[w++] = [mx, my];
+      next[w++] = b;
+    }
+    points = next;
+    amp *= CG_SHAPE.roughness;
+  }
+  return points;
+}
 
 function generateLightningBolt(width, height)
 {
@@ -135,6 +188,8 @@ function generateLightningBolt(width, height)
   const ctx = lightningCanvas.getContext('2d', {willReadFrequently : true});
 
   ctx.clearRect(0, 0, width, height);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
 
 
   function genLightningColor(lineWidth)
@@ -146,93 +201,110 @@ function generateLightningBolt(width, height)
     return `rgb(${colR * brightness}, ${colG * brightness}, ${colB * brightness})`;
   }
 
-
-  ctx.beginPath();
-
-  let startX = width / 2.0;
-  let startY = 0;
-  let angle = CG_SHAPE.startAngle;
-  let lineWidth = CG_SHAPE.lineWidth;
-  const targetAngle = 0.0;
-
-  ctx.moveTo(startX, startY);
-
-  ctx.lineWidth = lineWidth;
-
-  while (startY < height) {
-
-    const nextX = startX + Math.sin(angle);
-    const nextY = startY + Math.cos(angle);
-
-    angle += (Math.random() - 0.5) * CG_SHAPE.jitter;
-    angle -= (angle - targetAngle) * CG_SHAPE.straighten; // keep it going in a general direction
-
-    ctx.lineTo(nextX, nextY);
-
-    startX = nextX;
-    startY = nextY;
-
-
-    if (Math.random() < 0.015 * (1. - nextY / height)) { // branch
-      ctx.strokeStyle = genLightningColor(lineWidth);
-      ctx.stroke();
-      drawBranch(nextX, nextY, targetAngle + (Math.random() - 0.5) * 2.5, lineWidth * CG_SHAPE.branchWidthRatio * Math.random());
-      ctx.beginPath();
-      ctx.moveTo(nextX, nextY); // move back to last position after drawing branch
-      ctx.lineWidth = lineWidth;
-    }
-  }
-  ctx.strokeStyle = genLightningColor(lineWidth);
-  ctx.stroke();
-
-
-  return readRedChannel(ctx, width, height);
-
-
-  function drawBranch(startX, startY, targetAngle, line_width)
+  function tracePoints(points)
   {
-    let angle = targetAngle;
-
     ctx.beginPath();
-    ctx.moveTo(startX, startY);
-    ctx.lineWidth = line_width;
+    ctx.moveTo(points[0][0], points[0][1]);
+    for (let i = 1; i < points.length; i++)
+      ctx.lineTo(points[i][0], points[i][1]);
+  }
 
-    while (startY < height) {
+  const tileW = width;
+  const startX = width / 2.0;
+  const startY = -30.0;
+  // A return stroke is not a plumb line: the anchor at ground wanders a fifth or
+  // so of the tile sideways of the cloud base, and the whole channel arcs after
+  // it. The lean keeps one dominant direction (no symmetric fuzzball) while the
+  // fractal supplies the tortuosity.
+  const leanDirection = Math.random() < 0.78 ? 1. : -1.;
+  const lean = leanDirection * Math.tan(CG_SHAPE.startAngle) * height *
+               (0.08 + Math.random() * CG_SHAPE.leanRange);
+  const endX = startX + lean;
 
-      const nextX = startX + Math.sin(angle);
-      const nextY = startY + Math.cos(angle);
+  const trunk = fractalPath(startX, startY, endX, height + 40.0,
+                            height * CG_SHAPE.initialAmplitude, startX);
 
-      angle += (Math.random() - 0.5) * CG_SHAPE.branchJitter;
+  // Forks leave the established channel, mostly in its upper half, with the
+  // same fractal character at a smaller scale.
+  const trunkColor = genLightningColor(CG_SHAPE.lineWidth);
 
-      angle -= (angle - targetAngle) * CG_SHAPE.straighten; // keep it going in a general direction
+  function drawBranch(bx, by, parentAngle, lineWidth, depth)
+  {
+    const remaining = height - by;
+    if (remaining < 60 || lineWidth < 0.4 || depth > 2)
+      return;
+    // A fork often dies in the air; one that runs long reaches the deck below.
+    const span = remaining * (0.22 + Math.random() * 0.35);
+    const side = Math.random() < 0.5 ? -1. : 1.;
+    const open = CG_SHAPE.branchAngle * (0.55 + Math.random() * 0.85); // forks open 0.21..0.53 rad
+    let tipX = bx + Math.sin(side * open + parentAngle * 0.55) * span;
+    tipX = Math.max(tileW * 0.035, Math.min(tileW * 0.965, tipX));
+    const tipY = by + Math.cos(side * open * 0.72) * span;
 
-      ctx.lineTo(nextX, nextY);
+    const pts = fractalPath(bx, by, tipX, tipY,
+                            span * CG_SHAPE.branchAmplitude, bx + side * span * 0.5);
 
-      startX = nextX;
-      startY = nextY;
-
-      if (Math.random() < 0.018) { // reduce width
-
-        ctx.strokeStyle = genLightningColor(line_width);
+    // Stroke the parent fork in tapering chunks, occasionally leaving its own
+    // daughter behind at a chunk boundary (depth-limited).
+    let width = lineWidth;
+    let acc = 0;
+    let runStart = 0;
+    const shedLength = 55 + Math.random() * 35;
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i][0] - pts[i - 1][0];
+      const dy = pts[i][1] - pts[i - 1][1];
+      acc += Math.hypot(dx, dy);
+      if (acc >= shedLength || i === pts.length - 1) {
+        ctx.beginPath();
+        ctx.moveTo(pts[runStart][0], pts[runStart][1]);
+        for (let k = runStart + 1; k <= i; k++)
+          ctx.lineTo(pts[k][0], pts[k][1]);
+        ctx.lineWidth = Math.max(width, 0.28);
+        ctx.strokeStyle = genLightningColor(width);
         ctx.stroke();
-        line_width -= CG_SHAPE.taper;
 
-        if (line_width < 0.1)
-          return;
-
-        if (Math.random() < 0.1) { // branch 0.005
-
-          drawBranch(nextX, nextY, targetAngle + (Math.random() - 0.5) * 1.5, line_width);
+        if (depth < 2 && Math.random() < 0.16 && width > 1.1) {
+          const forkAngle = Math.atan2(pts[i][0] - pts[runStart][0], pts[i][1] - pts[runStart][1]);
+          drawBranch(pts[i][0], pts[i][1], forkAngle,
+                     Math.max(0.35, width * 0.62), depth + 1);
         }
 
-        ctx.beginPath();
-        ctx.moveTo(nextX, nextY); // move back to last position after drawing branch
-        ctx.lineWidth = line_width;
+        if (width <= 0.38)
+          return;
+        width = Math.max(0.28, width - CG_SHAPE.taper);
+        runStart = i;
+        acc = 0;
       }
     }
-    ctx.strokeStyle = genLightningColor(line_width);
-    ctx.stroke();
   }
+
+  // The branches first, then the trunk over them, so the trunk's hot core
+  // always wins where they overlap (the stub canvas uses 'lighten' semantics
+  // per stroke order only within one stroke; source-over would dim, so the
+  // trunk is drawn last with its full-gain colour).
+  for (let i = 0; i < trunk.length; i++) {
+    const [tx, ty] = trunk[i];
+    const yFrac = Math.max(0, Math.min(1, ty / height));
+    // Fork density falls off with depth: leaders branch hardest near cloud base.
+    const chance = 0.0045 * (1.50 - yFrac * 1.30);
+    if (Math.random() < chance) {
+      const chord = 12; // ~25-30 artwork px of chord: the local tangent, minus the fine zigzag
+      const next = trunk[Math.min(i + chord, trunk.length - 1)];
+      const prev = trunk[Math.max(i - chord, 0)];
+      const parentAngle = Math.atan2(next[0] - prev[0], next[1] - prev[1]);
+      const entry = CG_SHAPE.lineWidth * CG_SHAPE.branchWidthRatio *
+                     (0.35 + Math.random() * 0.50);
+      if (entry >= 0.5)
+        drawBranch(tx, ty, parentAngle, entry, 0);
+    }
+  }
+
+  tracePoints(trunk);
+  ctx.lineWidth = CG_SHAPE.lineWidth;
+  ctx.strokeStyle = trunkColor;
+  ctx.stroke();
+
+  return readRedChannel(ctx, width, height);
 }
 
 
@@ -368,9 +440,13 @@ function generateLightningNetwork(width, height)
 
   const clamp = (v, lo, hi) => (v < lo ? lo : (v > hi ? hi : v));
 
-  function genNetworkColor(level)
+  function genNetworkColor(level, falloff)
   {
-    const v = Math.round(255 * IC_LEVELS[Math.min(level, IC_LEVELS.length - 1)]);
+    // A leader burns brightest at the strike point and fades along its own
+    // length - the stub of a real IC flash is a white-hot kernel with dim,
+    // branch-starved tips, not a uniform-tone comb.
+    const scale = falloff === undefined ? 1.0 : falloff;
+    const v = Math.round(255 * IC_LEVELS[Math.min(level, IC_LEVELS.length - 1)] * scale);
     return `rgb(${v}, ${v}, ${v})`;
   }
 
@@ -378,50 +454,75 @@ function generateLightningNetwork(width, height)
   const startY = height * 0.5;
   const heightAspect = height / width;
 
+  // Brightness along one strand: full at the root, about a quarter at the tip.
+  const falloffAt = (t) => 0.50 + 0.50 * Math.pow(1.0 - Math.min(Math.max(t, 0.0), 1.0), 0.85);
+
   /*
    * One curved strand: opens cleanly along its outward axis, sweeps along a broad
    * C-arc or S-bend with electrical crackle, and forks into finer curved tendrils.
+   * `inherited` is how much light the parent handed down - a fork that leaves a
+   * dim mother channel cannot be brighter than its parent at that point.
    */
-  function drawStrand(sx, sy, axis, curveSign, steps, lineWidth, level)
+  function drawStrand(sx, sy, axis, curveSign, steps, lineWidth, level, inherited)
   {
+    if (inherited === undefined)
+      inherited = 1.0;
     let x = sx, y = sy;
     const strand = makeIcStrand(axis, curveSign, steps, Math.random);
 
+    const strokeRun = (uptoX, uptoY, t) => {
+      ctx.lineTo(uptoX, uptoY);
+      ctx.strokeStyle = genNetworkColor(level, inherited * falloffAt(t));
+      ctx.lineWidth = lineWidth;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(uptoX, uptoY);
+    };
+
     ctx.beginPath();
     ctx.moveTo(x, y);
-    ctx.strokeStyle = genNetworkColor(level);
-    ctx.lineWidth = lineWidth;
+    let acc = 0;
 
     for (let i = 0; i < steps; i++) {
       const angle = icHeadingStep(strand, Math.random, x / width, y / height, heightAspect);
 
       const nextX = x + Math.cos(angle) * IC_SHAPE.stepLength;
       const nextY = y + Math.sin(angle) * IC_SHAPE.stepLength;
+      const t = (i + 1) / steps;
 
       if (nextX < 2. || nextX > width - 2. || nextY < 2. || nextY > height - 2.) {
-        ctx.lineTo(clamp(nextX, 2., width - 2.), clamp(nextY, 2., height - 2.));
-        break;
+        strokeRun(clamp(nextX, 2., width - 2.), clamp(nextY, 2., height - 2.), t);
+        return;
       }
 
       x = nextX;
       y = nextY;
       ctx.lineTo(x, y);
+      acc += IC_SHAPE.stepLength;
+
+      if (acc >= 26.0) {
+        strokeRun(x, y, t);
+        acc = 0;
+      }
 
       if (level < IC_SHAPE.maxLevel && i > 6 && Math.random() < IC_SHAPE.forkChance) {
-        ctx.stroke(); // commit the parent so far
-
+        // Commit the run so far, then the fork inherits our current brightness.
+        if (acc > 0) {
+          strokeRun(x, y, t);
+          acc = 0;
+        }
         const side = Math.random() < 0.5 ? -1. : 1.;
         const forkAxis = strand.angle + side * (0.45 + Math.random() * 0.45);
         drawStrand(x, y, forkAxis, side,
                    Math.max(16, Math.round(steps * (0.42 + Math.random() * 0.35))),
-                   Math.max(IC_SHAPE.minWidth, lineWidth * IC_SHAPE.branchRatio), level + 1);
-
+                   Math.max(IC_SHAPE.minWidth, lineWidth * IC_SHAPE.branchRatio), level + 1,
+                   inherited * falloffAt(t));
         ctx.beginPath();
         ctx.moveTo(x, y);
-        ctx.strokeStyle = genNetworkColor(level);
-        ctx.lineWidth = lineWidth;
       }
     }
+    ctx.lineWidth = lineWidth;
+    ctx.strokeStyle = genNetworkColor(level, inherited * falloffAt(1.0));
     ctx.stroke();
   }
 
@@ -439,6 +540,13 @@ function generateLightningNetwork(width, height)
     drawStrand(startX, startY, axis, curveSign, steps, lineWidth, i === 0 ? 0 : 1);
   }
 
+  // White-hot kernel at the strike point where the leaders leave. The stub
+  // canvas treats this as a junction spark: one disc of full-gain light.
+  ctx.beginPath();
+  ctx.arc(startX, startY, 3.4, 0.0, Math.PI * 2.0);
+  ctx.fillStyle = 'rgb(255, 255, 255)';
+  ctx.fill();
+
   return readRedChannel(ctx, width, height);
 }
 
@@ -446,6 +554,7 @@ function generateLightningNetwork(width, height)
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     makeRng : makeRng,
+    fractalPath : fractalPath,
     generateLightningBolt : generateLightningBolt,
     generateLightningNetwork : generateLightningNetwork,
     makeIcStrand : makeIcStrand,
