@@ -1,9 +1,11 @@
 // Verification harness for the Real Time Cycle toggle (Sun & Radiation folder)
 // and the Motion Blur toggle + strength slider (Performance folder).
 //
-// Real Time Cycle (2026-11-18): the day/night cycle advances at real-world
-// speed instead of being coupled to simulation iterations; Accelerate Night
-// no longer applies while it is on.
+// Real Time Cycle (2026-11-18): the simulation clock is synchronized to the
+// user's wall clock (full date and time), so the sun tracks the real sun for
+// the chosen latitude year-round - including the seasonal declination.
+// Accelerate Night no longer applies while it is on, and the sun position is
+// derived from the real date, not from accumulated simulation iterations.
 //
 // Motion Blur (2026-11-18): a long-exposure feedback path in the post
 // pass - the previous frame, cross-blurred, is mixed back in. Strength is
@@ -38,7 +40,7 @@ function check(name, condition, detail) {
 /* ----------------------------------------------------------- gui defaults */
 
 check('guiControls defaults: realTimeCycle off, motion blur off at 100 strength',
-  /realTimeCycle : false, \/\/ advance the sun cycle/.test(appSource) &&
+  /realTimeCycle : false, \/\/ sync the sun to the user's wall clock/.test(appSource) &&
   /motionBlurEnabled : false,/.test(appSource) &&
   /motionBlurIntensity : 100, \/\/ 0-350 \(%\);/.test(appSource));
 
@@ -51,17 +53,23 @@ check('old saves load cleanly: new booleans normalized and strength clamped to 0
 check('Radiation folder adds the Real Time Cycle toggle after Day/Night Cycle',
   /radiation_folder\.add\(guiControls, 'dayNightCycle'\)\.onChange\(updateClockDisplay\)\.name\('Day\/Night Cycle'\)\.listen\(\);\s*\n\s*\n\s*radiation_folder\.add\(guiControls, 'realTimeCycle'\)\s*\n\s*\.onChange\(function\(\) \{\s*\n\s*lastRealTimeCycleFrameMs = -1;\s*\n\s*updateClockDisplay\(\);\s*\n\s*\}\)\s*\n\s*\.name\('Real Time Cycle'\)\s*\n\s*\.listen\(\);/.test(appSource));
 
-check('the frame loop advances the sun by real elapsed milliseconds, not simulation iterations',
-  /\} else if \(guiControls\.realTimeCycle\) \{\s*\n\s*const nowMs = performance\.now\(\);/.test(appSource) &&
-  /const elapsedHours = lastRealTimeCycleFrameMs >= 0 \? \(nowMs - lastRealTimeCycleFrameMs\) \/ 3600000\.0 : 0\.0;/.test(appSource) &&
-  /lastRealTimeCycleFrameMs = nowMs;\s*\n\s*updateSunlight\(elapsedHours\);/.test(appSource));
+check('the frame loop syncs the simulation clock to the real wall clock (date and time)',
+  /\} else if \(guiControls\.realTimeCycle\) \{\s*\n\s*const nowMs = Date\.now\(\);/.test(appSource) &&
+  /const elapsedMs = lastRealTimeCycleFrameMs >= 0 \? nowMs - lastRealTimeCycleFrameMs : 0\.0;/.test(appSource) &&
+  /lastRealTimeCycleFrameMs = nowMs;\s*\n\s*simDateTime = new Date\(nowMs\);/.test(appSource) &&
+  /simElapsedMilliseconds \+= elapsedMs;\s*\n\s*updateSunlight\(0\);/.test(appSource) &&
+  /guiControls\.month = Math\.min\(guiControls\.month, 12\.99\);/.test(appSource));
 
 check('Accelerate Night is bypassed while Real Time Cycle is on, and the frame clock is reset on manual/legacy paths',
   /let nightAccelerationActive = !airplaneMode && guiControls\.dayNightCycle && guiControls\.accelerateNight && !guiControls\.realTimeCycle &&/.test(appSource) &&
   /lastRealTimeCycleFrameMs = -1;\s*\n\s*updateSunlight\(timePerIteration/.test(appSource));
 
-check('one real minute advances the sun by one sun minute (3600x slower than a 60x-accelerated cycle)',
-  Math.abs((60000 / 3600000.0) - (1 / 60)) < 1e-12);
+check('the synced clock drives the sun through updateSunlight(0) - no iteration-based advance leaks in',
+  (() => {
+    const branch = appSource.slice(appSource.indexOf('} else if (guiControls.realTimeCycle)'));
+    const body = branch.slice(0, branch.indexOf('} else {'));
+    return !/updateSunlight\(timePerIteration|updateSunlight\(elapsedHours|timePerIteration \* guiControls\.IterPerFrame/.test(body);
+  })());
 
 /* -------------------------------------------------------------- motion blur */
 

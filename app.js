@@ -556,7 +556,7 @@ const guiControls_default = {
   sunAngle : 9.9,
   dayNightCycle : true,
   accelerateNight : true,
-  realTimeCycle : false, // advance the sun cycle at real-world speed (1 real second = 1 sun second)
+  realTimeCycle : false, // sync the sun to the user's wall clock (date and time of day)
   greenhouseGases : 0.0010,
   waterGreenHouseEffect : 0.0023,
   IR_rate : 1.0,
@@ -8584,10 +8584,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           if (airplaneMode) {
             updateSunlight(1.0 / 3600.0 / 60);                                                                    // increase solar time at real speed: 1/60 seconds per frame
           } else if (guiControls.realTimeCycle) {
-            const nowMs = performance.now();                                                                      // advance at real-world speed: 1 ms real time = 1 ms sun time
-            const elapsedHours = lastRealTimeCycleFrameMs >= 0 ? (nowMs - lastRealTimeCycleFrameMs) / 3600000.0 : 0.0;
+            const nowMs = Date.now(); // wall-clock sync: the sim sun tracks the user's real clock and date
+            const elapsedMs = lastRealTimeCycleFrameMs >= 0 ? nowMs - lastRealTimeCycleFrameMs : 0.0;
             lastRealTimeCycleFrameMs = nowMs;
-            updateSunlight(elapsedHours);
+            simDateTime = new Date(nowMs); // full date+time sync, so the seasonal tilt matches too
+            simElapsedMilliseconds += elapsedMs;
+            updateSunlight(0);             // recompute the angle from the synced simDateTime without advancing it
+            guiControls.month = Math.min(guiControls.month, 12.99); // keep the month slider in range on Dec 31
           } else {
             lastRealTimeCycleFrameMs = -1;
             updateSunlight(timePerIteration * guiControls.IterPerFrame * (nightAccelerationActive ? 10.0 : 1.0)); // increase solar time
