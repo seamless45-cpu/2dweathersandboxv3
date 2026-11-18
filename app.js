@@ -756,6 +756,7 @@ let hdrFBO;
 let temporalHistoryTexture;
 let temporalHistoryValid = false;
 let motionBlurHistoryValid = false;
+let motionBlurPreviousView = null;
 let temporalPreviousView = null;
 let temporalPreviousDisplayMode = null;
 let capeColumnFBO;
@@ -6924,8 +6925,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.48'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.48')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.49'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.49')
   ]);
 
   const [
@@ -7875,7 +7876,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.48');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.49');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9095,7 +9096,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     if (!guiControls.temporalAAEnabled || postProcessingViewChanged) {
       temporalHistoryValid = false;
     }
-    if (!guiControls.motionBlurEnabled || postProcessingViewChanged) {
+    // Motion blur reprojects its history through the view delta, so a camera
+    // change no longer forces invalidation; it only needs a scene match, which
+    // setup mode and display-mode switches break.
+    const motionBlurViewChanged = SETUP_MODE || temporalPreviousDisplayMode != guiControls.displayMode || !motionBlurPreviousView;
+    if (!guiControls.motionBlurEnabled || motionBlurViewChanged) {
       motionBlurHistoryValid = false;
     }
     temporalPreviousView = currentTemporalView;
@@ -9339,6 +9344,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'motionBlurHistoryValid'), motionBlurHistoryValid);
       gl.uniform1f(getUniformLoc(postProcessingProgram, 'motionBlurStrength'), guiControls.motionBlurIntensity);
       gl.uniform2f(getUniformLoc(postProcessingProgram, 'outputTexelSize'), 1.0 / canvas.width, 1.0 / canvas.height);
+      gl.uniform3f(getUniformLoc(postProcessingProgram, 'motionBlurView'), renderViewX, renderViewY, cam.curZoom);
+      const mbPrev = motionBlurPreviousView || [renderViewX, renderViewY, cam.curZoom];
+      gl.uniform3f(getUniformLoc(postProcessingProgram, 'motionBlurPrevView'), mbPrev[0], mbPrev[1], mbPrev[2]);
+      gl.uniform2f(getUniformLoc(postProcessingProgram, 'motionBlurAspects'), sim_aspect, canvas_aspect);
 
       if (SETUP_MODE) {
         gl.uniform1f(getUniformLoc(postProcessingProgram, 'exposure'), 50.0);
@@ -9358,9 +9367,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, canvas.width, canvas.height);
         temporalHistoryValid = guiControls.temporalAAEnabled;
         motionBlurHistoryValid = guiControls.motionBlurEnabled;
+        motionBlurPreviousView = [renderViewX, renderViewY, cam.curZoom];
       } else {
         temporalHistoryValid = false;
         motionBlurHistoryValid = false;
+        motionBlurPreviousView = null;
       }
 
       gl.bindVertexArray(fluidVao);
@@ -10005,7 +10016,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.48');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.49');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

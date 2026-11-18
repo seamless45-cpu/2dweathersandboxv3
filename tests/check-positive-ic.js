@@ -82,7 +82,7 @@ check('lightningLocationShader.frag encodes +IC as meta.y = 4.0 while keeping in
 check('realisticDisplayShader.frag defines displayPositiveFlash() with +50% brightness, warm polarity, and wider anvil spread',
   /vec3 displayPositiveFlash\(/.test(displayShader) &&
   /bool isPositiveIC = isFlash && lightningMeta\.y >= 3\.5;/.test(displayShader) &&
-  /const float flashHeight = 0\.095;/.test(displayShader) &&
+  /float flashHeight = 0\.095 \* lightningHeightScale\(\);/.test(displayShader) &&
   /const float mainBoltBrightness = 10500\.;/.test(displayShader) &&
   /const vec3 positiveIcCol = vec3\(1\.0, 0\.88, 0\.80\);/.test(displayShader) &&
   /if \(isPositiveIC\)\s*\n\s*lightningOnLight \*= 1\.5;/.test(displayShader),
@@ -90,7 +90,7 @@ check('realisticDisplayShader.frag defines displayPositiveFlash() with +50% brig
 
 check('realisticDisplayShader.frag preserves normal -IC displayFlash() path untouched',
   /vec3 displayFlash\(vec2 pos, float lightningTime, float currentLightningIntensity\)/.test(displayShader) &&
-  /const float flashHeight = 0\.075;/.test(displayShader) &&
+  /float flashHeight = 0\.075 \* lightningHeightScale\(\);/.test(displayShader) &&
   /const float mainBoltBrightness = 7000\.;/.test(displayShader),
   '-IC flashes must retain original geometry and violet-blue intensity');
 
