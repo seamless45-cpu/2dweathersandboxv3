@@ -42,6 +42,7 @@ void main()
     case WALLTYPE_LAND:
       fragmentColor = vec4(vec3(0.10), 1.);
       break;
+    case WALLTYPE_SUPER_LAKE: // super lake: shows the water temperature like a lake
     case WALLTYPE_WATER:
       int palletteIndex = int(map_range(KtoC(base[3]), -26. - 2., 30., 0., 29.));
       palletteIndex = clamp(palletteIndex, 0, 29);

@@ -19,6 +19,7 @@ out vec4 fragmentColor;
 #define DISTANCE 1
 #define WALLTYPE_INERT 0
 #define WALLTYPE_WATER 2
+#define WALLTYPE_SUPER_LAKE 7
 
 #include "commonDisplay.glsl"
 
@@ -39,7 +40,9 @@ void main()
   ivec4 wall = texelFetch(wallTex, cellPos, 0);
 
   if (wall[DISTANCE] == 0) {
-    if (wall[TYPE] == WALLTYPE_WATER)
+    if (wall[TYPE] == WALLTYPE_SUPER_LAKE)
+      fragmentColor = vec4(0.01, 0.09, 0.22, 1.0); // super lake: deeper water
+    else if (wall[TYPE] == WALLTYPE_WATER)
       fragmentColor = vec4(0.03, 0.20, 0.38, 1.0);
     else if (wall[TYPE] == WALLTYPE_INERT)
       fragmentColor = vec4(0.0, 0.0, 0.0, 1.0);

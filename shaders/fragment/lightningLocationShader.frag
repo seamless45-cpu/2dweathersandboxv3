@@ -300,7 +300,7 @@ vec3 selectCloudToCloudTarget(vec2 originPos, float iter)
 void main()
 {
   int slot = int(gl_FragCoord.x); // pixel centres land on 0.5, 1.5, ... -> slots 0..LIGHTNING_SLOTS-1
-  int row = int(gl_FragCoord.y);  // row 0: (groundOrTargetX, originY, iter, intensity); row 1: meta (originX, type, targetY, superbolt flag)
+  int row = int(gl_FragCoord.y);  // row 0: (groundOrTargetX, originY, iter, intensity); row 1: meta (originX, type, targetY, strike class: 0 ordinary, 1 superbolt, 2 hyperbolt)
   vec4 previous = texelFetch(lightningDataTex, ivec2(slot, row), 0);
 
   // A precipitation particle writes a new strike into pixel (1, 0) of the
@@ -416,7 +416,7 @@ void main()
         artData = attractToRod(artData);
       } else if (variant > 5.5 && variant < 6.5) {  // superbolt
         artData[INTENSITY] = 5.0;
-        artMeta = vec4(originX, 1.0, -1.0, 1.0); // integer meta.w = superbolt flag
+        artMeta = vec4(originX, 1.0, -1.0, 1.0); // integer meta.w = 1 superbolt, 2 hyperbolt
         artData = attractToRod(artData);
       } else if (variant > 6.5 && variant < 7.5) {  // ground-to-cloud (upward leader)
         artData = vec4(originX, max(incoming.y, artificialStrikeTipY + 0.05), iterNum, 2.2);
@@ -436,6 +436,10 @@ void main()
       } else if (variant > 10.5 && variant < 11.5) { // elve (energetic CG + elve effect)
         artData[INTENSITY] = 3.5;
         artMeta = vec4(originX, 0.0, -1.0, 8.0 / 32.0);
+        artData = attractToRod(artData);
+      } else if (variant > 11.5 && variant < 12.5) { // hyperbolt (720,000 K positive CG)
+        artData[INTENSITY] = 5.0;
+        artMeta = vec4(originX, 1.0, -1.0, 2.0); // integer meta.w = 2 hyperbolt flag
         artData = attractToRod(artData);
       } else {                                      // ordinary cloud-to-ground (default)
         artData = attractToRod(artData);
@@ -459,6 +463,10 @@ void main()
         // ordinary external CG; if even 5.5 km cannot fit, use the normal branch.
         bool isSuperboltExt = externalRangeFits(originX, 9000.0) &&
           random2d(vec2(originX * 89.3 + incoming.y * 47.1, iterNum * 1.13)) < 0.072;
+        // A hyperbolt is the same eligibility with the dice halved again:
+        // half as rare as an ordinary superbolt (0.072 * 0.5 = 0.036).
+        bool isHyperboltExt = isSuperboltExt &&
+          random2d(vec2(originX * 97.7 + incoming.y * 53.3, iterNum * 1.29)) < 0.5;
         float minRangeMeters = isSuperboltExt ? 9000.0 : 5500.0;
         float maxRangeMeters = isSuperboltExt ? 37000.0 : 34000.0;
         vec4 extStrike = incoming;
@@ -467,7 +475,7 @@ void main()
         extStrike[INTENSITY] = clamp(4.6 + (incoming[INTENSITY] - 0.75) * 0.25, 4.6, 5.4);
         // Filter rods before picking the nearest so an invalid rod cannot hide a valid one.
         extStrike = attractToRodWithinRange(extStrike, originX, minRangeMeters, maxRangeMeters);
-        result = (row == 0) ? extStrike : vec4(originX, 1.0, 0.0, isSuperboltExt ? 1.0 : 0.0);
+        result = (row == 0) ? extStrike : vec4(originX, 1.0, 0.0, isHyperboltExt ? 2.0 : (isSuperboltExt ? 1.0 : 0.0));
       } else {
         bool cgTriggerNearRod = incoming[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY &&
                                 hasNearbyLightningRod(originX, incoming[INTENSITY]);
@@ -506,7 +514,7 @@ void main()
       }
 
       // Fractional bits of meta.w carry independent optical effects, leaving its
-      // integer bit for existing superbolts. Probabilities are per eligible stored
+      // integer bits for existing superbolts and hyperbolts. Probabilities are per eligible stored
       // lightning event (not per frame or per simulation cell). Artificial strikes
       // picked in the variant list already carry exactly the optical bits their
       // variant promises, and their meta.z holds either the artificial sentinel or

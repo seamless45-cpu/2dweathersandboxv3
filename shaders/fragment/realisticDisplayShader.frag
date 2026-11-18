@@ -676,9 +676,10 @@ vec3 spectral_zucconi(float w)
 }
 
 
-// meta.w keeps superbolt in its integer part and four exactly representable
-// fractional bits for optical effects. Existing superbolt consumers still see
-// >= 0.5 only for the integer flag.
+// meta.w keeps the strike class in its integer part and four exactly representable
+// fractional bits for optical effects. 1 = superbolt, 2 = hyperbolt (a hyperbolt is
+// also superbolt-class, so any consumer that only checks >= 0.5 sees both).
+// Existing superbolt consumers still see >= 0.5 only for the integer flag.
 bool hasOpticalEffect(float flags, float bit)
 {
   return mod(floor(fract(flags) * 32.0 + 0.5) / bit, 2.0) >= 1.0;
@@ -1269,16 +1270,27 @@ vec4 computeAirColor(vec2 bndFragCoord)
     bool isCloudToCloud = !isFlash && lightningMeta.y >= 1.5 && !isGroundToCloud;
     bool isPositiveCC = isCloudToCloud && lightningMeta.y >= 2.5;
     bool isSuperbolt = isExternalPositive && lightningMeta.w >= 0.5;
+    bool isHyperbolt = isExternalPositive && lightningMeta.w >= 1.5;
     const float superboltBrightnessMult = 12.0;
     const float superboltDurationShorten = 0.1;
+    const float hyperboltBrightnessMult = 30.0; // 2.5x a superbolt
+    const float hyperboltDurationShorten = 2.624; // 2.924 - 0.3: a 0.3 second lifetime
     // Approximate 52,000 K Planckian emitter in linear sRGB, normalized to blue.
     const vec3 superboltColor = vec3(0.332, 0.469, 1.0);
+    // Approximate 720,000 K Planckian emitter in linear sRGB, normalized to blue, for a
+    // nominal 80 terrawatts / 120 gigaamps discharge - both figures are fiction, kept here
+    // for the record and not modelled. At this temperature the spectrum sits deep in the
+    // Rayleigh-Jeans tail (B ~ 1/lambda^4), noticeably bluer and more saturated than the
+    // 52,000 K superbolt.
+    const vec3 hyperboltColor = vec3(0.25, 0.38, 1.0);
+    float strokeBrightnessMult = isHyperbolt ? hyperboltBrightnessMult : superboltBrightnessMult;
+    float strokeDurationShorten = isHyperbolt ? hyperboltDurationShorten : superboltDurationShorten;
     const vec3 positiveLightningCol = vec3(1.0, 0.90, 0.82);
     float repeatPeriod = map_range(random2d(lightningPos), 0., 1., 1.5, 3.0);
-    if (isSuperbolt && lightningTime >= repeatPeriod * lightningFlickers(lightningData) + (2.924 - superboltDurationShorten))
+    if (isSuperbolt && lightningTime >= repeatPeriod * lightningFlickers(lightningData) + (2.924 - strokeDurationShorten))
       continue;
     float effectiveLightningTime = isSuperbolt && lightningTime > 0.0
-      ? lightningTime + superboltDurationShorten * smoothstep(0.0, 0.35, lightningTime)
+      ? lightningTime + strokeDurationShorten * smoothstep(0.0, 0.35, lightningTime)
       : lightningTime;
     if (isSuperbolt) {
       currentLightningIntensity = lightningIntensityOverTime(effectiveLightningTime, lightningPos, lightningData[INTENSITY]);
@@ -1297,9 +1309,9 @@ vec4 computeAirColor(vec2 bndFragCoord)
     } else if (isExternalPositive) {
       vec3 prevBoltLight = lightningBoltLight;
       lightningBoltLight += displayExternalLightning(lightningPos, lightningMeta.x, effectiveLightningTime, extCurve,
-                                                     isSuperbolt ? superboltColor : positiveLightningCol);
+                                                     isHyperbolt ? hyperboltColor : (isSuperbolt ? superboltColor : positiveLightningCol));
       if (isSuperbolt)
-        lightningBoltLight = prevBoltLight + (lightningBoltLight - prevBoltLight) * superboltBrightnessMult;
+        lightningBoltLight = prevBoltLight + (lightningBoltLight - prevBoltLight) * strokeBrightnessMult;
     } else if (isCloudToCloud) {
       lightningBoltLight += displayCloudToCloudLightning(vec2(lightningPos.x, metaRawZ),
                                                          vec2(lightningMeta.x, lightningPos.y),
@@ -1349,14 +1361,14 @@ vec4 computeAirColor(vec2 bndFragCoord)
       lightningOnLight *= extIntensityGain * extTailFade;
     lightningOnLight *= currentLightningIntensity;
     if (isSuperbolt)
-      lightningOnLight *= superboltBrightnessMult;
-    vec3 lightningIlluminationTint = isSuperbolt ? superboltColor : vec3(1.0);
+      lightningOnLight *= strokeBrightnessMult;
+    vec3 lightningIlluminationTint = isHyperbolt ? hyperboltColor : (isSuperbolt ? superboltColor : vec3(1.0));
     onLight += lightningIlluminationTint * lightningOnLight;
     if (isExternalPositive) {
       onLight += lightningIlluminationTint * lightningOnLight;
       float originDx = lightningMeta.x - texCoord.x;
       vec2 originDist = vec2(originDx * aspectRatios[0], texCoord.y - lightningPos.y);
-      onLight += lightningIlluminationTint * (lightningOnLightBrightness * 2.0 / (pow(length(originDist) * 0.7, 2.) + 0.03) * extCurve * (isSuperbolt ? superboltBrightnessMult : 1.0));
+      onLight += lightningIlluminationTint * (lightningOnLightBrightness * 2.0 / (pow(length(originDist) * 0.7, 2.) + 0.03) * extCurve * (isSuperbolt ? strokeBrightnessMult : 1.0));
     }
   }
 
@@ -1470,6 +1482,7 @@ void main()
       color = getWallColor(depth);
 
       break;
+    case WALLTYPE_SUPER_LAKE: // super lake: same sea, noticeably deeper water color
     case WALLTYPE_WATER:
 
       // Precomputed values (tweak to taste)
@@ -1505,7 +1518,7 @@ void main()
         opacity = airColor.a;
         color = airColor.rgb;
       } else {
-        color = vec3(0, 0.5, 1.0); // water
+        color = wall[TYPE] == WALLTYPE_SUPER_LAKE ? vec3(0.0, 0.13, 0.34) : vec3(0, 0.5, 1.0); // water; super lake runs a much deeper blue
       }
 
       // draw 45° slopes under water
@@ -1514,7 +1527,7 @@ void main()
       float localY = fract(fragCoord.y);
       ivec4 wallX0Ym = texture(wallTex, texCoordX0Ym);
 
-      if (wallXmY0[DISTANCE] == 0 && wallXmY0[TYPE] != WALLTYPE_WATER && (fragCoord.y < 1. || wallX0Ym[TYPE] != WALLTYPE_WATER)) { // wall to the left and below
+      if (wallXmY0[DISTANCE] == 0 && wallXmY0[TYPE] != WALLTYPE_WATER && wallXmY0[TYPE] != WALLTYPE_SUPER_LAKE && (fragCoord.y < 1. || (wallX0Ym[TYPE] != WALLTYPE_WATER && wallX0Ym[TYPE] != WALLTYPE_SUPER_LAKE))) { // wall to the left and below
         if (localX + localY < 1.0) {
           opacity = 1.0;
           water = texture(waterTex, texCoord);
@@ -1524,7 +1537,7 @@ void main()
           terrainOcclusion = 1.0;
         }
       }
-      if (wallXpY0[DISTANCE] == 0 && wallXpY0[TYPE] != WALLTYPE_WATER && (fragCoord.y < 1. || wallX0Ym[TYPE] != WALLTYPE_WATER)) { // wall to the right and below
+      if (wallXpY0[DISTANCE] == 0 && wallXpY0[TYPE] != WALLTYPE_WATER && wallXpY0[TYPE] != WALLTYPE_SUPER_LAKE && (fragCoord.y < 1. || (wallX0Ym[TYPE] != WALLTYPE_WATER && wallX0Ym[TYPE] != WALLTYPE_SUPER_LAKE))) { // wall to the right and below
         if (localY - localX < 0.0) {
           opacity = 1.0;
           water = texture(waterTex, texCoord);
@@ -1688,7 +1701,7 @@ void main()
         ivec4 wallXmY0 = texture(wallTex, texCoordXmY0);
         ivec4 wallXpY0 = texture(wallTex, texCoordXpY0);
 
-        if (wallXmY0[DISTANCE] == 0 && wall[TYPE] != WALLTYPE_WATER) { // wall to the left and below
+        if (wallXmY0[DISTANCE] == 0 && wall[TYPE] != WALLTYPE_WATER && wall[TYPE] != WALLTYPE_SUPER_LAKE) { // wall to the left and below
           if (localX + localY < 1.0) {
             opacity = 1.0;
             water = texture(waterTex, texCoordX0Ym);
@@ -1698,7 +1711,7 @@ void main()
             terrainOcclusion = 1.0;
           }
         }
-        if (wallXpY0[DISTANCE] == 0 && wall[TYPE] != WALLTYPE_WATER) { // wall to the right and below
+        if (wallXpY0[DISTANCE] == 0 && wall[TYPE] != WALLTYPE_WATER && wall[TYPE] != WALLTYPE_SUPER_LAKE) { // wall to the right and below
           if (localY - localX < 0.0) {
             opacity = 1.0;
             water = texture(waterTex, texCoordX0Ym);
@@ -1768,12 +1781,16 @@ void main()
         : artificialMeta(strikeMeta.z) ? (iterNum - strikeData[START_ITERNUM]) / 20.0 : calcLightningTime(strikeData[START_ITERNUM]);
       float slotGlow = lightningIntensityOverTime(rodStrikeT, strikeData.xy, strikeData[INTENSITY]);
       if (strikeData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY && abs(strikeMeta.y - 1.0) < 0.25 && strikeMeta.w >= 0.5) {
+        bool rodStrikeIsHyperbolt = strikeMeta.w >= 1.5;
+        float rodEndWindow = rodStrikeIsHyperbolt ? 0.3 : 2.824;
+        float rodDurationShorten = rodStrikeIsHyperbolt ? 2.624 : 0.1;
+        float rodBrightnessMult = rodStrikeIsHyperbolt ? 30.0 : 12.0;
         float rodRepeatPeriod = map_range(random2d(strikeData.xy), 0., 1., 1.5, 3.0);
-        if (rodStrikeT >= rodRepeatPeriod * lightningFlickers(strikeData) + 2.824)
+        if (rodStrikeT >= rodRepeatPeriod * lightningFlickers(strikeData) + rodEndWindow)
           slotGlow = 0.0;
         else
-          slotGlow = lightningIntensityOverTime(rodStrikeT > 0.0 ? rodStrikeT + 0.1 * smoothstep(0.0, 0.35, rodStrikeT) : 0.0,
-                                                strikeData.xy, strikeData[INTENSITY]) * 12.0;
+          slotGlow = lightningIntensityOverTime(rodStrikeT > 0.0 ? rodStrikeT + rodDurationShorten * smoothstep(0.0, 0.35, rodStrikeT) : 0.0,
+                                                strikeData.xy, strikeData[INTENSITY]) * rodBrightnessMult;
       }
       strikeGlow = max(strikeGlow, slotGlow);
     }

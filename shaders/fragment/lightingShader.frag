@@ -103,6 +103,7 @@ void main()
           IR_up = IR_emitted(realTemp);                          // Ir emmited upwards from surface. emissivity of surface = 1.0 for simplicity
           net_heating += (IR_down - IR_up) * lightHeatingConst;
           break;
+        case WALLTYPE_SUPER_LAKE: // super lake: same IR surface behaviour as a lake
         case WALLTYPE_WATER:
           float waterTemperature = texture(baseTex, texCoordX0Ym)[TEMPERATURE]; // sample water temperature below
           IR_up = IR_emitted(waterTemperature);                                 // emissivity = 1.0
@@ -159,7 +160,7 @@ void main()
       light = vec4(sunlight, net_heating, IR_down, IR_up);
       // light = vec4(1, 0, 0, 0);
     } else {                                    // is wall
-      if (wall[TYPE] == WALLTYPE_WATER)         // water
+      if (wall[TYPE] == WALLTYPE_WATER || wall[TYPE] == WALLTYPE_SUPER_LAKE) // water
         light = vec4(sunlight * 0.90, 0, 0, 0); // light absorbed by water
       else {                                    // land
 

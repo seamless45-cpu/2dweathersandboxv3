@@ -115,7 +115,7 @@ check('realisticDisplayShader.frag reuses fetched field state in computeAirColor
 check('only external positive CG can receive the 7.2% superbolt flag',
   /bool isSuperboltExt = externalRangeFits\(originX, 9000\.0\) &&/.test(locationShader) &&
   /random2d\(vec2\(originX \* 89\.3 \+ incoming\.y \* 47\.1, iterNum \* 1\.13\)\) < 0\.072/.test(locationShader) &&
-  /vec4\(originX, 1\.0, 0\.0, isSuperboltExt \? 1\.0 : 0\.0\)/.test(locationShader) &&
+  /vec4\(originX, 1\.0, 0\.0, isHyperboltExt \? 2\.0 : \(isSuperboltExt \? 1\.0 : 0\.0\)\)/.test(locationShader) &&
   /vec4\(originX, 0\.0, 0\.0, 0\.0\)/.test(locationShader) &&
   !/isSuperboltCG/.test(locationShader));
 
@@ -125,15 +125,17 @@ check('superbolts are blue 52000 K external strikes, 12x brighter and 0.1s short
   /const float superboltDurationShorten = 0\.1;/.test(displayShader) &&
   /const vec3 superboltColor = vec3\(0\.332, 0\.469, 1\.0\);/.test(displayShader) &&
   /isSuperbolt \? superboltColor : positiveLightningCol/.test(displayShader) &&
-  /vec3 lightningIlluminationTint = isSuperbolt \? superboltColor : vec3\(1\.0\)/.test(displayShader) &&
-  /lightningTime >= repeatPeriod \* lightningFlickers\(lightningData\) \+ \(2\.924 - superboltDurationShorten\)/.test(displayShader) &&
-  /if \(isSuperbolt\)\s*\n\s*lightningOnLight \*= superboltBrightnessMult;/.test(displayShader));
+  /vec3 lightningIlluminationTint = isHyperbolt \? hyperboltColor : \(isSuperbolt \? superboltColor : vec3\(1\.0\)\)/.test(displayShader) &&
+  /lightningTime >= repeatPeriod \* lightningFlickers\(lightningData\) \+ \(2\.924 - strokeDurationShorten\)/.test(displayShader) &&
+  /if \(isSuperbolt\)\s*\n\s*lightningOnLight \*= strokeBrightnessMult;/.test(displayShader));
 
-check('app.js implements 40 Hz decaying random-axis camera shake triggered only by superbolts (even when sound is off)',
+check('app.js implements 40 Hz decaying random-axis camera shake triggered by superbolts and hyperbolts (even when sound is off)',
   /const SUPERBOLT_SHAKE_HZ = 40\.0;/.test(appSource) &&
   appSource.indexOf('let superboltShakeStartTimeMs = -1;') < appSource.indexOf('async function setupTextures()') &&
   /const superboltCheckDue = lightningReadbackTick;/.test(appSource) &&
-  /if \(lightningDataValues\[metaOffset \+ 3\] >= 0\.5\)/.test(appSource) &&
+  /const strikeClass = lightningDataValues\[metaOffset \+ 3\];/.test(appSource) &&
+  /if \(strikeClass >= 1\.5\) \{/.test(appSource) &&
+  /\} else if \(strikeClass >= 0\.5\) \{/.test(appSource) &&
   /Math\.exp\(-SUPERBOLT_SHAKE_DECAY_PER_SEC \* elapsedSec\)/.test(appSource) &&
   /Math\.sin\(2\.0 \* Math\.PI \* phaseCycles\)/.test(appSource) &&
   /Math\.cos\(angle\)/.test(appSource) &&

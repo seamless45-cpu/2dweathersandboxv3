@@ -556,6 +556,7 @@ const guiControls_default = {
   sunAngle : 9.9,
   dayNightCycle : true,
   accelerateNight : true,
+  realTimeCycle : false, // advance the sun cycle at real-world speed (1 real second = 1 sun second)
   greenhouseGases : 0.0010,
   waterGreenHouseEffect : 0.0023,
   IR_rate : 1.0,
@@ -588,6 +589,8 @@ const guiControls_default = {
   fxaaEnabled : false,
   volumetricCloudLighting : true,
   temporalAAEnabled : false,
+  motionBlurEnabled : false,
+  motionBlurIntensity : 100, // 0-350 (%); 100 = subtle trails, 350 = long-exposure smear
   superSharpDetail : false,
   fullscreenMode : false,
   showWeatherStations : true,
@@ -604,8 +607,8 @@ const guiControls_default = {
 // Artificial lightning variants: what the Artificial Lightning tool queues.
 // The slot pass translates the key picked in the in-page option list into the
 // numeric selector the slot-manager shader dispatches on. Ground-striking
-// variants (positive CG, superbolt, red sprite, elve, ordinary CG) obey rod
-// capture exactly like natural strikes; the rest keep their formation.
+// variants (positive CG, superbolt, hyperbolt, red sprite, elve, ordinary CG)
+// obey rod capture exactly like natural strikes; the rest keep their formation.
 const artificialVariantOptions = {
   'Ordinary Cloud-to-Ground' : 'ordinary_cg',
   'Intra-cloud Flash' : 'intra_cloud',
@@ -618,7 +621,8 @@ const artificialVariantOptions = {
   'Anvil Crawler' : 'anvil_crawler',
   'Blue Jet' : 'blue_jet',
   'Red Sprite' : 'red_sprite',
-  'Elve' : 'elve'
+  'Elve' : 'elve',
+  'Hyperbolt' : 'hyperbolt'
 };
 const artificialVariantUniforms = {
   ordinary_cg: 0,
@@ -628,6 +632,7 @@ const artificialVariantUniforms = {
   cc_positive: 4,
   positive_cg: 5,
   superbolt: 6,
+  hyperbolt: 12,
   ground_to_cloud: 7,
   anvil_crawler: 8,
   blue_jet: 9,
@@ -750,6 +755,7 @@ const NUM_DROPLETS_DEVIDER = 25; // 25
 let hdrFBO;
 let temporalHistoryTexture;
 let temporalHistoryValid = false;
+let motionBlurHistoryValid = false;
 let temporalPreviousView = null;
 let temporalPreviousDisplayMode = null;
 let capeColumnFBO;
@@ -4982,8 +4988,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     bloomRenderScale = renderQualityScales[guiControls.bloomQuality];
     if (!['Extreme', 'Quality', 'Balanced', 'Performance', 'Custom'].includes(guiControls.performancePreset))
       guiControls.performancePreset = 'Balanced';
-    for (const setting of ['filmicToneMapping', 'fxaaEnabled', 'volumetricCloudLighting', 'temporalAAEnabled', 'superSharpDetail'])
+    for (const setting of ['filmicToneMapping', 'fxaaEnabled', 'volumetricCloudLighting', 'temporalAAEnabled', 'superSharpDetail', 'realTimeCycle', 'motionBlurEnabled'])
       guiControls[setting] = guiControls[setting] === true;
+    guiControls.motionBlurIntensity = clamp(Number(guiControls.motionBlurIntensity) || 0, 0, 350);
     guiControls.fullscreenMode = isDocumentFullscreen();
     if (!['Unlocked', '30', '60', '90', '120', '144', '165', '240'].includes(guiControls.autoFpsTarget))
       guiControls.autoFpsTarget = '120';
@@ -5100,6 +5107,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         'Water Vapor / Cloud' : 'TOOL_WATER',
         'Land' : 'TOOL_WALL_LAND',
         'Lake / Sea' : 'TOOL_WALL_SEA',
+        'Super Lake' : 'TOOL_SUPER_LAKE',
         'Urban' : 'TOOL_WALL_URBAN',
         'Runway' : 'TOOL_WALL_RUNWAY',
         'Industrial' : 'TOOL_WALL_INDUSTRIAL',
@@ -5233,6 +5241,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     radiation_folder.add(guiControls, 'timeOfDay', 0.0, 23.96, 0.01).onChange(onUpdateTimeOfDaySlider).name('Time of day').listen();
 
     radiation_folder.add(guiControls, 'dayNightCycle').onChange(updateClockDisplay).name('Day/Night Cycle').listen();
+
+    radiation_folder.add(guiControls, 'realTimeCycle')
+      .onChange(function() {
+        lastRealTimeCycleFrameMs = -1;
+        updateClockDisplay();
+      })
+      .name('Real Time Cycle')
+      .listen();
 
     radiation_folder.add(guiControls, 'accelerateNight').name('Accelerate Night').listen();
 
@@ -5594,6 +5610,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       ['volumetricCloudLighting', 'Volumetric Cloud Lighting'],
       ['temporalAAEnabled', 'Temporal Anti-Aliasing']
     ];
+    performanceFolder.add(guiControls, 'motionBlurEnabled')
+      .name('Motion Blur');
+    performanceFolder.add(guiControls, 'motionBlurIntensity', 0, 350, 10)
+      .name('Motion Blur Strength %')
+      .listen();
     const renderTechnologyControllers = renderTechnologySettings.map(([setting, label]) =>
       performanceFolder.add(guiControls, setting).name(label).onChange(updateRenderPresetLabel));
     const superSharpDetailWarning =
@@ -6402,7 +6423,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     var rect = canvas.getBoundingClientRect();
     mouseX = event.clientX - rect.left;
 
-    if (!(guiControls.tool == 'TOOL_WALL_SEA' && leftMousePressed)) // lock y pos while drawing lake / sea
+    if (!((guiControls.tool == 'TOOL_WALL_SEA' || guiControls.tool == 'TOOL_SUPER_LAKE') && leftMousePressed)) // lock y pos while drawing lake / sea
       mouseY = event.clientY - rect.top;
 
     if (middleMousePressed) {
@@ -6903,8 +6924,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.47'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.47')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.48'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.48')
   ]);
 
   const [
@@ -7467,6 +7488,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   let lastSuperboltShakeIteration = 0;
   let superboltShakeStartTimeMs = -1;
   let superboltShakePhaseSeed = 0;
+  let lastHyperboltShakeIteration = 0;
+  let hyperboltShakeStartTimeMs = -1;
+  let hyperboltShakePhaseSeed = 0;
 
   // Set up Textures
   async function setupTextures()
@@ -7851,7 +7875,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.47');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.48');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8295,6 +8319,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   var srcVAO;
   var destTF;
+  let lastRealTimeCycleFrameMs = -1;
   let lastLightningSoundIteration = 0;
   let lastLightningSoundCheckIteration = 0;
   let lightningSoundFrame = 0;
@@ -8304,6 +8329,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const SUPERBOLT_SHAKE_DECAY_PER_SEC = 7.5;
   const SUPERBOLT_SHAKE_DURATION_MS = 650.0;
   const SUPERBOLT_SHAKE_PEAK_AMP = 0.024;
+  // A hyperbolt hits like a bomb: intensity 90 (0-100 scale), 2.5 s duration.
+  const HYPERBOLT_SHAKE_HZ = 40.0;
+  const HYPERBOLT_SHAKE_DECAY_PER_SEC = 2.2; // decays to ~nothing by the end of 2.5 s
+  const HYPERBOLT_SHAKE_DURATION_MS = 2500.0;
+  const HYPERBOLT_SHAKE_PEAK_AMP = 0.090; // intensity 90 / 1000 of the view height
   const precipSampleValues = new Float32Array(4);
   const countedSlotStartIter = new Float64Array(numLightningSlots);
   const lightningDataValues = new Float32Array(numLightningSlots * 2 * 4);
@@ -8319,6 +8349,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   {
     superboltShakeStartTimeMs = performance.now();
     superboltShakePhaseSeed = Math.random() * 1000.0;
+  }
+
+  function triggerHyperboltCameraShake()
+  {
+    hyperboltShakeStartTimeMs = performance.now();
+    hyperboltShakePhaseSeed = Math.random() * 1000.0;
   }
 
   function getSuperboltShakeOffset(nowMs)
@@ -8341,6 +8377,35 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       x : (amp * Math.cos(angle)) / denom,
       y : (amp * Math.sin(angle)) / denom
     };
+  }
+
+  function getHyperboltShakeOffset(nowMs)
+  {
+    if (hyperboltShakeStartTimeMs < 0 || SETUP_MODE)
+      return { x : 0, y : 0 };
+    const elapsedSec = (nowMs - hyperboltShakeStartTimeMs) * 0.001;
+    if (elapsedSec < 0 || elapsedSec * 1000.0 >= HYPERBOLT_SHAKE_DURATION_MS) {
+      hyperboltShakeStartTimeMs = -1;
+      return { x : 0, y : 0 };
+    }
+    const decay = Math.exp(-HYPERBOLT_SHAKE_DECAY_PER_SEC * elapsedSec);
+    const phaseCycles = elapsedSec * HYPERBOLT_SHAKE_HZ;
+    const wave = Math.sin(2.0 * Math.PI * phaseCycles);
+    const cycleIndex = Math.floor(phaseCycles);
+    const angle = hashShakeStep(hyperboltShakePhaseSeed, cycleIndex) * Math.PI * 2.0;
+    const amp = HYPERBOLT_SHAKE_PEAK_AMP * decay * wave;
+    const denom = Math.max(canvas_aspect, 0.1) * Math.max(cam.curZoom, 0.5);
+    return {
+      x : (amp * Math.cos(angle)) / denom,
+      y : (amp * Math.sin(angle)) / denom
+    };
+  }
+
+  function getLightningShakeOffset(nowMs)
+  {
+    const superbolt = getSuperboltShakeOffset(nowMs);
+    const hyperbolt = getHyperboltShakeOffset(nowMs);
+    return { x : superbolt.x + hyperbolt.x, y : superbolt.y + hyperbolt.y };
   }
 
   // preload uniform locations for tiny performance gain
@@ -8450,6 +8515,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           inputType = 11;
         else if (guiControls.tool == 'TOOL_WALL_SEA')
           inputType = 12;
+        else if (guiControls.tool == 'TOOL_SUPER_LAKE')
+          inputType = 24;
         else if (guiControls.tool == 'TOOL_WALL_FIRE')
           inputType = 13;
         else if (guiControls.tool == 'TOOL_WALL_URBAN')
@@ -8511,14 +8578,22 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       if (!guiControls.paused) { // Simulation part
 
         const sunAngle = guiControls.sunAngle;
-        let nightAccelerationActive = !airplaneMode && guiControls.dayNightCycle && guiControls.accelerateNight && (sunAngle < 0. || sunAngle > 180.);
+        let nightAccelerationActive = !airplaneMode && guiControls.dayNightCycle && guiControls.accelerateNight && !guiControls.realTimeCycle && (sunAngle < 0. || sunAngle > 180.);
 
         if (guiControls.dayNightCycle) {
           if (airplaneMode) {
             updateSunlight(1.0 / 3600.0 / 60);                                                                    // increase solar time at real speed: 1/60 seconds per frame
+          } else if (guiControls.realTimeCycle) {
+            const nowMs = performance.now();                                                                      // advance at real-world speed: 1 ms real time = 1 ms sun time
+            const elapsedHours = lastRealTimeCycleFrameMs >= 0 ? (nowMs - lastRealTimeCycleFrameMs) / 3600000.0 : 0.0;
+            lastRealTimeCycleFrameMs = nowMs;
+            updateSunlight(elapsedHours);
           } else {
+            lastRealTimeCycleFrameMs = -1;
             updateSunlight(timePerIteration * guiControls.IterPerFrame * (nightAccelerationActive ? 10.0 : 1.0)); // increase solar time
           }
+        } else {
+          lastRealTimeCycleFrameMs = -1;
         }
 
         gl.useProgram(lightingProgram);
@@ -8811,15 +8886,25 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
           if (superboltCheckDue) {
             let newestSuperboltIter = lastSuperboltShakeIteration;
+            let newestHyperboltIter = lastHyperboltShakeIteration;
             for (let slot = 0; slot < numLightningSlots; slot++) {
               const start = Math.round(lightningDataValues[slot * 4 + START_ITERNUM_INDEX]);
-              if (start <= newestSuperboltIter || start > iterNum)
+              if (start > iterNum)
                 continue;
               const metaOffset = (numLightningSlots + slot) * 4;
-              if (lightningDataValues[metaOffset + 3] >= 0.5)
-                newestSuperboltIter = start;
+              const strikeClass = lightningDataValues[metaOffset + 3];
+              if (strikeClass >= 1.5) {
+                if (start > newestHyperboltIter)
+                  newestHyperboltIter = start;
+              } else if (strikeClass >= 0.5) {
+                if (start > newestSuperboltIter)
+                  newestSuperboltIter = start;
+              }
             }
-            if (newestSuperboltIter > lastSuperboltShakeIteration) {
+            if (newestHyperboltIter > lastHyperboltShakeIteration) {
+              lastHyperboltShakeIteration = newestHyperboltIter;
+              triggerHyperboltCameraShake(); // hyperbolt alone, not stacked on the superbolt shake
+            } else if (newestSuperboltIter > lastSuperboltShakeIteration) {
               lastSuperboltShakeIteration = newestSuperboltIter;
               triggerSuperboltCameraShake();
             }
@@ -8865,8 +8950,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               const originX = lightningDataValues[metaOffset + 0];
               const metaType = lightningDataValues[metaOffset + 1];
               const targetY = lightningDataValues[metaOffset + 2];
-              const isSuperbolt = lightningDataValues[metaOffset + 3] >= 0.5;
-              const superboltSoundMult = isSuperbolt ? 1.5 : 1.0;
+              const strikeClassMetaW = lightningDataValues[metaOffset + 3];
+              const isSuperbolt = strikeClassMetaW >= 0.5;
+              const strikeSoundMult = strikeClassMetaW >= 1.5 ? 2.5 : (isSuperbolt ? 1.5 : 1.0);
               if (Math.abs(metaType - 5.0) < 0.25) {
                 // Upward ground-to-cloud lightning still produces CG thunder.
                 soundSystem.soundThunder(targetX, originY, Math.pow(strikeIntensity, 2.0));
@@ -8882,9 +8968,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               } else if (Math.abs(metaType - 1.0) < 0.25) {
                 // External positive CG: normalize [4.6, 5.4] slot tag back to normal-CG thunder scale.
                 const extBaseIntensity = clamp(1.8 + (strikeIntensity - 4.6) * 2.0, 1.8, 3.4);
-                soundSystem.soundThunder(targetX, originY, Math.pow(extBaseIntensity, 2.0) * 1.5 * superboltSoundMult);
+                soundSystem.soundThunder(targetX, originY, Math.pow(extBaseIntensity, 2.0) * 1.5 * strikeSoundMult);
               } else {
-                soundSystem.soundThunder(targetX, originY, Math.pow(strikeIntensity, 2.0) * superboltSoundMult);
+                soundSystem.soundThunder(targetX, originY, Math.pow(strikeIntensity, 2.0) * strikeSoundMult);
               }
               lastLightningSoundIteration = newestIteration;
             }
@@ -8994,16 +9080,20 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       lastCapeColumnUpdateFrame = frameNum;
     }
 
-    const shakeOffset = getSuperboltShakeOffset(performance.now());
+    const shakeOffset = getLightningShakeOffset(performance.now());
     const renderViewX = cam.curXpos + shakeOffset.x;
     const renderViewY = cam.curYpos + shakeOffset.y;
 
     const currentTemporalView = [renderViewX, renderViewY, cam.curZoom];
-    if (!guiControls.temporalAAEnabled || SETUP_MODE || guiControls.displayMode != 'DISP_REAL' ||
+    const postProcessingViewChanged = SETUP_MODE || guiControls.displayMode != 'DISP_REAL' ||
         temporalPreviousDisplayMode != guiControls.displayMode ||
         !temporalPreviousView ||
-        currentTemporalView.some((value, index) => value != temporalPreviousView[index])) {
+        currentTemporalView.some((value, index) => value != temporalPreviousView[index]);
+    if (!guiControls.temporalAAEnabled || postProcessingViewChanged) {
       temporalHistoryValid = false;
+    }
+    if (!guiControls.motionBlurEnabled || postProcessingViewChanged) {
+      motionBlurHistoryValid = false;
     }
     temporalPreviousView = currentTemporalView;
     temporalPreviousDisplayMode = guiControls.displayMode;
@@ -9242,6 +9332,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'fxaaEnabled'), guiControls.fxaaEnabled);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'temporalAAEnabled'), guiControls.temporalAAEnabled);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'temporalHistoryValid'), temporalHistoryValid);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'motionBlurEnabled'), guiControls.motionBlurEnabled);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'motionBlurHistoryValid'), motionBlurHistoryValid);
+      gl.uniform1f(getUniformLoc(postProcessingProgram, 'motionBlurStrength'), guiControls.motionBlurIntensity);
       gl.uniform2f(getUniformLoc(postProcessingProgram, 'outputTexelSize'), 1.0 / canvas.width, 1.0 / canvas.height);
 
       if (SETUP_MODE) {
@@ -9256,13 +9349,15 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.drawBuffers([ gl.BACK ]);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to canvas
 
-      if (guiControls.temporalAAEnabled && !SETUP_MODE) {
+      if ((guiControls.temporalAAEnabled || guiControls.motionBlurEnabled) && !SETUP_MODE) {
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, temporalHistoryTexture);
         gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, canvas.width, canvas.height);
-        temporalHistoryValid = true;
+        temporalHistoryValid = guiControls.temporalAAEnabled;
+        motionBlurHistoryValid = guiControls.motionBlurEnabled;
       } else {
         temporalHistoryValid = false;
+        motionBlurHistoryValid = false;
       }
 
       gl.bindVertexArray(fluidVao);
@@ -9907,7 +10002,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.47');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.48');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
