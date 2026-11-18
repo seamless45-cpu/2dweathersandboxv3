@@ -100,7 +100,7 @@ void main()
 
     wall[TYPE] = wallX0Ym[TYPE];                     // copy wall type from wall below
 
-    if (wall[TYPE] != WALLTYPE_WATER)
+    if (wall[TYPE] != WALLTYPE_WATER && wall[TYPE] != WALLTYPE_SUPER_LAKE)
       base[TEMPERATURE] += light[NET_HEATING]; // IR heating/cooling effect
 
     base[TEMPERATURE] += precipFeedback[HEAT]; // rain cools air and riming heats air
@@ -171,7 +171,7 @@ void main()
       nextToWall = true;
       wall[DISTANCE] = 1;                     // dist to nearest wall = 1
 
-      if (wallXmY0[TYPE] == WALLTYPE_WATER) { // if left is water, build a dyke
+      if (wallXmY0[TYPE] == WALLTYPE_WATER || wallXmY0[TYPE] == WALLTYPE_SUPER_LAKE) { // if left is water, build a dyke
         wall[TYPE] = WALLTYPE_LAND;
         wall[DISTANCE] = 0;
       }
@@ -182,14 +182,14 @@ void main()
       nextToWall = true;
       wall[DISTANCE] = 1;                     // dist to nearest wall = 1
 
-      if (wallXpY0[TYPE] == WALLTYPE_WATER) { // if right is water, build a dyke
+      if (wallXpY0[TYPE] == WALLTYPE_WATER || wallXpY0[TYPE] == WALLTYPE_SUPER_LAKE) { // if right is water, build a dyke
         wall[TYPE] = WALLTYPE_LAND;
         wall[DISTANCE] = 0;
       }
     }
     if (wallX0Yp[DISTANCE] == 0) {                                                  // above is wall
       nextToWall = true;
-      if (texCoord.y < 0.99 && (!allowCaves || wallX0Yp[TYPE] == WALLTYPE_WATER)) { // Fill in land below
+      if (texCoord.y < 0.99 && (!allowCaves || wallX0Yp[TYPE] == WALLTYPE_WATER || wallX0Yp[TYPE] == WALLTYPE_SUPER_LAKE)) { // Fill in land below
         wall[TYPE] = WALLTYPE_LAND;
         wall[DISTANCE] = 0;                                                         //  set this to wall
       } else {
@@ -211,7 +211,7 @@ void main()
     //}
 
     if (nextToWall) {
-      if (wall[TYPE] != WALLTYPE_WATER) { // any land
+      if (wall[TYPE] != WALLTYPE_WATER && wall[TYPE] != WALLTYPE_SUPER_LAKE) { // any land
         float lightPower = 0.0;
 
         if (wallX0Ym[DISTANCE] == 0)
@@ -376,14 +376,18 @@ void main()
           }
         }
         break;
+      case WALLTYPE_SUPER_LAKE: // super lake: fall through with 5x the exchange rates
       case WALLTYPE_WATER:
+      {
+        float waterMult = wall[TYPE] == WALLTYPE_SUPER_LAKE ? 5.0 : 1.0; // 5x heat exchange, 5x evaporation
         if (wall[VERT_DISTANCE] <= wallVerticalInfluence) {
           float LocalWaterTemperature = texture(baseTex, texCoordX0Ym)[TEMPERATURE];                                       // water temperature
-          base[TEMPERATURE] += (LocalWaterTemperature - realTemp - 1.0) / influenceDevider * waterHeatExchangeRate;        // air heated or cooled by water
+          base[TEMPERATURE] += (LocalWaterTemperature - realTemp - 1.0) / influenceDevider * waterHeatExchangeRate * waterMult;        // air heated or cooled by water
 
-          water[TOTAL] += max((maxWater(LocalWaterTemperature) - water[TOTAL]) * waterEvaporation / influenceDevider, 0.); // water evaporating
+          water[TOTAL] += max((maxWater(LocalWaterTemperature) - water[TOTAL]) * waterEvaporation * waterMult / influenceDevider, 0.); // water evaporating
         }
         break;
+      }
       }
     }
   } else {                                                                 // this is wall
@@ -395,9 +399,9 @@ void main()
       wall[VEGETATION] = wallX0Yp[VEGETATION];                             // vegetation is copied from above
 
       if (wallX0Yp[DISTANCE] == 0) {                                       // if above is wall
-        if (wallX0Yp[TYPE] != WALLTYPE_WATER) {                            // above is not water
+        if (wallX0Yp[TYPE] != WALLTYPE_WATER && wallX0Yp[TYPE] != WALLTYPE_SUPER_LAKE) { // above is not water
           wall[TYPE] = wallX0Yp[TYPE];                                     // copy walltype from above
-        } else if (wall[TYPE] == WALLTYPE_WATER) {                         // this is water
+        } else if (wall[TYPE] == WALLTYPE_WATER || wall[TYPE] == WALLTYPE_SUPER_LAKE) { // this is water
                                                                            //   wall[TYPE] = wallX0Yp[TYPE];                                     // land can't be over water. copy walltype from above
           base[TEMPERATURE] = texture(baseTex, texCoordX0Yp)[TEMPERATURE]; // copy water temperature from above
         }
@@ -489,7 +493,10 @@ void main()
           //}
         }
         break;
+      case WALLTYPE_SUPER_LAKE: // super lake: same body, 5x heat sensitivity
       case WALLTYPE_WATER:
+      {
+        float waterMult = wall[TYPE] == WALLTYPE_SUPER_LAKE ? 5.0 : 1.0; // 5x evaporation, 5x heat exchange
 
         const float waterTempUpdateInterval = 20.0; // Update less often but with bigger value to reduce rounding error
 
@@ -499,11 +506,11 @@ void main()
           float numNeighbors = 0.;
           float totalNeighborTemp = 0.0;
 
-          if (wallXmY0[TYPE] == WALLTYPE_WATER) { // left is water
+          if (wallXmY0[TYPE] == WALLTYPE_WATER || wallXmY0[TYPE] == WALLTYPE_SUPER_LAKE) { // left is water
             totalNeighborTemp += texture(baseTex, texCoordXmY0)[TEMPERATURE];
             numNeighbors += 1.;
           }
-          if (wallXpY0[TYPE] == WALLTYPE_WATER) { // right is water
+          if (wallXpY0[TYPE] == WALLTYPE_WATER || wallXpY0[TYPE] == WALLTYPE_SUPER_LAKE) { // right is water
             totalNeighborTemp += texture(baseTex, texCoordXpY0)[TEMPERATURE];
             numNeighbors += 1.;
           }
@@ -518,19 +525,19 @@ void main()
           float airTemperature = potentialToRealT(texture(baseTex, texCoordX0Yp)[TEMPERATURE], texCoordX0Yp.y);
 
           float netWaterHeating = 0.0;
-          netWaterHeating += (airTemperature - base[TEMPERATURE]) * waterHeatExchangeRate; // water heated or cooled by the air above
+          netWaterHeating += (airTemperature - base[TEMPERATURE]) * waterHeatExchangeRate * waterMult; // water heated or cooled by the air above
 
           netWaterHeating -=
-            max((maxWater(base[TEMPERATURE]) - waterX0Yp[TOTAL]) * waterEvaporation, 0.) * evapHeat * 0.5; // evaporative cooling (half the real value, to prevent boring non convective conditions)
+            max((maxWater(base[TEMPERATURE]) - waterX0Yp[TOTAL]) * waterEvaporation * waterMult, 0.) * evapHeat * 0.5; // evaporative cooling (half the real value, to prevent boring non convective conditions)
 
           float lightPower = max(lightAboveSurface[SUNLIGHT] * cos(sunAngle), 0.0);                        // Light power per horizontal surface area;
 
           lightPower *= (1. - ALBEDO_WATER);
           lightPower *= lightHeatingConst;
-          netWaterHeating += lightPower; // sun heating water
+          netWaterHeating += lightPower * waterMult; // sun heating water
 
 
-          netWaterHeating += lightAboveSurface[NET_HEATING]; // IR heating/cooling effect
+          netWaterHeating += lightAboveSurface[NET_HEATING] * waterMult; // IR heating/cooling effect
 
           base[TEMPERATURE] += netWaterHeating / waterHeatCapacity * waterTempUpdateInterval;
         }
@@ -540,6 +547,7 @@ void main()
         wall[VEGETATION] = 20;
         water[SOIL_MOISTURE] = 100.0;
         water[SNOW] = 0.0;
+        }
         break;
       }
     }

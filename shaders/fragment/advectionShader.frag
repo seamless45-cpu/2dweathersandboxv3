@@ -359,6 +359,10 @@ void main()
                                        // wall[VEGETATION] = 0; // No vegetation
           setWall = true;
           break;
+        case 24:
+          wall[TYPE] = WALLTYPE_SUPER_LAKE; // super lake: lake physics, 5x evaporation and 5x heat exchange
+          setWall = true;
+          break;
         case 13:                                                                                                     // set fire
           if (wall[DISTANCE] == 0 && wall[TYPE] == WALLTYPE_LAND && texture(wallTex, texCoordX0Yp)[DISTANCE] != 0) { // if land wall and no wall above
             wall[TYPE] = WALLTYPE_FIRE;
@@ -385,7 +389,7 @@ void main()
           break;
 
         case 20:                                                                                                      // add soil moisture
-          if (wall[DISTANCE] == 0 && wall[TYPE] != WALLTYPE_WATER && texture(wallTex, texCoordX0Yp)[DISTANCE] != 0) { // if land wall and no wall above
+          if (wall[DISTANCE] == 0 && wall[TYPE] != WALLTYPE_WATER && wall[TYPE] != WALLTYPE_SUPER_LAKE && texture(wallTex, texCoordX0Yp)[DISTANCE] != 0) { // if land wall and no wall above
             water[SOIL_MOISTURE] += userInputValues[BRUSH_INTENSITY] * 10.0;
           }
           break;
@@ -411,7 +415,7 @@ void main()
           if (wall[TYPE] == WALLTYPE_LAND) {
             water[SOIL_MOISTURE] = 25.0;
             // wall[VEGETATION] = 100;
-          } else if (wall[TYPE] == WALLTYPE_WATER) { // water surface
+          } else if (wall[TYPE] == WALLTYPE_WATER || wall[TYPE] == WALLTYPE_SUPER_LAKE) { // water surface
             base[TEMPERATURE] = waterTemperature;
           }
         }
@@ -454,7 +458,7 @@ void main()
 
   if (wall[DISTANCE] == 0) { // is wall
 
-    if (wall[TYPE] == WALLTYPE_WATER) {
+    if (wall[TYPE] == WALLTYPE_WATER || wall[TYPE] == WALLTYPE_SUPER_LAKE) {
       water[TOTAL] = 1002.;
     } else { // any type of land wall
       water[TOTAL] = 1001.;
@@ -515,6 +519,6 @@ void main()
     water[SOIL_MOISTURE] = finiteClamp(water[SOIL_MOISTURE], 0.0, 0.0, 10000.0);
     water[SNOW] = finiteClamp(water[SNOW], 0.0, 0.0, 40000.0);
     if (isnan(water[TOTAL]) || isinf(water[TOTAL]))
-      water[TOTAL] = wall[TYPE] == WALLTYPE_WATER ? 1002.0 : 1001.0;
+      water[TOTAL] = (wall[TYPE] == WALLTYPE_WATER || wall[TYPE] == WALLTYPE_SUPER_LAKE) ? 1002.0 : 1001.0;
   }
 }

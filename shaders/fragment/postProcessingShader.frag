@@ -24,6 +24,9 @@ uniform bool toneMappingEnabled;
 uniform bool fxaaEnabled;
 uniform bool temporalAAEnabled;
 uniform bool temporalHistoryValid;
+uniform bool motionBlurEnabled;
+uniform bool motionBlurHistoryValid;
+uniform float motionBlurStrength; // 0..350 (%)
 out vec4 fragmentColor;
 
 
@@ -119,6 +122,19 @@ void main()
       float edgeBLuma = luminance(edgeB);
       outputCol = edgeBLuma < minLuma || edgeBLuma > maxLuma ? edgeA : edgeB;
     }
+  }
+
+  if (motionBlurEnabled && motionBlurHistoryValid) {
+    // Long-exposure feedback, the "realistic blur and trails" path: the previous
+    // frame is cross-blurred and mixed back in. 100% is a soft veil of motion;
+    // 350% is past the point where anything moving paints streaks across the sky.
+    float blend = clamp(motionBlurStrength / 350.0, 0.0, 1.0) * 0.92;
+    vec3 history = texture(historyTex, texCoord).rgb * 0.5;
+    history += texture(historyTex, texCoord + vec2(outputTexelSize.x, 0.0)).rgb * 0.125;
+    history += texture(historyTex, texCoord - vec2(outputTexelSize.x, 0.0)).rgb * 0.125;
+    history += texture(historyTex, texCoord + vec2(0.0, outputTexelSize.y)).rgb * 0.125;
+    history += texture(historyTex, texCoord - vec2(0.0, outputTexelSize.y)).rgb * 0.125;
+    outputCol = mix(outputCol, min(history, vec3(hdrReadCeiling)), blend);
   }
 
   /*

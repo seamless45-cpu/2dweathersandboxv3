@@ -59,6 +59,7 @@ precision highp isampler2D;
 #define WALLTYPE_INERT 0
 #define WALLTYPE_LAND 1
 #define WALLTYPE_WATER 2 // lake / sea
+#define WALLTYPE_SUPER_LAKE 7 // super lake: like a lake, 5x evaporation and 5x heat exchange, deeper water
 #define WALLTYPE_FIRE 3
 #define WALLTYPE_URBAN 4
 #define WALLTYPE_RUNWAY 5
