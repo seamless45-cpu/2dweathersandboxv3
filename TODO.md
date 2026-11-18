@@ -76,6 +76,7 @@
 # November 18, 2026:
 - [x] Lightning no longer shows through opaque terrain foregrounds - wall faces and below-simulation pixels never accumulate the flash; the 45° slope triangles, urban and industrial silhouettes, and the tree/snow canopy clear what the air behind them accumulated; the rod's own corona and strike surge kept as the deliberate exception; the air band above a lake's waterline still renders the flash
 - [x] Reverted the same-day GC/crawler CG-channel rewrite and the CC/IC halo smoothing after the visual regression report - the channel look is the previous one again (procedural GC spine and forks, connected crawler tendrils, slope-corrected halos)
+- [x] Precise per-pixel collision detection for the flash: it is multiplied by the fragment's terrain coverage at the composite (the building/foliage texture alpha across silhouette edges, hard 1 for slope triangles and solid cells, 0 in open air), feathering the channel exactly at the silhouette instead of only clipping whole cells; the rod's light is not attenuated (separate accumulator)
 
 # November 16, 2026:
 - [x] Precipitation tool: paint rain or snow straight into the air, in any air, with droplets that wet the ground (Ctrl erases the painted precipitation field)

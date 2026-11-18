@@ -139,7 +139,7 @@ check('the bolt is still attenuated by the cloud it is born in',
 // The light of every strike is drawn in the scene pass, in one fragment, and the
 // only blending there is the ordinary premultiplied source-over of the scene.
 check('lightning is drawn once, in the scene fragment',
-  /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight \* opacity, 0\.0\) \+ emittedLight\), opacity\)/
+  /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight \* opacity, 0\.0\)[\s\S]{0,64}?\+ emittedLight \* \(1\.0 - terrainOcclusion\) \+ rodGlow\), opacity\)/
     .test(displayShader) &&
   /gl\.drawArrays\(gl\.TRIANGLE_STRIP, 0, 4\); \/\/ draw to hdr framebuffer/.test(appSource),
   'one draw of the display program, and the bolt is in the fragment it writes');
@@ -179,7 +179,7 @@ const softHdrClamp = (value) => {
     boltBrightness > HDR_CEILING * 1.5,
     'stroke ' + boltBrightness + ', ceiling ' + HDR_CEILING);
   check('the scene fragment is written through that compression, not a clamp',
-    /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight \* opacity, 0\.0\) \+ emittedLight\), opacity\);/
+    /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight \* opacity, 0\.0\)[\s\S]{0,64}?\+ emittedLight \* \(1\.0 - terrainOcclusion\) \+ rodGlow\), opacity\);/
       .test(displayShader) && !/const float hdrCeiling/.test(displayShader));
 
   // The emitted light - the bolt - is added to the fragment colour as pure
@@ -188,7 +188,7 @@ const softHdrClamp = (value) => {
   // unpremultiplied alpha multiplied the destination by (1 - a) in the SRC_ALPHA
   // blend without adding light back, leaving a dark fringe ringing every channel.
   check('the emitted light is written straight into the fragment',
-    /\+ emittedLight\), opacity\);/.test(displayShader) &&
+    /\+ emittedLight \* \(1\.0 - terrainOcclusion\) \+ rodGlow\), opacity\);/.test(displayShader) &&
     !/emitted \/ max\(opacity/.test(displayShader),
     'the bolt rides on top of the premultiplied surface, additively');
   check('the coverage alpha cannot run past opaque',
@@ -243,7 +243,7 @@ const softHdrClamp = (value) => {
     !/lightningCoolingCol/.test(displayShader),
     'the fade to an ember went with the rest of the later look');
   check('the emission is written straight, as the original wrote it',
-    /\+ emittedLight\), opacity\);/.test(displayShader) && !/emitted \/ max\(opacity/.test(displayShader),
+    /\+ emittedLight \* \(1\.0 - terrainOcclusion\) \+ rodGlow\), opacity\);/.test(displayShader) && !/emitted \/ max\(opacity/.test(displayShader),
     'no premultiplication: the fragment is the fragment');
   check('the channel is written as the shipped code wrote it',
     /pixVal \*= currentLightningIntensity;/.test(displayShader) &&

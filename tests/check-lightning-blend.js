@@ -16,7 +16,7 @@ let passed = 0, failed = 0;
 function check(name, ok) { console.log((ok ? 'PASS ' : 'FAIL ') + name); if (ok) passed++; else failed++; }
 
 check('realistic display premultiplies its surface colour by coverage and adds emitted light',
-  /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight \* opacity, 0\.0\) \+ emittedLight\), opacity\);/.test(display));
+  /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight \* opacity, 0\.0\)[\s\S]{0,64}?\+ emittedLight \* \(1\.0 - terrainOcclusion\) \+ rodGlow\), opacity\);/.test(display));
 check('emitted light no longer inflates the coverage alpha',
   !/clamp\(opacity \+ length\(emittedLight\)/.test(display));
 check('upper-atmosphere additive branch writes pure light with alpha 0',

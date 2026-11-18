@@ -81,6 +81,7 @@ vec3 emittedLight = vec3(0.); // pure light, like lightning
 float shadowLight;
 
 vec3 onLight; // extra light that lights up objects, just like sunlight and shadowlight
+vec3 rodGlow = vec3(0.0); // the rod's own light (tip corona, strike surge): drawn over whatever stands in front of it
 // Derivatives captured before any divergent strike, terrain or cloud branches.
 // These describe one actual HDR render-target pixel, including render scale/zoom.
 vec2 screenTexDx, screenTexDy;
@@ -1384,6 +1385,13 @@ void main()
   opacity = 1.0;
   emittedLight = vec3(0.0);
   onLight = vec3(0.0);
+  rodGlow = vec3(0.0);
+  // Precise per-pixel terrain coverage for the flash: how much solid geometry
+  // stands in front of this fragment, from the same wall data the silhouette is
+  // drawn from - 1 deep inside solid ground, 0 in open air, and the foliage/
+  // building texture's alpha across the edges. The flash is multiplied by
+  // (1 - coverage) at the composite, so it stops at the silhouette exactly.
+  float terrainOcclusion = 0.0;
 
   if (texCoord.y > 1.0) { // above simulation area
     vec3 upperAtmosphereLight = drawUpperAtmosphereLightning();
@@ -1399,6 +1407,7 @@ void main()
     lightIntensity = 0.0;
     shadowLight = minShadowLight;
   } else if (texCoord.y < 0.) { // < texelSize.y below simulation area
+    terrainOcclusion = 1.0;
     vec2 bndFragCoord = vec2(fragCoord.x, clamp(fragCoord.y, 0., resolution.y)); // bound y within range
     wall = texture(wallTex, bndFragCoord * texelSize);                           // texCoord
     water = bilerpWallVis(waterTex, wallTex, bndFragCoord);
@@ -1421,6 +1430,7 @@ void main()
     shadowLight = minShadowLight;
 
     if (wall[DISTANCE] == 0) { // is wall
+      terrainOcclusion = 1.0;
       ivec4 wallXmY0 = texture(wallTex, texCoordXmY0);
       ivec4 wallXpY0 = texture(wallTex, texCoordXpY0);
 
@@ -1489,6 +1499,7 @@ void main()
       float waterLevel = 0.8 + waveSignalL * max(-windSpeed, 0.) + waveSignalR * max(windSpeed, 0.);
 
       if (wall[VERT_DISTANCE] == 0 && fract(fragCoord.y) > waterLevel) { // air
+        terrainOcclusion = 0.0;
         vec4 airColor = getAirColor(fragCoord + vec2(0., 0.5));
 
         opacity = airColor.a;
@@ -1510,6 +1521,7 @@ void main()
           color = getWallColor(float(-wall[VERT_DISTANCE]) - localY);
           shadowLight = minShadowLight;
           emittedLight = vec3(0.0); // opaque terrain foreground: the flash may not shine through it
+          terrainOcclusion = 1.0;
         }
       }
       if (wallXpY0[DISTANCE] == 0 && wallXpY0[TYPE] != WALLTYPE_WATER && (fragCoord.y < 1. || wallX0Ym[TYPE] != WALLTYPE_WATER)) { // wall to the right and below
@@ -1519,6 +1531,7 @@ void main()
           color = getWallColor(float(-wall[VERT_DISTANCE]) - localY);
           shadowLight = minShadowLight;
           emittedLight = vec3(0.0); // opaque terrain foreground: the flash may not shine through it
+          terrainOcclusion = 1.0;
         }
       }
 
@@ -1590,6 +1603,7 @@ void main()
           color = texCol.rgb;
           opacity = texCol.a;
           emittedLight = vec3(0.0); // opaque terrain foreground: the flash may not shine through it
+          terrainOcclusion = max(terrainOcclusion, texCol.a);
         }
       } else if (wallX0Ym[TYPE] == WALLTYPE_INDUSTRIAL) {
 
@@ -1619,6 +1633,7 @@ void main()
           color = texCol.rgb;
           opacity = texCol.a;
           emittedLight = vec3(0.0); // opaque terrain foreground: the flash may not shine through it
+          terrainOcclusion = max(terrainOcclusion, texCol.a);
         }
       }
 
@@ -1666,6 +1681,7 @@ void main()
 
           opacity = 1. - (1. - opacity) * (1. - texCol.a); // alpha blending
           emittedLight = vec3(0.0); // opaque terrain foreground: the flash may not shine through it
+          terrainOcclusion = max(terrainOcclusion, texCol.a);
         }
 
         // draw 45° slopes
@@ -1679,6 +1695,7 @@ void main()
             color = getWallColor(localY - 0.6);
             shadowLight = minShadowLight; // fire should not light ground
             emittedLight = vec3(0.0); // opaque terrain foreground: the flash may not shine through it
+            terrainOcclusion = 1.0;
           }
         }
         if (wallXpY0[DISTANCE] == 0 && wall[TYPE] != WALLTYPE_WATER) { // wall to the right and below
@@ -1688,6 +1705,7 @@ void main()
             color = getWallColor(localY - 0.6);
             shadowLight = minShadowLight; // fire should not light ground
             emittedLight = vec3(0.0); // opaque terrain foreground: the flash may not shine through it
+            terrainOcclusion = 1.0;
           }
         }
       }
@@ -1799,7 +1817,7 @@ void main()
       float stormCloud = texture(waterTex, vec2(rod.x, clamp(rod.y + 0.16, 0.0, 0.96)))[CLOUD];
       float ambientIon = clamp(stormCloud * 0.75, 0.0, 1.4) * (0.85 + 0.15 * sin(iterNum * 0.45 + rod.x * 40.0));
       float corona = exp(-tipDistance / max(rodThickness * 1.05, 1.3));
-      emittedLight += vec3(0.38, 0.50, 0.96) * corona * (0.28 + 0.60 * ambientIon + strikeGlow * 55.0);
+      rodGlow += vec3(0.38, 0.50, 0.96) * corona * (0.28 + 0.60 * ambientIon + strikeGlow * 55.0);
     }
 
     // Captured return stroke conducts down the mast to the grounding plinth.
@@ -1807,7 +1825,7 @@ void main()
       float surgeWave = 0.78 + 0.22 * sin(alongRod * 14.0 + iterNum * 2.1);
       float tipCore = smoothstep(0.78, 1.0, alongRod);
       float earthingFlash = smoothstep(0.18, 0.0, alongRod) * 0.35;
-      emittedLight += vec3(0.58, 0.72, 1.0) * strikeGlow * surgeWave *
+      rodGlow += vec3(0.58, 0.72, 1.0) * strikeGlow * surgeWave *
                       (tipCore * 200.0 + earthingFlash * 140.0 + 2600.0) * (onMetal ? 1.0 : 0.22);
     }
   }
@@ -1855,7 +1873,11 @@ void main()
    */
   opacity = clamp(opacity, 0.0, 1.0);
 
-  fragmentColor = vec4(softHdrClamp(max(color * finalLight * opacity, 0.0) + emittedLight), opacity);
+  // Precise terrain collision: the accumulated flash is scaled by how much
+  // solid ground stands in front of this fragment. The rod's own light is not
+  // attenuated - the mast stands in front of the terrain.
+  fragmentColor = vec4(softHdrClamp(max(color * finalLight * opacity, 0.0)
+                                    + emittedLight * (1.0 - terrainOcclusion) + rodGlow), opacity);
 
   drawCursor(cursor, view); // over everything else
 }
