@@ -426,12 +426,12 @@ check('the curved network is fine and sparse, not a bloated white web',
 {
   const displayShader = fs.readFileSync(path.join(ROOT, 'shaders/fragment/realisticDisplayShader.frag'), 'utf8');
   const app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
-  const flashHeight = Number((displayShader.match(/const float flashHeight = ([\d.]+);/) || [])[1]);
+  const flashHeight = Number((displayShader.match(/float flashHeight = ([\d.]+) \* lightningHeightScale\(\);/) || [])[1]);
   const threshold = Number((displayShader.match(/const float flashThreshold = ([\d.]+);/) || [])[1]);
 
   check('displayFlash keeps compact world scale instead of filling huge stretches of sky',
-    Number.isFinite(flashHeight) && flashHeight > 0.03 && flashHeight <= 0.10,
-    'flashHeight ' + flashHeight + ' (must stay compact inside a convective cell)');
+    Number.isFinite(flashHeight) && Math.abs(flashHeight * 12.0 - 0.9) < 1e-9,
+    'flashHeight ' + flashHeight + ' of the 12 km reference height (0.9 km, must not scale with sim setup)');
 
   check('displayFlash keeps true 2:1 world aspect ratio so IC curves are not squashed',
     /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader) &&

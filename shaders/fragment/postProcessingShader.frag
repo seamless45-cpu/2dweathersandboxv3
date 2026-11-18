@@ -27,6 +27,9 @@ uniform bool temporalHistoryValid;
 uniform bool motionBlurEnabled;
 uniform bool motionBlurHistoryValid;
 uniform float motionBlurStrength; // 0..350 (%)
+uniform vec3 motionBlurView;        // current render view (x, y, zoom) including shake
+uniform vec3 motionBlurPrevView;    // view the history texture was rendered with
+uniform vec2 motionBlurAspects;     // (sim aspect, canvas aspect)
 out vec4 fragmentColor;
 
 
@@ -125,16 +128,43 @@ void main()
   }
 
   if (motionBlurEnabled && motionBlurHistoryValid) {
-    // Long-exposure feedback, the "realistic blur and trails" path: the previous
-    // frame is cross-blurred and mixed back in. 100% is a soft veil of motion;
-    // 350% is past the point where anything moving paints streaks across the sky.
-    float blend = clamp(motionBlurStrength / 350.0, 0.0, 1.0) * 0.92;
-    vec3 history = texture(historyTex, texCoord).rgb * 0.5;
-    history += texture(historyTex, texCoord + vec2(outputTexelSize.x, 0.0)).rgb * 0.125;
-    history += texture(historyTex, texCoord - vec2(outputTexelSize.x, 0.0)).rgb * 0.125;
-    history += texture(historyTex, texCoord + vec2(0.0, outputTexelSize.y)).rgb * 0.125;
-    history += texture(historyTex, texCoord - vec2(0.0, outputTexelSize.y)).rgb * 0.125;
-    outputCol = mix(outputCol, min(history, vec3(hdrReadCeiling)), blend);
+    // Shutter integral along the camera motion vector. The display mesh slides
+    // under a fixed uv window, so the same world point sits at a different uv on
+    // every frame; reprojecting through the current and previous view recovers the
+    // screen-space path the point travelled during the last frame. Eight taps
+    // gathered along that path approximate the long-exposure average across the
+    // interval (each tap mixes this frame's scene with the held frame from the
+    // canvas history, so storms smeared across the interval integrate in).
+    // Zoom is part of the view, so radial zoom blurs work too; a stationary
+    // camera produces a zero vector and the frame is left untouched.
+    vec2 ndc = texCoord * 2.0 - 1.0;
+    float sa = motionBlurAspects.x;
+    float ca = motionBlurAspects.y;
+    vec2 flow = vec2(0.0);
+    flow.x = (ndc.x / motionBlurPrevView.z - motionBlurPrevView.x) * 0.5 + 0.5
+           - ((ndc.x / motionBlurView.z - motionBlurView.x) * 0.5 + 0.5);
+    flow.y = ((ndc.y * sa / (motionBlurPrevView.z * ca) - motionBlurPrevView.y * sa) * 0.5 + 0.5)
+           - ((ndc.y * sa / (motionBlurView.z * ca) - motionBlurView.y * sa) * 0.5 + 0.5);
+
+    float flowLength = length(flow);
+    // A seam wrap (camera wraps horizontally) or an extreme view jump makes the
+    // reprojection meaningless for one frame; skip rather than smear the world.
+    if (flowLength <= 0.05 && flowLength > 0.0) {
+      float strength = clamp(motionBlurStrength / 350.0, 0.0, 1.0);
+      // The effect fades in with the motion instead of smearing a static image.
+      float flowGate = smoothstep(0.0, 0.002, flowLength);
+      vec3 acc = safeSample(mappedColor(texCoord).rgb); // shutter start = this frame
+      for (int i = 1; i < 8; i++) {
+        float t = float(i) / 7.0;
+        vec2 tapUV = clamp(texCoord + flow * t, vec2(0.0), vec2(1.0));
+        vec3 currentTap = safeSample(mappedColor(tapUV).rgb);
+        vec3 historyTap = safeSample(texture(historyTex, tapUV).rgb);
+        acc += mix(currentTap, historyTap, 0.5);
+      }
+      vec3 blurred = acc * (1.0 / 8.0);
+      float blend = strength * flowGate;
+      outputCol = mix(outputCol, blurred, blend);
+    }
   }
 
   /*

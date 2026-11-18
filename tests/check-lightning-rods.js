@@ -87,7 +87,7 @@ check('a flash reads its own artwork, mip-filtered, over a slab of the sky at tr
 check('a flash lights the slab it lives in and a stroke lights the cloud under it',
   /if \(isFlash\) \{\s*\n\s*\/\/ A flash lights the whole slab/.test(displayShader) &&
   /vec2 flashDist = vec2\(\(lightningPos\.x - texCoord\.x\) \* aspectRatios\[0\], texCoord\.y - lightningPos\.y\);/.test(displayShader) &&
-  /float cgDx = lightningPos\.x - texCoord\.x;\s*\n\s*vec2 dist = vec2\(cgDx, max\(\(abs\(lightningPos\.y \/ 2\. - texCoord\.y\) - 0\.1\), 0\.\)\);/.test(displayShader),
+  /float cgDx = lightningPos\.x - texCoord\.x;\s*\n\s*vec2 dist = vec2\(cgDx, max\(\(abs\(lightningPos\.y \/ 2\. - texCoord\.y\) - 0\.1 \* lightningHeightScale\(\)\), 0\.\)\);/.test(displayShader),
   'the shipped lobe is a point below the strike (clipped at the tile edge); a network is a slab');
 check('stroke uses explicit screen-space gradients and preserves its own bolt artwork',
   /textureGrad\(lightningTex, lightningTexCoord, gradX, gradY\)/.test(displayShader) &&
@@ -284,7 +284,7 @@ const softHdrClamp = (value) => {
 
   check('a cloud-to-ground stroke lights the clouds around it',
     onLift === 0.004 &&
-    /lightningOnLight = lightningOnLightBrightness \/ \(pow\(length\(dist\), 2\.\) \+ 0\.03\);/.test(displayShader) &&
+    /lightningOnLight = lightningOnLightBrightness \/ \(pow\(length\(dist\), 2\.\) \+ 0\.03 \* lightningHeightScale\(\)\);/.test(displayShader) &&
     /onLight \+= lightningIlluminationTint \* lightningOnLight/.test(displayShader),
     'the tight lobe has to sit on the channel it came from');
   check('there is no second, wide lobe any more',
