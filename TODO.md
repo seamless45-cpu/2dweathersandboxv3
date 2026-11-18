@@ -73,6 +73,11 @@
 - [x] Make heating of sloped surfaces accurate
 - [x] Display Solar and IR power in weather stations
 
+# November 18, 2026:
+- [x] GC leader and anvil crawler channel look replaced with the CG channel (shared pre-rendered bolt tile, projection, coverage curve and violet colour); staging, growth clocks, return stroke, cloud confinement and severing unchanged
+- [x] Lightning no longer shows through opaque terrain foregrounds - wall faces and below-simulation pixels never accumulate the flash; the 45° slope triangles, urban and industrial silhouettes, and the tree/snow canopy clear what the air behind them accumulated; the rod's own corona and strike surge kept as the deliberate exception; the air band above a lake's waterline still renders the flash
+- [x] Smooth halos for both polarities of CC and IC lightning (IC fringe split into a separate mip-blurred glow band; CC halo/sheath as pure perpendicular exponentials); channel geometry unchanged
+
 # November 16, 2026:
 - [x] Precipitation tool: paint rain or snow straight into the air, in any air, with droplets that wet the ground (Ctrl erases the painted precipitation field)
 - [x] Artificial Lightning variant picker (12 events: ordinary CG, IC, +IC, -CC, +CC, +CG, superbolt, ground-to-cloud, anvil crawler, blue jet, red sprite, elve) via in-page option list
