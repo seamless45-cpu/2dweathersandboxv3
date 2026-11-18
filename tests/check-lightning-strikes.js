@@ -334,7 +334,7 @@ check('the slot count agrees between app.js, common.glsl and this test',
     !/strikeLight/.test(displayShader),
     'the shipped arguments, and one expression: a flash is a second channel, not a filter over the stroke');
   check('the emission is written straight into the fragment, not premultiplied',
-    /\+ emittedLight\), opacity\);/.test(displayShader) && !/emitted \/ max\(opacity/.test(displayShader),
+    /\+ emittedLight \* \(1\.0 - terrainOcclusion\) \+ rodGlow\), opacity\);/.test(displayShader) && !/emitted \/ max\(opacity/.test(displayShader),
     'the original fragment is the original fragment');
 }
 

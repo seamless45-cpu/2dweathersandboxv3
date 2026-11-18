@@ -25,8 +25,16 @@ check('every opaque terrain foreground clears the flash accumulated behind it (7
 check('the rod pass composites its corona and strike surge AFTER the opaque foreground is resolved, so rod glow still composites over the ground',
   display.indexOf('vec2 rod = rodPositions[i];') >
   display.lastIndexOf('// opaque terrain foreground'));
-check('the composite choke point carries no occlusion gate that would also drop the rod glow',
-  !/if \(terrainOccluded\)/.test(display));
+check('the flash is multiplied by precise per-pixel terrain coverage at the composite',
+  /emittedLight \* \(1\.0 - terrainOcclusion\) \+ rodGlow/.test(display));
+check('terrain coverage is tracked: solid branches set 1.0, foreground alpha feathers it, the water air band reopens it',
+  (display.match(/terrainOcclusion = 1\.0;/g) || []).length === 6 &&
+  (display.match(/terrainOcclusion = max\(terrainOcclusion, texCol\.a\);/g) || []).length === 3 &&
+  (display.match(/^\s*terrainOcclusion = 0\.0;$/gm) || []).length === 1 &&
+  /float terrainOcclusion = 0\.0;/.test(display));
+check('the rod corona and strike surge flow through a separate accumulator that is never attenuated',
+  (display.match(/rodGlow \+= vec3\(/g) || []).length === 2 &&
+  /vec3 rodGlow = vec3\(0\.0\);/.test(display));
 check('wall and below-simulation pixels never call the air path, so they accumulate no flash to begin with',
   (display.match(/computeAirColor\(bndFragCoord\)/g) || []).length === 2 &&
   (display.match(/getAirColor\(fragCoord \+ vec2\(0\., 0\.5\)\)/g) || []).length === 1);
