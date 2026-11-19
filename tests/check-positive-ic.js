@@ -84,7 +84,7 @@ check('realisticDisplayShader.frag defines displayPositiveFlash() with +50% brig
   /bool isPositiveIC = isFlash && lightningMeta\.y >= 3\.5;/.test(displayShader) &&
   /float flashHeight = 0\.095 \* lightningHeightScale\(\);/.test(displayShader) &&
   /const float mainBoltBrightness = 10500\.;/.test(displayShader) &&
-  /const vec3 positiveIcCol = vec3\(1\.0, 0\.88, 0\.80\);/.test(displayShader) &&
+  /vec3 positiveIcCol = planckBlackbody\(35000\.0 \+ 6000\.0 \* \(random2d\(vec2\(pos\.y \* 5\.9, pos\.x \* 3\.3\)\) - 0\.5\)\);/.test(displayShader) &&
   /if \(isPositiveIC\)\s*\n\s*lightningOnLight \*= 1\.5;/.test(displayShader),
   'expected dedicated positive IC render path and 1.5x cloud glow');
 

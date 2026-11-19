@@ -222,9 +222,10 @@ check('the slot count agrees between app.js, common.glsl and this test',
     worstFirst >= 0.99 && worstNext > 0.35,
     'first iter ' + worstFirst.toFixed(3) + ' of peak, next iter ' + worstNext.toFixed(3) + ' of peak');
 
-  check('lightningIntensityOverTime does not subtract a 1.0-unit leader delay',
-    /float T0 = Tin;/.test(displayShader) && !/float T0 = Tin - 1\.;/.test(displayShader),
-    'Tin - 1.0 shifts every flash five iterations later and leaves cloud glow dark on trigger');
+  check('lightningIntensityOverTime does not subtract a 1.0-unit leader delay, and warps by per-variant lifetime',
+    /float T0 = Tin \/ max\(lightningLifetimeScale\(vec4\(lightningPos, 0\., intensity\)\), 1e-3\);/.test(displayShader) &&
+    !/float T0 = Tin - 1\.;/.test(displayShader),
+    'the curve runs on the lifetime-stretched clock (IC 0.72x, external +CG 0.85x, +CC 1.25x), sharing the slot manager clock');
 
   check('neither IC nor CG delays main bolt brightness behind a lightningTime > 1.0 gate',
     !/if \(lightningTime > 1\.0\)/.test(displayShader) &&
@@ -456,10 +457,16 @@ check('the display pass draws a strike while it has light, and not for a fixed t
   'expected the strike slot loop plus the rod tip glow to use strikeAnimEnd');
 check('strikeAnimEnd reads the same curve the display does',
   /strike\.xy \* 2\.737250/.test(common) &&
-  /map_range\(random2d\(strike\.xy\), 0\., 1\., 1\.5, 3\.0\)/.test(common) &&
+  /float lightningRepeatPeriod\(vec4 strike\)/.test(common) &&
+  /float lightningLifetimeScale\(vec4 strike\)/.test(common) &&
+  /float repeatPeriod = lightningRepeatPeriod\(strike\);/.test(common) &&
+  /return start \+ 5\.0 \* \(repeatPeriod \* numFlashes \+ 2\.924\) \* lightningLifetimeScale\(strike\);/.test(common) &&
   /float numFlashes = lightningFlickers\(strike\);/.test(common) &&
-  /float numFlashes = lightningFlickers\(vec4\(lightningPos, 0\., intensity\)\);/.test(displayShader),
-  'the flicker period and count have to come from the same two hashes of the strike position, through one function');
+  /vec4 strike = vec4\(lightningPos, 0\., intensity\);/.test(displayShader) &&
+  /float numFlashes = lightningFlickers\(strike\);/.test(displayShader) &&
+  /float T0 = Tin \/ max\(lightningLifetimeScale\(vec4\(lightningPos, 0\., intensity\)\), 1e-3\);/.test(displayShader) &&
+  /float repeatPeriod = lightningRepeatPeriod\(strike\);/.test(displayShader),
+  'the flicker period, flicker count and lifetime stretch have to come from the same strike hashes, through shared helpers');
 check('a flash re-fires two to four times and a stroke keeps the shipped formula',
   /if \(strike\[INTENSITY\] <= LIGHTNING_IC_MAX_INTENSITY\)\s*\n\s*return floor\(map_range\(r, 0\., 1\., 2\.0, 5\.0\)\);/.test(common) &&
   /return floor\(map_range\(r, 0\., 1\., 1\.0, max\(strike\[INTENSITY\] - 0\.5, 0\.\) \* 2\.0\)\);/.test(common),

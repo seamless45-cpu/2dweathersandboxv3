@@ -539,7 +539,7 @@ const guiControls_default = {
   subZeroThreshold : 0.005, // 0.01
   spawnChance : 0.00005,    // 30. 10 to 50
   snowDensity : 0.2,        // 0.3
-  fallSpeed : 0.0003,
+  fallSpeed : 1.0, // multiplier on drag-limited terminal velocity (1.0 = physical)
   growthRate0C : 0.0001,    // 0.0005
   growthRate_30C : 0.001,   // 0.01
   freezingRate : 0.01,
@@ -4750,6 +4750,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'spawnChanceMult'), guiControls.spawnChance);
     gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'snowDensity'), guiControls.snowDensity);
     gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'fallSpeed'), guiControls.fallSpeed);
+    gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'simHeightM'), guiControls.simHeight);
+    gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'secondsPerIteration'), 0.288);
     gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'growthRate0C'), guiControls.growthRate0C);
     gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'growthRate_30C'), guiControls.growthRate_30C);
     gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'freezingRate'), guiControls.freezingRate);
@@ -5380,7 +5382,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       })
       .name('Snow Density');
 
-    precipitation_folder.add(guiControls, 'fallSpeed', 0.0001, 0.001, 0.0001)
+    precipitation_folder.add(guiControls, 'fallSpeed', 0.4, 2.0, 0.1)
       .onChange(function() {
         gl.useProgram(precipitationProgram);
         gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'fallSpeed'), guiControls.fallSpeed);
@@ -6925,8 +6927,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.50'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.50')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.51'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.51')
   ]);
 
   const [
@@ -7876,7 +7878,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.50');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.51');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8183,6 +8185,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform2f(gl.getUniformLocation(precipitationProgram, 'resolution'), sim_res_x, sim_res_y);
   gl.uniform2f(gl.getUniformLocation(precipitationProgram, 'texelSize'), texelSizeX, texelSizeY);
   gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'dryLapse'), dryLapse);
+  gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'simHeightM'), guiControls.simHeight);
+  gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'secondsPerIteration'), 0.288);
   gl.useProgram(IRtempDisplayProgram);
   gl.uniform2f(gl.getUniformLocation(IRtempDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
   gl.uniform2f(gl.getUniformLocation(IRtempDisplayProgram, 'texelSize'), texelSizeX, texelSizeY);
@@ -9335,6 +9339,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.bindTexture(gl.TEXTURE_2D, bloomFBOs[0].texture);
       gl.activeTexture(gl.TEXTURE2);
       gl.bindTexture(gl.TEXTURE_2D, temporalHistoryTexture);
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, baseTexture_1); // fluid state: scene velocity for motion blur
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'velocityTex'), 3);
+      gl.uniform2f(getUniformLoc(postProcessingProgram, 'motionBlurResolution'), sim_res_x, sim_res_y);
+      gl.uniform1f(getUniformLoc(postProcessingProgram, 'motionBlurIterPerFrame'), Math.max(1, Math.min(50, guiControls.IterPerFrame)));
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'bloomEnabled'), guiControls.bloomEnabled);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'toneMappingEnabled'), guiControls.filmicToneMapping);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'fxaaEnabled'), guiControls.fxaaEnabled);
@@ -10016,7 +10025,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.50');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.51');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

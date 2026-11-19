@@ -30,6 +30,9 @@ uniform float motionBlurStrength; // 0..350 (%)
 uniform vec3 motionBlurView;        // current render view (x, y, zoom) including shake
 uniform vec3 motionBlurPrevView;    // view the history texture was rendered with
 uniform vec2 motionBlurAspects;     // (sim aspect, canvas aspect)
+uniform sampler2D velocityTex;      // fluid state: xy = velocity in cells per iteration
+uniform vec2 motionBlurResolution;  // simulation grid in cells
+uniform float motionBlurIterPerFrame; // simulation iterations per rendered frame
 out vec4 fragmentColor;
 
 
@@ -77,9 +80,13 @@ void main()
 {
   vec3 outputCol = mappedColor(texCoord);
 
-  if (temporalAAEnabled && temporalHistoryValid) {
-    vec3 neighborhoodMin = outputCol;
-    vec3 neighborhoodMax = outputCol;
+  // The five mappedColor taps that clamp history are shared by temporal AA and
+  // the motion blur below (history there is clamped to the same box), so they
+  // are only fetched when at least one of the two feedback effects needs them.
+  bool needsNeighborhood = (temporalAAEnabled && temporalHistoryValid) || (motionBlurEnabled && motionBlurHistoryValid);
+  vec3 neighborhoodMin = outputCol;
+  vec3 neighborhoodMax = outputCol;
+  if (needsNeighborhood) {
     neighborhoodMin = min(neighborhoodMin, mappedColor(texCoord - vec2(outputTexelSize.x, 0.0)));
     neighborhoodMin = min(neighborhoodMin, mappedColor(texCoord + vec2(outputTexelSize.x, 0.0)));
     neighborhoodMin = min(neighborhoodMin, mappedColor(texCoord - vec2(0.0, outputTexelSize.y)));
@@ -88,7 +95,9 @@ void main()
     neighborhoodMax = max(neighborhoodMax, mappedColor(texCoord + vec2(outputTexelSize.x, 0.0)));
     neighborhoodMax = max(neighborhoodMax, mappedColor(texCoord - vec2(0.0, outputTexelSize.y)));
     neighborhoodMax = max(neighborhoodMax, mappedColor(texCoord + vec2(0.0, outputTexelSize.y)));
+  }
 
+  if (temporalAAEnabled && temporalHistoryValid) {
     vec3 historyColor = clamp(texture(historyTex, texCoord).rgb, neighborhoodMin, neighborhoodMax);
     float historyDifference = max(max(abs(outputCol.r - historyColor.r), abs(outputCol.g - historyColor.g)),
                                   abs(outputCol.b - historyColor.b));
@@ -128,41 +137,76 @@ void main()
   }
 
   if (motionBlurEnabled && motionBlurHistoryValid) {
-    // Shutter integral along the camera motion vector. The display mesh slides
-    // under a fixed uv window, so the same world point sits at a different uv on
-    // every frame; reprojecting through the current and previous view recovers the
-    // screen-space path the point travelled during the last frame. Eight taps
-    // gathered along that path approximate the long-exposure average across the
-    // interval (each tap mixes this frame's scene with the held frame from the
-    // canvas history, so storms smeared across the interval integrate in).
-    // Zoom is part of the view, so radial zoom blurs work too; a stationary
-    // camera produces a zero vector and the frame is left untouched.
+    // Reworked shutter integral, two motion paths gathered on one axis:
+    //
+    // 1. Camera motion - reproject this pixel through the current and previous
+    //    render view (position and zoom, shake included), as before. The display
+    //    mesh slides under a fixed uv window, so a world point travels a
+    //    screen-space path between frames; radial zoom blurs for free.
+    //
+    // 2. Scene motion - the fluid advects the clouds, and the history holds
+    //    last frame's render of them. The velocity field (cells per iteration)
+    //    is sampled at this pixel's simulation coordinate, converted to uv per
+    //    rendered frame, then mapped into canvas uv through the same derivative
+    //    of the view transform. A stationary camera with a moving storm finally
+    //    blurs along the wind. The gather axis is the SUM of both paths, so a
+    //    panning camera over a storm streaks along the true trajectory.
+    //
+    // Twelve taps with a raised-cosine weighting approximate the shutter
+    // integral. History taps are clamped to the five-tap neighborhood of this
+    // pixel, which keeps the recursive feedback from dragging ghosts across the
+    // frame. Taps that fall outside the frame lose their weight; the blend is
+    // scaled by the covered fraction so edges are softened, never smeared.
     vec2 ndc = texCoord * 2.0 - 1.0;
     float sa = motionBlurAspects.x;
     float ca = motionBlurAspects.y;
+    float zoom = motionBlurView.z;
     vec2 flow = vec2(0.0);
     flow.x = (ndc.x / motionBlurPrevView.z - motionBlurPrevView.x) * 0.5 + 0.5
-           - ((ndc.x / motionBlurView.z - motionBlurView.x) * 0.5 + 0.5);
+           - ((ndc.x / zoom - motionBlurView.x) * 0.5 + 0.5);
     flow.y = ((ndc.y * sa / (motionBlurPrevView.z * ca) - motionBlurPrevView.y * sa) * 0.5 + 0.5)
-           - ((ndc.y * sa / (motionBlurView.z * ca) - motionBlurView.y * sa) * 0.5 + 0.5);
+           - ((ndc.y * sa / (zoom * ca) - motionBlurView.y * sa) * 0.5 + 0.5);
+
+    // Scene path: simulation coordinate of this canvas pixel (same inverse view
+    // transform the camera path uses), then velocity -> uv -> canvas uv.
+    vec2 simUV = vec2((ndc.x / zoom - motionBlurView.x) * 0.5 + 0.5,
+                      (ndc.y * sa / (zoom * ca) - motionBlurView.y * sa) * 0.5 + 0.5);
+    simUV.x = fract(simUV.x);              // the world mesh repeats horizontally
+    simUV.y = clamp(simUV.y, 0.0, 1.0);
+    vec2 velocity = texture(velocityTex, simUV).xy; // cells per iteration
+    vec2 uvPerFrame = velocity * motionBlurIterPerFrame / max(motionBlurResolution, vec2(1.0));
+    vec2 sceneFlow = 0.5 * zoom * vec2(uvPerFrame.x, uvPerFrame.y * ca / sa);
+    flow -= sceneFlow;                       // material came *from* upwind, not downwind
 
     float flowLength = length(flow);
     // A seam wrap (camera wraps horizontally) or an extreme view jump makes the
     // reprojection meaningless for one frame; skip rather than smear the world.
+    // A truly static frame produces a zero vector and is left untouched.
     if (flowLength <= 0.05 && flowLength > 0.0) {
       float strength = clamp(motionBlurStrength / 350.0, 0.0, 1.0);
       // The effect fades in with the motion instead of smearing a static image.
       float flowGate = smoothstep(0.0, 0.002, flowLength);
-      vec3 acc = safeSample(mappedColor(texCoord).rgb); // shutter start = this frame
-      for (int i = 1; i < 8; i++) {
-        float t = float(i) / 7.0;
-        vec2 tapUV = clamp(texCoord + flow * t, vec2(0.0), vec2(1.0));
+      const int TAPS = 12;
+      float weightSum = 0.0;
+      float coveredWeight = 0.0;
+      vec3 acc = vec3(0.0);
+      for (int i = 0; i < TAPS; i++) {
+        float t = float(i) / float(TAPS - 1);
+        // Raised-cosine: a uniform shutter box would be ideal, this just
+        // suppresses the banding a box leaves on hard edges.
+        float w = 0.7 + 0.3 * cos(2.0 * PI * (t - 0.5));
+        vec2 rawUV = texCoord + flow * t;
+        bool inBounds = rawUV.x >= 0.0 && rawUV.x <= 1.0 && rawUV.y >= 0.0 && rawUV.y <= 1.0;
+        vec2 tapUV = clamp(rawUV, vec2(0.0), vec2(1.0));
         vec3 currentTap = safeSample(mappedColor(tapUV).rgb);
-        vec3 historyTap = safeSample(texture(historyTex, tapUV).rgb);
-        acc += mix(currentTap, historyTap, 0.5);
+        vec3 historyTap = clamp(safeSample(texture(historyTex, tapUV).rgb), neighborhoodMin, neighborhoodMax);
+        acc += w * mix(currentTap, historyTap, 0.5);
+        weightSum += w;
+        coveredWeight += inBounds ? w : 0.0;
       }
-      vec3 blurred = acc * (1.0 / 8.0);
-      float blend = strength * flowGate;
+      vec3 blurred = acc / weightSum;
+      float coverage = weightSum > 0.0 ? coveredWeight / weightSum : 0.0;
+      float blend = strength * flowGate * coverage * coverage;
       outputCol = mix(outputCol, blurred, blend);
     }
   }

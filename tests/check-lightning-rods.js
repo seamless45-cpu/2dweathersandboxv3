@@ -233,12 +233,13 @@ const softHdrClamp = (value) => {
     const m = displayShader.match(new RegExp('const vec3 ' + name + ' = vec3\\(([^)]*)\\);'));
     return m ? m[1].split(',').map(Number) : null;
   };
-  const boltCol = vec3Const('lightningCol');
-
-  check('the channel is the original violet-white',
-    boltCol && Math.abs(boltCol[0] - 0.70) < 1e-6 && Math.abs(boltCol[1] - 0.57) < 1e-6 &&
-    Math.abs(boltCol[2] - 1.0) < 1e-6,
-    'lightningCol ' + JSON.stringify(boltCol));
+  // 2026-11-19: the channel now takes its tint from a Planckian blackbody at
+  // the variant's temperature (ordinary CG ~30,000 K with per-strike jitter),
+  // replacing the hand-picked violet-white; the artwork itself is unchanged.
+  check('the channel colour follows the stroke Kelvin temperature, not a hand pick',
+    /vec3 lightningCol = planckBlackbody\(30000\.0 \+ 5000\.0 \* \(random2d\(pos \* 7\.7 \+ 1\.31\) - 0\.5\)\);/.test(displayShader) &&
+    /pixVal \* lightningCol/.test(displayShader),
+    'lightningCol is the Planckian stroke tint');
   check('there is no cooling colour any more',
     !/lightningCoolingCol/.test(displayShader),
     'the fade to an ember went with the rest of the later look');
