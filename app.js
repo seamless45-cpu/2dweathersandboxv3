@@ -23,6 +23,14 @@ with this program. If not, see <https://www.gnu.org/licenses/>.
 })();
 
 /*
+ * Delays between the three extra attempts every file on the startup path gets.
+ * Module scope on purpose: loadSourceFile() is a hoisted function declaration
+ * inside mainScript that runs near the top of it, so a const declared next to
+ * the function would still be in its temporal dead zone at the first call.
+ */
+const LOAD_RETRY_DELAYS_MS = [300, 900, 2000];
+
+/*
  * The build this page was booted with, read once at parse time.
  */
 const APP_BUILD = (() => {
@@ -7053,8 +7061,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.52'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.52')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.53'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.53')
   ]);
 
   const [
@@ -8007,7 +8015,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.52');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.53');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -10120,10 +10128,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
    * cache all look the same from here — and used to abort the whole start
    * with an alert naming whichever file was unlucky. Three attempts with a
    * growing pause before giving up; only then does the caller see an error,
-   * now naming exactly which file it was.
+   * now naming exactly which file it was. The retry delays live at module
+   * scope (see LOAD_RETRY_DELAYS_MS above): this function is called from
+   * near the top of mainScript, before a const declared here would exist.
    */
-  const LOAD_RETRY_DELAYS_MS = [300, 900, 2000];
-
   async function loadSourceFile(fileName)
   {
     let lastError = null;
@@ -10167,7 +10175,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.52');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.53');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
