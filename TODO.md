@@ -74,6 +74,7 @@
 - [x] Display Solar and IR power in weather stations
 
 # November 19, 2026:
+- [x] "Sometimes crashes on load": shader, include and image loads now get three attempts with a growing pause (a flaky fetch or a service worker 504 used to abort the start with an alert naming whichever file was unlucky, and a failed image started the sim with zero-filled textures and no message); the sim now awaits the texture uploads instead of loading them in the background; loadData is a single-flight entry point (double Start clicks used to run two mainScript() in parallel and double the GPU request); and before starting, the page asks the service worker which build it serves - a tab open across a deploy was pairing old code with the new shaders, and it now offers a reload instead of a crash on load; the worker also refuses to serve a cached index.html whose buster does not match its own VERSION
 - [x] Motion blur reworked again: velocity-aware (the fluid velocity field is sampled per pixel and subtracted from the camera path), 12 raised-cosine taps, five-tap neighbourhood-clamped history, edge coverage fade, no ghost drag
 - [x] Every lightning variant now has a Kelvin temperature driving its arc colour (Planckian, Tanner Helland) and a per-variant lifetime (time-stretched train shared with the slot manager): ordinary CG / IC / +IC / CC / +CC / GC / crawler / external positive; superbolt and hyperbolt keep their fictional hues
 - [x] Branch counts are seeded per strike and differ by variant (CG 1-3, external positives by class, IC/+IC 0-2, -CC vs +CC, GC 3-5)

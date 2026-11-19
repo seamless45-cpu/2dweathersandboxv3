@@ -23,7 +23,7 @@
 
 'use strict';
 
-const VERSION = '2026-11-16.51';
+const VERSION = '2026-11-16.52';
 
 const APP_CACHE_PREFIX = 'weather-sandbox-';
 const SHELL_CACHE_PREFIX = APP_CACHE_PREFIX + 'shell-';
@@ -263,7 +263,7 @@ async function handleNavigation(event, request) {
   const key = cacheKey(INDEX_URL);
   const cached = await cache.match(key);
 
-  if (cached) {
+  if (cached && (await cachedShellMatches(cached))) {
     event.waitUntil(revalidate(cache, key, request));
     return cached;
   }
@@ -273,7 +273,29 @@ async function handleNavigation(event, request) {
     if (response.ok) event.waitUntil(cache.put(key, response.clone()));
     return response;
   } catch (error) {
-    return offlinePage();
+    // Offline with a mismatched cache: the cached document is the only one we
+    // have; serve it rather than nothing, it is still the most recent shell.
+    return cached || offlinePage();
+  }
+}
+
+/**
+ * The precache fetches every file fresh at install time, but if the origin or
+ * a CDN serves a stale index.html into that precache (deploy still in flight,
+ * or an edge that ignores cache directives), this worker would otherwise paint
+ * a perfectly good old page forever and pair it with this worker's code.
+ * The page's own ?v= buster is the whole version, so check it: a document
+ * whose buster is not this worker's VERSION does not get served — the network
+ * is asked for the current one instead (falling back to the cached document
+ * when there is no network).
+ */
+async function cachedShellMatches(cached) {
+  try {
+    const text = await cached.clone().text();
+    const match = text.match(/[?&]v=([A-Za-z0-9._-]+)/);
+    return !match || match[1] === VERSION;
+  } catch (error) {
+    return true; // unreadable entry: keep the cache-first behaviour
   }
 }
 
@@ -339,7 +361,17 @@ async function pruneMedia(cache) {
   for (let i = 0; i < excess; i++) await cache.delete(keys[i]);
 }
 
-// Lets the page force an update right after a new worker is found.
+// Lets the page force an update right after a new worker is found, and answer
+// which VERSION this worker serves — the page asks before committing to a
+// simulation start, so a tab that was open across a deploy reloads instead of
+ // mixing two builds in one session.
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+  if (event.data && event.data.type === 'PING_VERSION' && event.ports && event.ports[0]) {
+    try {
+      event.ports[0].postMessage({ version : VERSION });
+    } catch (error) {
+      // A closed port: the page is gone or does not want an answer.
+    }
+  }
 });

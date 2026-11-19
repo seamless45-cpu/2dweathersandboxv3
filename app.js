@@ -22,6 +22,51 @@ with this program. If not, see <https://www.gnu.org/licenses/>.
     console.info('2D Weather Sandbox - build ' + build);
 })();
 
+/*
+ * The build this page was booted with, read once at parse time.
+ */
+const APP_BUILD = (() => {
+  const script = document.currentScript;
+  const src = script && script.src ? script.src : '';
+  const match = src.match(/[?&]v=([^&]+)/);
+  return match ? match[1] : null;
+})();
+
+/*
+ * The service worker is allowed to take over a running page the moment it
+ * activates — that is the point of skipWaiting — and from then on every fetch
+ * on this page is answered by the *new* shell. If this page booted from code
+ * that is not the shell's code anymore, starting a simulation pairs old JS
+ * with new shaders and textures, which is one way an app "crashes on load"
+ * for no reason that shows up in the console of either version alone.
+ * Before committing to a start, ask the worker which build it is serving.
+ * Returns null when the page cannot tell (no service worker, slow worker,
+ * file://) — never blocks a start it cannot reason about.
+ */
+function checkShellVersion()
+{
+  if (!APP_BUILD)
+    return Promise.resolve(null);
+  const controller = typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller;
+  if (!controller)
+    return Promise.resolve(null);
+  return new Promise(resolve => {
+    const channel = new MessageChannel();
+    const timer = setTimeout(() => resolve(null), 250);
+    channel.port1.onmessage = event => {
+      clearTimeout(timer);
+      const version = event.data && event.data.version;
+      resolve(typeof version === 'string' ? version : null);
+    };
+    try {
+      controller.postMessage({type : 'PING_VERSION'}, [channel.port2]);
+    } catch (error) {
+      clearTimeout(timer);
+      resolve(null);
+    }
+  });
+}
+
 function updateSetupSliders()
 {
   let simResX = parseInt(simResSelX.value);
@@ -2076,8 +2121,66 @@ function updateLightningRodStatus()
   lightningRodStatus.placed = lightningRods.length + ' / ' + MAX_LIGHTNING_RODS + ' (' + lightningRodCaptures + ' hits)';
 }
 
+let simulationStartInProgress = false;
+
 async function loadData()
 {
+  // Every path out of this function is a user decision, and a double-click
+  // used to be one too: two clicks on Start (or on a save file whose picker
+  // fires twice) ran two mainScript() in parallel, doubling every GPU
+  // allocation and letting both runs fight over the same globals. One start
+  // at a time; the button is disabled while it runs.
+  if (simulationStartInProgress)
+    return;
+  simulationStartInProgress = true;
+  const startButton = document.querySelector('#startBtn .main-menu-submit');
+  if (startButton) {
+    startButton.disabled = true;
+    startButton.setAttribute('aria-busy', 'true');
+  }
+  // Last line of defense: startSimulationFromUserAction catches its own
+  // failures, but if one ever slips through it must surface as the same
+  // visible error — never as a silent, unhandled rejection.
+  try {
+    await startSimulationFromUserAction();
+  } catch (error) {
+    console.error('The simulation could not be initialized.', error);
+    loadingBar?.remove();
+    alert('The simulation could not be initialized: ' + (error instanceof Error ? error.message : String(error)));
+  } finally {
+    simulationStartInProgress = false;
+    if (startButton) {
+      startButton.disabled = false;
+      startButton.removeAttribute('aria-busy');
+    }
+  }
+}
+
+async function startSimulationFromUserAction()
+{
+  // If the service worker swapped shells in the background (a new deploy went
+  // live while this tab was open), starting now mixes this page's code with
+  // the new shaders and textures. Better to notice here than to crash on load.
+  const shellVersion = await checkShellVersion();
+  if (shellVersion && APP_BUILD && shellVersion !== APP_BUILD) {
+    let prompted = null;
+    try {
+      prompted = sessionStorage.getItem('shellReloadPrompted');
+    } catch (error) { /* storage disabled: prompt anyway */ }
+    if (prompted === shellVersion)
+      console.warn('The page is running build ' + APP_BUILD + ' but the service worker serves ' + shellVersion + '; starting anyway (already prompted).');
+    else {
+      try {
+        sessionStorage.setItem('shellReloadPrompted', shellVersion);
+      } catch (error) { /* storage disabled: prompt anyway */ }
+      if (window.confirm('A newer version of 2D Weather Sandbox installed in the background.\nReload to start it cleanly?')) {
+        location.reload();
+        return;
+      }
+      return; // do not half-start on mismatched code
+    }
+  }
+
   const fileInput = document.getElementById('fileInput');
   const file = fileInput.files[0];
 
@@ -2195,14 +2298,34 @@ async function loadData()
   }
 }
 
-function loadImage(url)
+function loadImageOnce(url)
 {
   return new Promise((resolve, reject) => {
     let img = new Image();
     img.onload = () => resolve(img);
-    img.onerror = reject;
+    img.onerror = () => reject(new Error('Image failed to load: ' + url));
     img.src = url;
   });
+}
+
+/*
+ * Images load over the network (or a flaky cache), and one dropped connection
+ * used to mean the simulation silently started with zero-filled textures.
+ * Give each image the same three attempts the shader loads get. Throws with
+ * the failing URL if every attempt fails.
+ */
+async function loadImage(url)
+{
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await loadImageOnce(url);
+    } catch (error) {
+      lastError = error;
+      await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)));
+    }
+  }
+  throw lastError;
 }
 
 class LoadingBar
@@ -3465,7 +3588,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       this.#panelDiv.style.bottom = 0;
       this.#panelDiv.style.right = 0;
       this.#panelDiv.style.left = 'auto';
-      this.loadImages();
+      this.loadImages().catch(error => console.error('Autopilot panel image could not be loaded.', error));
       this.genAutopilotBar(this.#panelDiv);
       this.#panelDiv.appendChild(this.#instrumentCanvas);
       body.appendChild(this.#panelDiv);
@@ -6864,7 +6987,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       // reload simulation
       if (initialRainDrops) { // if loaded from save file
         setupPrecipitationBuffers();
-        setupTextures();
+        setupTextures().catch(error => {
+          console.error('The textures could not be restored.', error);
+          alert('The simulation textures could not be restored: ' + (error instanceof Error ? error.message : String(error)));
+        });
         gl.bindVertexArray(fluidVao);
         // iterNum = 0;
         // frameNum = 0;
@@ -6927,8 +7053,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.51'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.51')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.52'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.52')
   ]);
 
   const [
@@ -7548,7 +7674,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lastSaveTime = new Date();
   }
 
-  setupTextures();
+  // Awaited: the image uploads used to happen in the background, so a failed
+  // image meant silent zero-filled textures (and an unhandled rejection)
+  // instead of an error the player could see.
+  await setupTextures();
 
   createAmbientLightFBOs();
   capeColumnFBO = new FBO(sim_res_x, 1, gl.RGBA32F, gl.RGBA, gl.FLOAT, gl.NEAREST);
@@ -7878,7 +8007,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.51');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.52');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9985,21 +10114,34 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
   }
 
+  /*
+   * A failed fetch is not always a broken deploy: a flaky connection, a CDN
+   * that blinks, or a service worker that could not find the file in its
+   * cache all look the same from here — and used to abort the whole start
+   * with an alert naming whichever file was unlucky. Three attempts with a
+   * growing pause before giving up; only then does the caller see an error,
+   * now naming exactly which file it was.
+   */
+  const LOAD_RETRY_DELAYS_MS = [300, 900, 2000];
+
   async function loadSourceFile(fileName)
   {
-    let response;
-    try {
-      response = await fetch(fileName);
-    } catch (error) {
-      await loadingBar.showError('ERROR loading shader files! If you just opened index.html, try again using a local server!');
-      throw error;
+    let lastError = null;
+    for (let attempt = 0; attempt <= LOAD_RETRY_DELAYS_MS.length; attempt++) {
+      try {
+        const response = await fetch(fileName);
+        if (response.status === 404)
+          throw new Error('File not found: ' + fileName);
+        if (!response.ok)
+          throw new Error('File loading error ' + response.status + ': ' + fileName);
+        return await response.text();
+      } catch (error) {
+        lastError = error;
+        if (attempt < LOAD_RETRY_DELAYS_MS.length)
+          await new Promise(resolve => setTimeout(resolve, LOAD_RETRY_DELAYS_MS[attempt]));
+      }
     }
-
-    if (response.status === 404)
-      throw new Error('File not found: ' + fileName);
-    if (!response.ok)
-      throw new Error('File loading error ' + response.status + ': ' + fileName);
-    return response.text();
+    throw lastError;
   }
 
   async function loadShader(nameIn)
@@ -10025,7 +10167,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.51');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.52');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
