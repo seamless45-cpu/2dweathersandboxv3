@@ -166,6 +166,11 @@ bool inLightningWorldTile()
   return texCoord.x >= 0.0 && texCoord.x < 1.0;
 }
 
+float extTriWave(float x)
+{
+  return 4.0 * abs(fract(x) - 0.5) - 1.0;
+}
+
 // Lightning variant world scales are fixed in kilometres at the 12 km reference
 // simulation height. Every constant written for that world has to be re-expressed
 // for the current sim height, or the variants scale linearly with the texture
@@ -173,6 +178,53 @@ bool inLightningWorldTile()
 float lightningHeightScale()
 {
   return (cellHeight * float(resolution.y) * 0.001) / 12.0;
+}
+
+// Fractal triangular-wave jag for a channel: the same octave family and weights
+// as the CC lightning (see ccFractalDisp), shared so every channel - CG bolts,
+// external positive CGs, ground-to-cloud leaders, anvil crawler tips - buckles
+// the same way instead of wiggling its own way. t is the travel parameter in
+// [0, 1], spanKm the channel length in kilometres, amp the lateral displacement
+// of the channel in world units (fraction of the sim height).
+float fractalLateralJag(float t, float spanKm, float seed, float amp)
+{
+  float norm = max(spanKm, 0.18 * lightningHeightScale());
+  float s = t * spanKm;
+  float f1 = 2.3 / norm, f2 = 6.1 / norm, f3 = 14.8 / norm;
+  return (0.58 * extTriWave(s * f1 + seed) +
+          0.28 * extTriWave(s * f2 + seed * 1.73 + 0.31) +
+          0.13 * extTriWave(s * f3 + seed * 2.91 + 0.67)) * amp;
+}
+
+// d(fractalLateralJag)/dt, used to propagate mip gradients through the warp.
+float fractalLateralJagDeriv(float t, float spanKm, float seed, float amp)
+{
+  float norm = max(spanKm, 0.18 * lightningHeightScale());
+  float s = t * spanKm;
+  float f1 = 2.3 / norm, f2 = 6.1 / norm, f3 = 14.8 / norm;
+  float d1 = s * f1 + seed;
+  float d2 = s * f2 + seed * 1.73 + 0.31;
+  float d3 = s * f3 + seed * 2.91 + 0.67;
+  float sgn1 = fract(d1) < 0.5 ? -1.0 : 1.0;
+  float sgn2 = fract(d2) < 0.5 ? -1.0 : 1.0;
+  float sgn3 = fract(d3) < 0.5 ? -1.0 : 1.0;
+  return (0.58 * f1 * sgn1 + 0.28 * f2 * sgn2 + 0.13 * f3 * sgn3) * spanKm * amp * 4.0;
+}
+
+// Tendril tortuosity for the flash network tiles (IC / +IC). Returns the uv
+// shift in tile units and its derivative with respect to the tile v coordinate
+// for mip gradients.
+vec2 flashLateralJag(float v, float seed)
+{
+  float f1 = 2.3, f2 = 6.1, f3 = 14.8;
+  float d1 = fract(v * f1 + seed) < 0.5 ? -1.0 : 1.0;
+  float d2 = fract(v * f2 + seed * 1.73 + 0.31) < 0.5 ? -1.0 : 1.0;
+  float d3 = fract(v * f3 + seed * 2.91 + 0.67) < 0.5 ? -1.0 : 1.0;
+  float shift = (0.52 * extTriWave(v * f1 + seed) +
+                 0.31 * extTriWave(v * f2 + seed * 1.73 + 0.31) +
+                 0.17 * extTriWave(v * f3 + seed * 2.91 + 0.67)) * 0.030;
+  float deriv = 4.0 * (0.52 * f1 * d1 + 0.31 * f2 * d2 + 0.17 * f3 * d3) * 0.030;
+  return vec2(shift, deriv);
 }
 
 // Preserve saturated channel radiance while suppressing low-coverage haze.
@@ -214,6 +266,23 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   float uShift = rodHit ? (lightningBottomU - 0.5) * pow(clamp(lightningTexCoord.y, 0.0, 1.0), 1.25) : 0.0;
   lightningTexCoord.x += 0.5 + uShift;                                                                                    // center lightning bolt
 
+  // Lateral tortuosity, the CC channel's own fractal applied to where the tile
+  // is SAMPLED (the artwork itself is untouched): the channel snakes in a bounded
+  // envelope anchored to the cloud attachment (t = 0) and the ground / rod tip
+  // (t = 1), so the strike stays glued but the middle of the channel jags like a
+  // natural channel. Angularity is deliberately small: it must never read as a
+  // second channel or a tangle, just a rougher single line.
+  float boltHScale = lightningHeightScale();
+  float boltSpanKm = spanY * cellHeight * float(resolution.y) * 0.001;
+  float boltSeed = random2d(vec2(pos.x * 12.9, pos.y * 7.1)) * 4.0 + 0.5;
+  float boltJagAmp = 0.010 * boltHScale; // ~120 m of lateral meander at 12 km
+  float boltT = clamp(lightningTexCoord.y, 0.0, 1.0);
+  float boltEnv = sin(PI * boltT);
+  float boltJag = boltEnv * fractalLateralJag(boltT, boltSpanKm, boltSeed, boltJagAmp);
+  float boltJagDeriv = cos(PI * boltT) * PI * fractalLateralJag(boltT, boltSpanKm, boltSeed, boltJagAmp)
+                     + boltEnv * fractalLateralJagDeriv(boltT, boltSpanKm, boltSeed, boltJagAmp);
+  lightningTexCoord.x += boltJag / (lightningTexAspect * spanY);
+
   if (lightningTexCoord.x < 0.01 || lightningTexCoord.x > 1.01 || lightningTexCoord.y < 0.01 || lightningTexCoord.y > 1.01) // prevent edge effect when mipmapping
     return vec3(0);
 
@@ -221,10 +290,11 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   // Include the rod-tip shear so mip selection tracks the actual projected tile.
   float shear = rodHit && lightningTexCoord.y > 0.0 && lightningTexCoord.y < 1.0
     ? (lightningBottomU - 0.5) * 1.25 * pow(lightningTexCoord.y, 0.25) : 0.0;
+  float boltJagDerivU = boltJagDeriv / (lightningTexAspect * spanY); // uv x shift per tile v
   vec2 gradX = vec2(screenTexDx.x * scaleMult * aspectRatios[0] / lightningTexAspect
-                    - shear * screenTexDx.y * scaleMult, -screenTexDx.y * scaleMult);
+                    - shear * screenTexDx.y * scaleMult + boltJagDerivU * (-screenTexDx.y * scaleMult), -screenTexDx.y * scaleMult);
   vec2 gradY = vec2(screenTexDy.x * scaleMult * aspectRatios[0] / lightningTexAspect
-                    - shear * screenTexDy.y * scaleMult, -screenTexDy.y * scaleMult);
+                    - shear * screenTexDy.y * scaleMult + boltJagDerivU * (-screenTexDy.y * scaleMult), -screenTexDy.y * scaleMult);
   float pixVal = textureGrad(lightningTex, lightningTexCoord, gradX, gradY).r;
 
   const float mainBoltBrightness = 100000.; // 100000.
@@ -280,11 +350,20 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
   vec2 flashCoord = vec2(0.5 + flashDir * (texCoord.x - pos.x) / flashSpan.x,
                          0.5 + flashFlip * (texCoord.y - pos.y) / flashSpan.y);
 
+  // Same CC-tortuosity treatment, weaker and applied to the artwork sampling:
+  // the tendrils wander through a bounded fractal instead of following the
+  // artwork's baked arcs exactly.
+  float flashSeed = random2d(vec2(pos.x * 8.3, pos.y * 4.7)) * 4.0 + 0.5;
+  vec2 flashJag = flashLateralJag(clamp(flashCoord.y, 0.0, 1.0), flashSeed);
+  flashCoord.x += flashJag.x;
+
   if (flashCoord.x < 0.004 || flashCoord.x > 0.996 || flashCoord.y < 0.004 || flashCoord.y > 0.996)
     return vec3(0);
 
-  vec2 gradX = vec2(flashDir * screenTexDx.x / flashSpan.x, flashFlip * screenTexDx.y / flashSpan.y);
-  vec2 gradY = vec2(flashDir * screenTexDy.x / flashSpan.x, flashFlip * screenTexDy.y / flashSpan.y);
+  vec2 gradX = vec2(flashDir * screenTexDx.x / flashSpan.x + flashJag.y * flashFlip * screenTexDx.y / flashSpan.y,
+                    flashFlip * screenTexDx.y / flashSpan.y);
+  vec2 gradY = vec2(flashDir * screenTexDy.x / flashSpan.x + flashJag.y * flashFlip * screenTexDy.y / flashSpan.y,
+                    flashFlip * screenTexDy.y / flashSpan.y);
   float pixVal = textureGrad(lightningNetworkTex, flashCoord, gradX, gradY).r;
 
   const float brightnessThreshold = flashThreshold;
@@ -321,11 +400,20 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
   vec2 flashCoord = vec2(0.5 + flashDir * (texCoord.x - pos.x) / flashSpan.x,
                          0.5 + flashFlip * (texCoord.y - pos.y) / flashSpan.y);
 
+  // Same CC-tortuosity treatment, weaker and applied to the artwork sampling:
+  // the tendrils wander through a bounded fractal instead of following the
+  // artwork's baked arcs exactly.
+  float flashSeed = random2d(vec2(pos.x * 8.3, pos.y * 4.7)) * 4.0 + 0.5;
+  vec2 flashJag = flashLateralJag(clamp(flashCoord.y, 0.0, 1.0), flashSeed);
+  flashCoord.x += flashJag.x;
+
   if (flashCoord.x < 0.004 || flashCoord.x > 0.996 || flashCoord.y < 0.004 || flashCoord.y > 0.996)
     return vec3(0);
 
-  vec2 gradX = vec2(flashDir * screenTexDx.x / flashSpan.x, flashFlip * screenTexDx.y / flashSpan.y);
-  vec2 gradY = vec2(flashDir * screenTexDy.x / flashSpan.x, flashFlip * screenTexDy.y / flashSpan.y);
+  vec2 gradX = vec2(flashDir * screenTexDx.x / flashSpan.x + flashJag.y * flashFlip * screenTexDx.y / flashSpan.y,
+                    flashFlip * screenTexDx.y / flashSpan.y);
+  vec2 gradY = vec2(flashDir * screenTexDy.x / flashSpan.x + flashJag.y * flashFlip * screenTexDy.y / flashSpan.y,
+                    flashFlip * screenTexDy.y / flashSpan.y);
   float pixVal = textureGrad(lightningNetworkTex, flashCoord, gradX, gradY).r;
 
   const float brightnessThreshold = flashThreshold;
@@ -336,11 +424,6 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
 
   const vec3 positiveIcCol = vec3(1.0, 0.88, 0.80);
   return max(pixVal * positiveIcCol, vec3(0));
-}
-
-float extTriWave(float x)
-{
-  return 4.0 * abs(fract(x) - 0.5) - 1.0;
 }
 
 vec2 evalExtArc(float t, float Hw, float V)
@@ -414,10 +497,10 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   float dPerp = dot(target - c, normDir);
   float seed = random2d(vec2(originX * 19.3, groundPos.y * 23.7)) * 4.0 + 0.5;
   float jagScale = clamp(min(abs(Hw), V) * 0.14, 0.025 * hScale, 0.055 * hScale);
-  float jagEnv = sin(PI * t);
-  float jag = (0.65 * extTriWave(t * 3.8 + seed) +
-               0.32 * extTriWave(t * 9.3 + seed * 1.9) +
-               0.14 * extTriWave(t * 21.0 + seed * 3.1)) * jagScale * jagEnv;
+  // CC-family fractal displacement, anchored at the cloud and ground ends, so
+  // the arc buckles the same way as the cloud-to-cloud channel instead of a
+  // smooth bend with frayed edges.
+  float jag = fractalLateralJag(t, V * cellHeight * float(resolution.y) * 0.001, seed, jagScale) * sin(PI * t);
   dPerp += jag;
 
   float scaleLen = max(V, 0.25 * hScale);
@@ -731,8 +814,9 @@ vec2 gcSpinePoint(float t, float span, float lean, float phase)
   t = clamp(t, 0.0, 1.0);
   float env = sin(PI * t);
   float x = lean * t +
-            env * (0.115 * sin(3.15 * t + phase) +
-                   0.052 * sin(8.4 * t + phase * 1.73) +
+            env * (0.068 * extTriWave(2.3 * t + phase) +
+                   0.045 * extTriWave(5.4 * t + phase * 1.73 + 0.31) +
+                   0.030 * extTriWave(9.6 * t + phase * 1.27) +
                    0.026 * extTriWave(11.0 * t + phase * 0.61));
   // A high-frequency triangular octave gives the channel broad knees rather
   // than a smooth Bezier lean. The pinned envelope keeps both anchors exact.
@@ -900,9 +984,9 @@ vec2 crawlerLeaderPoint(vec2 root, float side, float lengthKm, float along,
   along = clamp(along, 0.0, 1.0);
   float envelope = sin(PI * along);
   float y = (drift + lift) * along - droop * along * along +
-            envelope * (0.22 * sin(4.8 * along + phase) +
-                        0.17 * extTriWave(6.0 * along + phase * 0.63) +
-                        0.060 * extTriWave(12.5 * along + phase * 1.71));
+            envelope * (0.170 * extTriWave(3.6 * along + phase) +
+                        0.105 * extTriWave(9.2 * along + phase * 0.63 + 0.31) +
+                        0.060 * extTriWave(17.4 * along + phase * 1.71));
   return root + vec2(side * lengthKm * along, y);
 }
 

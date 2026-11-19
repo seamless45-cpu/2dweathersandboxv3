@@ -74,6 +74,7 @@
 - [x] Display Solar and IR power in weather stations
 
 # November 18, 2026:
+- [x] All lightning channels (CG bolt, external positive CG incl. superbolt / hyperbolt, IC / +IC networks, GC leader, anvil crawler) now bend with the CC channel's fractal triangular-wave family; bounded amplitudes so no channel breaks into noise; bolt and network artwork untouched - the bend lives in how they are sampled
 - [x] Reworked motion blur: shutter integral along the reprojected camera motion vector (8 taps, zoom- and shake-aware reprojection, static camera untouched); no longer a static cross-blur, no longer killed by camera moves
 - [x] Fixed lightning variant scale-invariance: every world-unit constant re-expressed via lightningHeightScale() so IC/+IC networks, external CG jags, CC branches and strike lobes keep their kilometre size when horizontal/vertical resolution or simulation height change
 - [x] Hyperbolt positive lightning: superbolt-class (meta.w integer 2), 720,000 K deeper blue, 30x superbolt brightness, 0.3 s lifetime, camera shake intensity 90 for 2.5 s, nested halved roll under the 7.2% external positive CG superbolt gate (~3.6%), 2.5x thunder, selectable as Artificial Lightning variant index 12; 80 TW / 120 GA nominal figures are fiction and not modelled
