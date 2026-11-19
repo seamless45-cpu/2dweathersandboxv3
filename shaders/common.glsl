@@ -262,6 +262,41 @@ float lightningFlickers(vec4 strike)
   return floor(map_range(r, 0., 1., 1.0, max(strike[INTENSITY] - 0.5, 0.) * 2.0));
 }
 
+// How long a strike's own discharge lasts, as a multiple of the ordinary
+// return-stroke lifetime. Intra-cloud flashes are over sooner (their leaders
+// re-fire quickly and the light dies fast), ordinary return strokes sit in the
+// middle, external positives last a bit less, and +CC is the long one. Both
+// the slot manager and the display pass use this, so a strike is held exactly
+// as long as it can be seen.
+float lightningLifetimeScale(vec4 strike)
+{
+  float i = strike[INTENSITY];
+  if (i <= LIGHTNING_IC_MAX_INTENSITY)
+    return 0.72; // intra-cloud: a shorter, brighter flicker train
+  if (i > 5.45)
+    return 1.25; // +CC: the long single discharge
+  if (i > 4.5)
+    return 0.85; // external positive CG
+  return 1.0;    // ordinary CG stroke
+}
+
+// The restrike spacing for a particular strike. It is drawn from the same hash
+// for every consumer, so the slot manager and the display agree, and it now
+// depends on the strike class: intra-cloud re-fires come quickly, +CC spaces
+// them far apart, external positives sit between.
+float lightningRepeatPeriod(vec4 strike)
+{
+  float r = map_range(random2d(strike.xy), 0., 1., 1.5, 3.0);
+  float i = strike[INTENSITY];
+  if (i <= LIGHTNING_IC_MAX_INTENSITY)
+    return map_range(random2d(strike.xy), 0., 1., 1.1, 2.0);
+  if (i > 5.45)
+    return map_range(random2d(strike.xy), 0., 1., 2.2, 3.6);
+  if (i > 4.5)
+    return map_range(random2d(strike.xy), 0., 1., 1.3, 2.4);
+  return r;
+}
+
 // When a strike's animation ends, in simulation iterations, worked out from the
 // strike's own slot data.
 //
@@ -289,10 +324,10 @@ float strikeAnimEnd(vec4 strike)
   if (start <= 0.0)
     return 0.0; // an empty slot
 
-  float repeatPeriod = map_range(random2d(strike.xy), 0., 1., 1.5, 3.0);
+  float repeatPeriod = lightningRepeatPeriod(strike);
   float numFlashes = lightningFlickers(strike);
 
-  return start + 5.0 * (repeatPeriod * numFlashes + 2.924);
+  return start + 5.0 * (repeatPeriod * numFlashes + 2.924) * lightningLifetimeScale(strike);
 }
 
 // Artificial (manually triggered) strikes store their meta.z with an offset of

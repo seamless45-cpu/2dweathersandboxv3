@@ -50,12 +50,14 @@ uniform float aboveZeroThreshold; // 1.0
 uniform float subZeroThreshold;   // 0.0
 uniform float spawnChanceMult;    //
 uniform float snowDensity;        // 0.2 - 0.5
-uniform float fallSpeed;          // 0.0003
+uniform float fallSpeed;          // multiplier on drag-limited terminal velocity (1.0 = physical)
 uniform float growthRate0C;       // 0.0005
 uniform float growthRate_30C;     // 0.01
 uniform float freezingRate;       // 0.0002
 uniform float meltingRate;        // 0.0015
 uniform float evapRate;           // 0.0005
+uniform float simHeightM;           // simulation column height in meters
+uniform float secondsPerIteration;  // 0.288 s per simulation iteration
 
 #include "common.glsl"
 
@@ -323,16 +325,35 @@ void main()
       // Update position
       // move with air    * 2. because droplet position goes from -1. to 1
       newPos += base.xy / resolution * 2.;
-      newPos.y -= fallSpeed * newDensity * sqrt(totalMass / surfaceArea); // fall speed relative to air
-      /*
-       // falling at fixed speed:
-      float cellHeight = texelSize.y * 12000.0; // in meters
-      float realSecPerIter = 0.288;
-      float metersPerSec = 6.0;
-      float cellsPerSec = metersPerSec / cellHeight;
-      float cellsPerIter = cellsPerSec * realSecPerIter;
-      newPos.y -= cellsPerIter * 2. * texelSize.y;
-      */
+
+      // Drag-limited terminal velocity. The chosen mass unit is 6.5e-5 kg, so a
+      // 1.0-mass droplet is a ~5 mm drop. Equilibrium between gravity and the
+      // quadratic (high-Reynolds, Clift-Gauvin) drag on the projected sphere
+      // gives the fall speed; a low-density snowflake the same volume of air
+      // has far more area relative to its mass and falls slowly, while a big
+      // raindrop falls at ~6-9 m/s. Air density thins with altitude (exponential
+      // atmosphere, scale height ~8.4 km) so drops accelerate slightly as they
+      // fall through the column. Reynolds number is iterated three times from a
+      // typical raindrop seed.
+      const float pi = 3.141592653589793;
+      float dropDensity = 1000.0 * clamp(newDensity, 0.05, 4.0);   // kg/m^3: rain/ice 1000, snow slider-scaled
+      const float massUnitKg = 6.5e-5;                             // kg per mass unit
+      float massKg = totalMass * massUnitKg;
+      float diameter = pow(6.0 * massKg / (pi * dropDensity), 1.0 / 3.0);
+      float altitudeM = clamp(newPos.y * 0.5 + 0.5, 0.0, 1.0) * simHeightM;
+      float rhoAir = 1.225 * exp(-altitudeM / 8434.0);             // kg/m^3
+      const float muAir = 1.81e-5;                                 // Pa s, dynamic viscosity
+      const float gAccel = 9.81;
+      float projectedArea = pi * 0.25 * diameter * diameter;
+      float terminalVel = 6.0;                                     // m/s seed: typical raindrop
+      for (int dragIter = 0; dragIter < 3; dragIter++) {
+        float re = max(rhoAir * terminalVel * diameter / muAir, 1e-3);
+        float cd = 24.0 / re * (1.0 + 0.15 * pow(re, 0.687)) + 0.42 / (1.0 + 42500.0 / pow(re, 1.16));
+        terminalVel = sqrt(2.0 * massKg * gAccel / max(rhoAir * cd * projectedArea, 1e-12));
+      }
+      terminalVel = clamp(terminalVel * fallSpeed, 0.05, 40.0);
+      // m/s to normalized clip units per iteration (full height = 2 * simHeightM)
+      newPos.y -= terminalVel * secondsPerIteration / simHeightM * 2.0;
 
       newPos.x = mod(newPos.x + 1., 2.) - 1.; // wrap horizontal position around map edges
 

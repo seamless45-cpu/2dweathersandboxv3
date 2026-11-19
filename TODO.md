@@ -73,7 +73,12 @@
 - [x] Make heating of sloped surfaces accurate
 - [x] Display Solar and IR power in weather stations
 
-# November 18, 2026:
+# November 19, 2026:
+- [x] Motion blur reworked again: velocity-aware (the fluid velocity field is sampled per pixel and subtracted from the camera path), 12 raised-cosine taps, five-tap neighbourhood-clamped history, edge coverage fade, no ghost drag
+- [x] Every lightning variant now has a Kelvin temperature driving its arc colour (Planckian, Tanner Helland) and a per-variant lifetime (time-stretched train shared with the slot manager): ordinary CG / IC / +IC / CC / +CC / GC / crawler / external positive; superbolt and hyperbolt keep their fictional hues
+- [x] Branch counts are seeded per strike and differ by variant (CG 1-3, external positives by class, IC/+IC 0-2, -CC vs +CC, GC 3-5)
+- [x] Red sprites (carrot head + 5-8 seeded tendrils + NT+ cap, stepped onset), blue jets (climbing V-fan + starter flash, ~40 km cap) and elves (thin expanding 1/r-dimmed ring) reworked on the physical picture
+- [x] Precipitation falls at drag-limited terminal velocity (Clift-Gauvin sphere, exponential atmosphere, 65 mg mass unit); Fall Speed slider is now a 0.4-2.0 multiplier
 - [x] All lightning channels (CG bolt, external positive CG incl. superbolt / hyperbolt, IC / +IC networks, GC leader, anvil crawler) now bend with the CC channel's fractal triangular-wave family; bounded amplitudes so no channel breaks into noise; bolt and network artwork untouched - the bend lives in how they are sampled
 - [x] Reworked motion blur: shutter integral along the reprojected camera motion vector (8 taps, zoom- and shake-aware reprojection, static camera untouched); no longer a static cross-blur, no longer killed by camera moves
 - [x] Fixed lightning variant scale-invariance: every world-unit constant re-expressed via lightningHeightScale() so IC/+IC networks, external CG jags, CC branches and strike lobes keep their kilometre size when horizontal/vertical resolution or simulation height change

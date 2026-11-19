@@ -102,15 +102,15 @@ check('displayCloudToCloudLightning keeps +CC 50% brighter (1.5x) and avoids fwi
 check('reworked CC renders procedural fractal-displaced cubic spline with slope-corrected dendritic branches',
   (() => {
     const ccBody = displayShader.slice(
-      displayShader.indexOf('vec2 ccFractalDisp('),
+      displayShader.indexOf('vec3 displayCloudToCloudLightning('),
       displayShader.indexOf('float saturate')
     );
     return /vec2 evalCcCubic\(/.test(displayShader) &&
-      /vec2 ccFractalDisp\(/.test(ccBody) &&
-      /vec2 ccEvalBranch\(/.test(ccBody) &&
+      /vec2 ccFractalDisp\(/.test(displayShader) &&   // shared helpers, hoisted for the CG/IC/arc leaders too
+      /vec2 ccEvalBranch\(/.test(displayShader) &&
       /inversesqrt\(1\.0 \+ clamp\(spineSlope \* spineSlope, 0\.0, 6\.25\)\)/.test(ccBody) &&
       !/texture\w*\(\s*lightningTex/.test(ccBody) &&
-      /isPositiveCC && \(b == 0 \|\| b == 3\)/.test(ccBody) &&
+      /branchMax = isPositiveCC \? \(1\.0 \+ floor\(branchBudget \* 2\.0\)\)/.test(ccBody) &&
       /!isPositiveCC && \(b == 1 \|\| b == 2\)/.test(ccBody) &&
       /ccMidDist/.test(displayShader);
   })(),
