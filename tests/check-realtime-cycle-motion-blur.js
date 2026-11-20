@@ -165,7 +165,7 @@ check('app.js uploads the motion blur uniforms (velocity + resolution + iteratio
   /gl\.uniform3f\(getUniformLoc\(postProcessingProgram, 'motionBlurView'\), renderViewX, renderViewY, cam\.curZoom\);/.test(appSource) &&
   /gl\.uniform3f\(getUniformLoc\(postProcessingProgram, 'motionBlurPrevView'\), mbPrev\[0\], mbPrev\[1\], mbPrev\[2\]\);/.test(appSource) &&
   /gl\.uniform2f\(getUniformLoc\(postProcessingProgram, 'motionBlurAspects'\), sim_aspect, canvas_aspect\);/.test(appSource) &&
-  /if \(\(guiControls\.temporalAAEnabled \|\| guiControls\.motionBlurEnabled\) && !SETUP_MODE\) \{/.test(appSource) &&
+  /if \(\(guiControls\.temporalAAEnabled \|\| guiControls\.motionBlurEnabled\) && !SETUP_MODE && temporalHistoryTexture\) \{/.test(appSource) &&
   /temporalHistoryValid = guiControls\.temporalAAEnabled;\s*\n\s*motionBlurHistoryValid = guiControls\.motionBlurEnabled;\s*\n\s*motionBlurPreviousView = \[renderViewX, renderViewY, cam\.curZoom\];/.test(appSource));
 
 check('the history view is snapshotted after the copy and dropped when the effect idles',
