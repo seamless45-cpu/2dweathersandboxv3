@@ -2,7 +2,8 @@
 //
 // Spec (2026-11-18): 720,000 K; a nominal 80 terrawatts and 120 gigaamps
 // (both figures fictional - the current and amps are not modelled); 0.3 s
-// lifetime; camera shake intensity 90 / duration 2.5 s; half as rare as an
+// lifetime; camera shake intensity 450 / duration 12.5 s (5x the original
+// 90 / 2.5 s, decay scaled to match); half as rare as an
 // ordinary superbolt (0.072 * 0.5 = 0.036). A hyperbolt is superbolt-class:
 // every consumer that only checks integer meta.w >= 0.5 treats it as a
 // superbolt; the 1.5 threshold separates the two classes.
@@ -135,11 +136,16 @@ check('artificial Hyperbolt variant (index 12, 720,000 K positive CG) dispatches
 
 /* ------------------------------------------------------------- camera shake */
 
-check('hyperbolt camera shake: intensity 90 (0.090 view height at 40 Hz), 2.5 s duration',
+check('hyperbolt camera shake: intensity 450 (0.450 view height at 40 Hz), 12.5 s duration, decay scaled 1/5',
   /const HYPERBOLT_SHAKE_HZ = 40\.0;/.test(appSource) &&
-  /const HYPERBOLT_SHAKE_DURATION_MS = 2500\.0;/.test(appSource) &&
-  /const HYPERBOLT_SHAKE_PEAK_AMP = 0\.090;/.test(appSource) &&
-  /const HYPERBOLT_SHAKE_DECAY_PER_SEC = 2\.2;/.test(appSource));
+  /const HYPERBOLT_SHAKE_DURATION_MS = 12500\.0;/.test(appSource) &&
+  /const HYPERBOLT_SHAKE_PEAK_AMP = 0\.450;/.test(appSource) &&
+  /const HYPERBOLT_SHAKE_DECAY_PER_SEC = 0\.44;/.test(appSource));
+
+check('camera shake has a master toggle in the Display folder (default on, checked before any shake math)',
+  /cameraShakeEnabled : true,/.test(appSource) &&
+  /display_folder\.add\(guiControls, 'cameraShakeEnabled'\)\.name\('Camera Shake'\);/.test(appSource) &&
+  /if \(!guiControls \|\| guiControls\.cameraShakeEnabled === false\) \{/.test(appSource));
 
 check('hyperbolt shake is triggered from the readback (even when sound is off) and never stacked on the superbolt shake',
   /if \(strikeClass >= 1\.5\) \{/.test(appSource) &&

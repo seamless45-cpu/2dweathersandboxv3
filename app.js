@@ -635,7 +635,12 @@ const guiControls_default = {
   auto_IterPerFrame : true,
   autoFpsTarget : '120',
   performancePreset : 'Extreme',
-  hdrQuality : '100%',
+  // HDR renders above native resolution by default so thin lightning
+  // channels (sub-pixel on screen) land on more than one render-target
+  // sample per pixel; the post pass downsamples it with LINEAR filtering,
+  // which for the integer 2x case is an exact 2x2 box filter. '200%' is
+  // available in the Performance folder for maximum sharpness.
+  hdrQuality : '150%',
   bloomQuality : '100%',
   bloomEnabled : true,
   filmicToneMapping : false,
@@ -646,6 +651,7 @@ const guiControls_default = {
   motionBlurIntensity : 100, // 0-350 (%); 100 = subtle trails, 350 = long-exposure smear
   superSharpDetail : false,
   fullscreenMode : false,
+  cameraShakeEnabled : true,
   showWeatherStations : true,
   shareWeatherDataToLan : false,
   sound : true,
@@ -5103,7 +5109,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     datGui = new dat.GUI();
     guiControls = { ...guiControls_default, ...JSON.parse(strGuiControls) }; // load settings object
-    const renderQualityScales = {'25%': 0.25, '35%': 0.35, '50%': 0.5, '60%': 0.6, '75%': 0.75, '85%': 0.85, '100%': 1.0};
+    const renderQualityScales = {'25%': 0.25, '35%': 0.35, '50%': 0.5, '60%': 0.6, '75%': 0.75, '85%': 0.85, '100%': 1.0, '150%': 1.5, '200%': 2.0};
     if (!Object.prototype.hasOwnProperty.call(renderQualityScales, guiControls.hdrQuality))
       guiControls.hdrQuality = '75%';
     if (!Object.prototype.hasOwnProperty.call(renderQualityScales, guiControls.bloomQuality))
@@ -5611,6 +5617,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     display_folder.add(guiControls, 'SmoothCam').onChange(function() { cam.smooth = guiControls.SmoothCam; }).name('Smooth Camera');
 
+    // Master camera-shake toggle (superbolt / hyperbolt shake).
+    display_folder.add(guiControls, 'cameraShakeEnabled').name('Camera Shake');
+
     fullscreenModeController = display_folder.add(guiControls, 'fullscreenMode')
       .name('Fullscreen Mode')
       .listen()
@@ -5647,7 +5656,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     const performanceFolder = datGui.addFolder('Performance');
     const performancePresets = {
       Extreme: {
-        hdrQuality: '100%',
+        hdrQuality: '150%',
         bloomQuality: '100%',
         bloomEnabled: true,
         filmicToneMapping: false,
@@ -5729,7 +5738,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       applyRenderQuality();
     }
 
-    const hdrQualityController = performanceFolder.add(guiControls, 'hdrQuality', ['25%', '35%', '50%', '60%', '75%', '85%', '100%'])
+    const hdrQualityController = performanceFolder.add(guiControls, 'hdrQuality', ['25%', '35%', '50%', '60%', '75%', '85%', '100%', '150%', '200%'])
       .name('HDR Render Scale')
       .onChange(markCustomRenderQuality);
     const bloomQualityController = performanceFolder.add(guiControls, 'bloomQuality', ['25%', '35%', '50%', '60%', '75%', '85%', '100%'])
@@ -6381,7 +6390,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     createBloomFBOs();
     createHdrFBO();
-    createTemporalHistoryTexture();
+    if (temporalHistoryTexture)
+      createTemporalHistoryTexture();
   }
 
   function isDocumentFullscreen()
@@ -7061,8 +7071,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.54'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.54')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.55'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.55')
   ]);
 
   const [
@@ -8015,7 +8025,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.54');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.55');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8113,7 +8123,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   createHdrFBO();
 
   createBloomFBOs();
-  createTemporalHistoryTexture();
+  // The TAA / motion-blur history costs one canvas-sized RGB8 texture;
+  // allocate it lazily - only when one of those effects is in use.
+  if (guiControls.temporalAAEnabled || guiControls.motionBlurEnabled)
+    createTemporalHistoryTexture();
 
   var texelSizeX = 1.0 / sim_res_x;
   var texelSizeY = 1.0 / sim_res_y;
@@ -8471,11 +8484,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const SUPERBOLT_SHAKE_DECAY_PER_SEC = 7.5;
   const SUPERBOLT_SHAKE_DURATION_MS = 650.0;
   const SUPERBOLT_SHAKE_PEAK_AMP = 0.024;
-  // A hyperbolt hits like a bomb: intensity 90 (0-100 scale), 2.5 s duration.
+  // A hyperbolt hits like a bomb: five times the original intensity and
+  // duration (450 on the 0-100 scale, 12.5 s), requested explicitly. The decay
+  // is the original 2.2/s scaled by the same factor so the envelope still dies
+  // out with the shake instead of going quiet halfway through it.
   const HYPERBOLT_SHAKE_HZ = 40.0;
-  const HYPERBOLT_SHAKE_DECAY_PER_SEC = 2.2; // decays to ~nothing by the end of 2.5 s
-  const HYPERBOLT_SHAKE_DURATION_MS = 2500.0;
-  const HYPERBOLT_SHAKE_PEAK_AMP = 0.090; // intensity 90 / 1000 of the view height
+  const HYPERBOLT_SHAKE_DECAY_PER_SEC = 0.44; // 2.2 / 5: decays to ~nothing by the end of 12.5 s
+  const HYPERBOLT_SHAKE_DURATION_MS = 12500.0;
+  const HYPERBOLT_SHAKE_PEAK_AMP = 0.450; // intensity 450 / 1000 of the view height
   const precipSampleValues = new Float32Array(4);
   const countedSlotStartIter = new Float64Array(numLightningSlots);
   const lightningDataValues = new Float32Array(numLightningSlots * 2 * 4);
@@ -8545,6 +8561,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   function getLightningShakeOffset(nowMs)
   {
+    // Master Camera Shake toggle (Display folder): when off, no shake is ever
+    // applied and any pending shake is forgotten, so it cannot flare back up
+    // the moment the toggle is flipped back on.
+    if (!guiControls || guiControls.cameraShakeEnabled === false) {
+      superboltShakeStartTimeMs = -1;
+      hyperboltShakeStartTimeMs = -1;
+      return { x : 0, y : 0 };
+    }
     const superbolt = getSuperboltShakeOffset(nowMs);
     const hyperbolt = getHyperboltShakeOffset(nowMs);
     return { x : superbolt.x + hyperbolt.x, y : superbolt.y + hyperbolt.y };
@@ -9469,13 +9493,16 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.disable(gl.BLEND);
       }
 
+      if ((guiControls.temporalAAEnabled || guiControls.motionBlurEnabled) && !temporalHistoryTexture)
+        createTemporalHistoryTexture();
       gl.useProgram(postProcessingProgram);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, bloomFBOs[0].texture);
       gl.activeTexture(gl.TEXTURE2);
-      gl.bindTexture(gl.TEXTURE_2D, temporalHistoryTexture);
+      if (temporalHistoryTexture)
+        gl.bindTexture(gl.TEXTURE_2D, temporalHistoryTexture);
       gl.activeTexture(gl.TEXTURE3);
       gl.bindTexture(gl.TEXTURE_2D, baseTexture_1); // fluid state: scene velocity for motion blur
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'velocityTex'), 3);
@@ -9489,7 +9516,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'motionBlurEnabled'), guiControls.motionBlurEnabled);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'motionBlurHistoryValid'), motionBlurHistoryValid);
       gl.uniform1f(getUniformLoc(postProcessingProgram, 'motionBlurStrength'), guiControls.motionBlurIntensity);
-      gl.uniform2f(getUniformLoc(postProcessingProgram, 'outputTexelSize'), 1.0 / canvas.width, 1.0 / canvas.height);
+      // Neighborhood clamp and FXAA must step by the *source* (HDR) texel,
+      // which is finer than one canvas pixel when HDR is supersampled.
+      gl.uniform2f(getUniformLoc(postProcessingProgram, 'outputTexelSize'), 1.0 / hdrFBO.width, 1.0 / hdrFBO.height);
       gl.uniform3f(getUniformLoc(postProcessingProgram, 'motionBlurView'), renderViewX, renderViewY, cam.curZoom);
       const mbPrev = motionBlurPreviousView || [renderViewX, renderViewY, cam.curZoom];
       gl.uniform3f(getUniformLoc(postProcessingProgram, 'motionBlurPrevView'), mbPrev[0], mbPrev[1], mbPrev[2]);
@@ -9501,13 +9530,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, null); // null is canvas
       gl.viewport(0, 0, canvas.width, canvas.height);
-      gl.clearColor(0.0, 0.0, 0.0, 1.0);        // background color
-      gl.clear(gl.COLOR_BUFFER_BIT);
+      // No clear here: the post pass writes every fragment of the fullscreen quad.
 
       gl.drawBuffers([ gl.BACK ]);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to canvas
 
-      if ((guiControls.temporalAAEnabled || guiControls.motionBlurEnabled) && !SETUP_MODE) {
+      if ((guiControls.temporalAAEnabled || guiControls.motionBlurEnabled) && !SETUP_MODE && temporalHistoryTexture) {
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, temporalHistoryTexture);
         gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, canvas.width, canvas.height);
@@ -10175,7 +10203,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.54');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.55');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
