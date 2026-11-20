@@ -530,8 +530,9 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
   pixVal = (1.0 - brightnessThreshold) * lightningCoverage(pixVal, brightnessThreshold);
   pixVal *= currentLightningIntensity;
 
-  // Intra-cloud leaders run a touch cooler, near 25,000 K.
-  vec3 lightningCol = planckBlackbody(25000.0 + 6000.0 * (random2d(vec2(pos.y * 3.9, pos.x * 7.3)) - 0.5));
+  // Every ordinary arc in the discharge runs near 30,000 K; each strike draws its
+  // own temperature inside a corridor so no two strokes share a hue exactly.
+  vec3 lightningCol = planckBlackbody(30000.0 + 5000.0 * (random2d(vec2(pos.y * 3.9, pos.x * 7.3)) - 0.5));
 
   vec3 outputColor = max(pixVal * lightningCol, vec3(0));
 
@@ -605,8 +606,9 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
   pixVal = (1.0 - brightnessThreshold) * lightningCoverage(pixVal, brightnessThreshold);
   pixVal *= currentLightningIntensity;
 
-  // Positive anvil leaders carry more charge density: hotter, near 35,000 K.
-  vec3 positiveIcCol = planckBlackbody(35000.0 + 6000.0 * (random2d(vec2(pos.y * 5.9, pos.x * 3.3)) - 0.5));
+  // Positive anvil leaders carry more charge density, but still discharge through the
+  // same ~30,000 K channel physics.
+  vec3 positiveIcCol = planckBlackbody(30000.0 + 5000.0 * (random2d(vec2(pos.y * 5.9, pos.x * 3.3)) - 0.5));
 
   vec3 positiveIcOut = max(pixVal * positiveIcCol, vec3(0));
 
@@ -914,7 +916,7 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
 
   const float ccBaseBrightness = 2600.;
   vec3 coreTint = vec3(1.0, 0.98, 1.0);
-  vec3 auraTint = planckBlackbody((isPositiveCC ? 38000.0 : 26000.0) +
+  vec3 auraTint = planckBlackbody(30000.0 +
                                   5000.0 * (random2d(vec2(targetPos.x * 3.1, originPos.y * 5.7)) - 0.5));
   vec3 ccCol = mix(auraTint, coreTint, clamp(mainCore * 0.85 + branchCore * 0.55, 0.0, 1.0));
   return max(totalSignal * ccCurve * ccBaseBrightness * ccCol, vec3(0.0));
@@ -1025,8 +1027,8 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
   float pixelKm = max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)),
                       length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * heightKm;
 
-  if (abs(p.x - lean * 0.5) > span * 0.66 + 2.1 || p.y < -0.55 || p.y > span * 1.18 + 1.0 ||
-      time < 0.0 || time > 2.35)
+  if (abs(p.x - lean * 0.5) > span * 0.66 + 5.3 || p.y < -0.9 || p.y > span * 1.18 + 1.0 ||
+      time < 0.0 || time > 2.45)
     return vec3(0.0);
 
   // The return stroke begins at cloud attachment and races toward the rod.
@@ -1034,6 +1036,12 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
   float returnFront = 1.0 - returnClock;
   float returnActive = 1.0 - smoothstep(0.91, 1.02, time);
   float strokeShock = exp(-pow((time - 0.91) / 0.075, 2.0)); // hot dart at the ground
+
+  // M-components: after the main return stroke, one or two discrete slower
+  // waves retrace the channel (cloud to rod) - the re-illumination seen in
+  // high-speed footage. Each wave carries far less charge than the return.
+  float mClockA = clamp((time - 1.16) / 0.30, 0.0, 1.0);
+  float mClockB = clamp((time - 1.52) / 0.26, 0.0, 1.0);
 
   float mainCore = 0.0;
   float mainHalo = 0.0;
@@ -1051,13 +1059,25 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
     float passed = smoothstep(returnFront - 0.10, returnFront + 0.08, t);
     float now = exp(-pow((t - returnFront) / 0.060, 2.0)) * returnClock * returnActive;
     float returnGain = returnClock * (0.42 + 1.05 * passed + 2.35 * now);
+    // The M-component waves sweep the same path the return stroke took.
+    float mGlow = 0.0;
+    if (mClockA > 0.0)
+      mGlow += exp(-pow((t - (1.0 - mClockA)) / 0.075, 2.0)) * (1.0 - smoothstep(0.82, 1.0, mClockA)) * 1.7;
+    if (mClockB > 0.0)
+      mGlow += exp(-pow((t - (1.0 - mClockB)) / 0.068, 2.0)) * (1.0 - smoothstep(0.78, 1.0, mClockB)) * 1.1;
+    float tailGain = returnGain + mGlow;
+    // A leader is stepped, not continuous: each burst lands with a slightly
+    // different brightness, so the advancing tree visibly detonates step by
+    // step instead of fading in smoothly.
+    float stepFlare = 0.74 + 0.52 * random2d(vec2(seed * 5.17, float(i) * 1.93) + 0.29);
     // Positive leaders are narrow at the advancing tip and thicker farther
-    // back. The hot return stroke fills the whole established channel.
+    // back. The hot return stroke and the M-components fill the whole
+    // established channel.
     float coreW = max(max(0.0032, pixelKm * 1.18) * mix(1.48, 0.72, t), 0.0016);
-    float segmentGain = (0.62 + returnGain) * mix(1.0, 0.78, t);
+    float segmentGain = (0.62 * stepFlare + tailGain) * mix(1.0, 0.78, t);
     mainCore += channelGlow(p, previous, end, coreW) * segmentGain;
-    mainHalo += channelGlow(p, previous, end, coreW * 3.8) * (0.115 + 0.24 * returnGain);
-    mainSheath += channelGlow(p, previous, end, coreW * 8.2) * (0.012 + 0.040 * returnGain);
+    mainHalo += channelGlow(p, previous, end, coreW * 3.8) * (0.125 + 0.26 * tailGain);
+    mainSheath += channelGlow(p, previous, end, coreW * 8.2) * (0.016 + 0.045 * tailGain);
     previous = current;
   }
 
@@ -1068,11 +1088,42 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
                    tipActive * (0.82 + 0.18 * sin(time * 24.0 + seed * 6.283));
   float tipCorona = exp(-tipDistance / 0.32) * tipActive * 0.22;
 
+  // Streamer fan: a cold leader drags a fan of faint streamers in front of the
+  // advancing tip - the visible glow ahead of the true plasma front. Six
+  // seeded strands splay along the direction of growth and fade with distance
+  // from the tip; they retreat as the front moves, so the fan leads the tree.
+  float streamerFan = 0.0;
+  if (tipActive > 0.01 && headT > 0.02 && headT < 0.995) {
+    vec2 ahead = gcSpinePoint(clamp(headT + 0.055, 0.0, 1.0), span, lean, phase) -
+                 gcSpinePoint(clamp(headT - 0.055, 0.0, 1.0), span, lean, phase);
+    vec2 growDir = length(ahead) > 1e-4 ? normalize(ahead) : vec2(0.0, 1.0);
+    vec2 growPerp = vec2(-growDir.y, growDir.x);
+    // Which way the leader is actually travelling along the world y axis.
+    float dirSign = growDir.y >= 0.0 ? 1.0 : -1.0;
+    for (int si = 0; si < 6; si++) {
+      float sfi = float(si);
+      float rA = random2d(vec2(seed * 11.3 + sfi * 1.71, seed * 5.7 + sfi * 2.33));
+      float rB = random2d(vec2(seed * 7.9 + sfi * 3.13, seed * 2.9 + sfi * 1.07));
+      float fanAngle = (sfi - 2.5) * 0.185 * dirSign + (rA - 0.5) * 0.16;
+      vec2 streamerDir = normalize(vec2(growPerp.x * sin(fanAngle) + growDir.x * cos(fanAngle),
+                                        growPerp.y * sin(fanAngle) + growDir.y * cos(fanAngle)));
+      float streamerLen = 0.32 + 0.30 * rB;
+      vec2 streamerVec = p - tip;
+      float along = dot(streamerVec, streamerDir);
+      if (along <= 0.0 || along > streamerLen)
+        continue;
+      float lateral = abs(dot(streamerVec, vec2(-streamerDir.y, streamerDir.x)));
+      float strand = exp(-pow(lateral / 0.016, 2.0)) * (1.0 - along / streamerLen);
+      streamerFan += strand * (0.30 + 0.42 * rA);
+    }
+    streamerFan *= tipActive * 0.62;
+  }
+
   float branchCore = 0.0;
   float branchSignal = 0.0;
   float branchBudget = random2d(vec2(seed * 7.7, s2 * 3.1) + 0.31);
-  int branchMax = 3 + int(floor(branchBudget * 2.999)); // 3-5 forks per strike
-  for (int fi = 0; fi < 5; fi++) {
+  int branchMax = 4 + int(floor(branchBudget * 2.999)); // 4-6 forks per strike
+  for (int fi = 0; fi < 6; fi++) {
     if (fi >= branchMax)
       break;
     float fIdx = float(fi);
@@ -1131,15 +1182,27 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
     }
   }
 
+  // Shock ring: the moment the return stroke dumps its charge into the rod, a
+  // radial ground-level streak tears outward along the surface in both
+  // directions. It lasts a fraction of a second and reads as a horizontal arc.
+  float shockClock = clamp((time - 0.88) / 0.34, 0.0, 1.0);
+  float shockRing = 0.0;
+  if (shockClock > 0.0 && p.y > -0.55 && p.y < 1.35) {
+    float shockRadius = 0.30 + shockClock * 4.8;
+    float shockBand = exp(-pow((abs(p.x) - shockRadius) / 0.40, 2.0)) *
+                      exp(-pow(p.y / 0.48, 2.0));
+    shockRing = shockBand * (1.0 - smoothstep(0.45, 1.0, shockClock)) * 2.35;
+  }
+
   float totalSignal = mainCore + 0.28 * mainHalo + 0.055 * mainSheath + tipFlare * 1.35 +
-                      tipCorona + branchCore + 0.42 * branchSignal;
+                      tipCorona + streamerFan + shockRing + branchCore + 0.42 * branchSignal;
   float pulse = 0.84 + 0.16 * sin(time * 17.0 + seed * 6.283);
   float strikeSurge = strokeShock * 1.45 + returnClock * 0.42;
   float coreHeat = clamp(tipFlare * 0.62 + strikeSurge + branchCore * 0.48, 0.0, 1.0);
-  // Positive upward leaders are the coolest of the family, near 20,000 K cold
-  // surge to ~24,000 K at the hot return stroke.
-  vec3 gcCol = mix(planckBlackbody(20000.0), planckBlackbody(24000.0), coreHeat);
-  float fade = 1.0 - smoothstep(1.34, 2.18, time);
+  // Positive upward leaders run cold near 23,000 K and snap to ~30,000 K at the
+  // hot return stroke, like every other ordinary arc.
+  vec3 gcCol = mix(planckBlackbody(23000.0), planckBlackbody(30000.0), coreHeat);
+  float fade = 1.0 - smoothstep(1.60, 2.34, time);
   return max(totalSignal * min(intensity, 26.0) * 238.0 * pulse * fade * gcCol,
              vec3(0.0));
 }
@@ -1234,7 +1297,7 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time, float parentIntensity)
   float rootGlow = exp(-length(p - parent) / 0.45) * parentPulse * 0.75 +
                    exp(-length(p - anvilEntry) / 0.55) * parentPulse * (0.35 + 0.35 * rise);
   glow += rootGlow;
-  hotCore += rootGlow * 0.30;
+  hotCore += rootGlow * 0.42;
 
   // Four anvil leaders: two per side. The first of each pair is long and the
   // second is shorter, lower and more easily swallowed by a ragged deck.
@@ -1252,6 +1315,11 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time, float parentIntensity)
     float phaseShift = random2d(vec2(laneSeed, 6.1)) * 6.283;
     float delay = 0.34 + rank * 0.15 + (side > 0.0 ? 0.055 : 0.0);
     float raw = clamp((time - delay) / 1.16, 0.0, 1.0);
+    // After the front is established, a hot dart re-runs root-to-tip along the
+    // lane; the established tree snaps bright as it passes. This is the
+    // crawler's "restrike" - the reason an anvil sheet can flash white.
+    float dartClock = clamp((time - (delay + 1.04)) / 0.34, 0.0, 1.0);
+    float dartLive = (dartClock > 0.0 && dartClock < 1.0) ? 1.0 : 0.0;
     const float nodeCount = 11.0;
     float phaseClock = raw * nodeCount;
     // Stop-start leader extension: short bursts with brief pauses, exactly the
@@ -1281,9 +1349,36 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time, float parentIntensity)
       vec2 end = mix(previous, next, growth);
       float width = max(max(0.0032, pixelKm * 1.12) * mix(1.42, 0.76, along), 0.0016);
       float leaderGain = laneGain * (0.72 + 0.28 * (1.0 - along)) * (0.68 + 0.32 * parentPulse) * leaderLive;
+      float dartGain = dartLive * exp(-pow((along - dartClock) / 0.055, 2.0)) *
+                       (1.0 - smoothstep(0.86, 1.0, dartClock)) * 2.6;
       glow += channelGlow(p, previous, end, width) * leaderGain;
       glow += channelGlow(p, previous, end, width * 4.0) * leaderGain * 0.13;
+      glow += channelGlow(p, previous, end, width) * dartGain * leaderLive;
+      glow += channelGlow(p, previous, end, width * 3.2) * dartGain * leaderLive * 0.35;
       hotCore += channelGlow(p, previous, end, width * 1.55) * leaderGain * 0.30;
+      hotCore += channelGlow(p, previous, end, width * 1.35) * dartGain * leaderLive * 0.60;
+
+      // Stubbled roots: the two nodes nearest the parent sprout short
+      // backward-drooping stubs - the scar tissue of a leader that burned
+      // sideways into the hydrometeor deck before finding the anvil.
+      if (i <= 2) {
+        float stubStep = clamp((headStep * nodeCount - (k - 1.0)) / 2.2, 0.0, 1.0);
+        if (stubStep > 0.0) {
+          for (int stub = 0; stub < 2; stub++) {
+            float rS = random2d(vec2(laneSeed + float(stub) * 5.7 + k * 1.3, k * 3.1 + float(stub) * 7.9));
+            float stubAngle = mix(0.85, 1.35, rS) * (stub == 0 ? 1.0 : -1.0);
+            vec2 stubDir = normalize(vec2(side * cos(stubAngle), -(0.35 + 0.75 * rS)));
+            float stubLen = 0.55 + 0.85 * rS;
+            vec2 stubSignal = ccEvalBranch(p, end, stubDir, stubLen * stubStep,
+                                           side * 0.30,
+                                           laneSeed + k * 2.9 + float(stub) * 7.1,
+                                           max(max(0.0011, pixelKm * 0.55), 0.00065),
+                                           laneGain * 0.52 * leaderLive, pixelKm);
+            glow += stubSignal.y * 0.55;
+            hotCore += stubSignal.x * 0.30;
+          }
+        }
+      }
 
       // Dendritic fingers grow only behind the established front, in upper and
       // lower pairs, so each burst expands the margin rather than spraying ahead.
@@ -1345,14 +1440,80 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time, float parentIntensity)
   float fade = 1.0 - smoothstep(1.74, 2.42, time);
   float pulse = 0.84 + 0.16 * sin(time * 14.0 + seed * 6.283);
   float heat = clamp(hotCore + parentPulse * 0.22, 0.0, 1.0);
-  // Anvil crawler leaders, similar cold regime: ~21,000 K base to ~27,000 K at
-  // the hot parent junction.
-  vec3 crawlerCol = mix(planckBlackbody(21000.0), planckBlackbody(27000.0), heat);
+  // Anvil crawler leaders: ~23,500 K in the cold deck, snapping to the common
+  // ~30,000 K at the hot parent junction like every other ordinary arc.
+  vec3 crawlerCol = mix(planckBlackbody(23500.0), planckBlackbody(30000.0), heat);
   return vec3(crawlerCol) * min(glow * confine * parentPulse, 2.35) * fade * pulse * 2450.0;
 }
 
 // Optical approximations of upper-atmospheric transients at physical altitudes.
 // Time uses the existing lightning animation clock, not atmospheric dynamics.
+// One glowing NT 1P sprite body with its curtain of downward tendrils. The
+// parent +CG's quasi-electrostatic field pumps the NT layer directly above its
+// positive charge centre; the excited air pocket relaxes in a compact
+// "carrot" (two lobes, diffuse halo, a vertical column core) dragging several
+// downward leader-like tendrils. Real events appear as seeded clusters, so
+// the caller draws the primary body and, weaker, up to two secondaries beside
+// it sharing the same parent stroke. NT 1P band (630-750 nm) is the red body;
+// the NT+ 1N first negative band (391/428 nm) is the blue-violet cap above.
+vec3 spriteBody(float dx, float altitude, float seedB, float seedT, float t, float strength)
+{
+  float local = t - 0.10 - 0.06 * seedB;            // stepped onset after the parent
+  float onset = smoothstep(0.0, 0.09, local);
+  float decay = exp(-max(local - 0.16, 0.0) / 0.42);
+  // Two strobe pulses as the excited pocket relaxes; the second is weaker and
+  // beats slightly off the first.
+  float strobe = 0.66 + 0.34 * (0.5 + 0.5 * cos(local * 34.0 + seedB * 6.283)) *
+                               (0.6 + 0.4 * cos(local * 13.0 + seedT * 6.283));
+  float fade = onset * decay * strobe * (1.0 - smoothstep(1.7, 2.45, t));
+  if (fade <= 0.002)
+    return vec3(0.0);
+  float body = exp(-pow(dx / 2.35, 2.0) - pow((altitude - 76.5) / 4.3, 2.0));
+  float lobes = exp(-pow((abs(dx) - 2.6) / 1.7, 2.0) - pow((altitude - 78.5) / 2.6, 2.0)) * 0.55;
+  float halo = exp(-pow(dx / 7.4, 2.0) - pow((altitude - 73.5) / 8.2, 2.0)) * 0.50;
+  // Column component: sprites are vertical bars of plasma; a narrow core bar
+  // keeps the middle bright even between the lobes.
+  float columnCore = exp(-pow(dx / 0.62, 2.0) - pow((altitude - 74.5) / 5.4, 2.0)) * 0.72;
+  float filaments = 0.0;
+  int tendrilCount = 5 + int(floor(seedT * 3.999));  // 5-8 tendrils
+  for (int i = 0; i < 8; i++) {
+    if (i >= tendrilCount)
+      break;
+    float fi = float(i);
+    float r1 = random2d(vec2(seedB * 9.3 + fi * 1.7, seedT * 13.1 + fi * 2.1));
+    float r2 = random2d(vec2(seedT * 7.1 + fi * 2.9, seedB * 11.7 + fi * 1.3));
+    float r3 = random2d(vec2(seedB * 3.7 + fi * 4.3, seedT * 5.9 + fi));
+    float spread = (fi - float(tendrilCount - 1) * 0.5) * mix(0.78, 1.45, r1);
+    float lenKm = mix(11.0, 27.0, r2);
+    float footAlt = 77.0 - lenKm;
+    if (altitude < footAlt - 1.5 || altitude > 79.0)
+      continue;
+    float drift = (r3 - 0.5) * 1.15 * sin((altitude - 77.0) * 0.16 + r1 * 5.1); // straighter, calmer curtain
+    float strand = exp(-pow((dx - spread - drift) / 0.15, 2.0));
+    float topFade = smoothstep(footAlt + 0.8, footAlt + 3.2, altitude);
+    float rootFade = 1.0 - smoothstep(76.5, 79.0, altitude);
+    // Bright bead about halfway down each tendril, where the leader stalled.
+    float beadAlt = 77.0 - lenKm * 0.5;
+    float bead = exp(-pow((altitude - beadAlt) / 0.58, 2.0)) *
+                 exp(-pow((dx - spread - drift) / 0.30, 2.0));
+    filaments += strand * topFade * rootFade * (0.55 + 0.45 * r2);
+    filaments += bead * topFade * rootFade * 0.85;
+    // Forked tips: below the foot each tendril splits into two short prongs.
+    float prong = footAlt - altitude;
+    if (prong > 0.0 && prong < 2.6) {
+      float prongPhase = prong / 2.6;
+      float dxL = dx - (spread + drift - 0.38 * prongPhase);
+      float dxR = dx - (spread + drift + 0.38 * prongPhase);
+      filaments += (exp(-pow(dxL / 0.115, 2.0)) + exp(-pow(dxR / 0.115, 2.0))) *
+                   0.36 * prongPhase * rootFade;
+    }
+  }
+  float cap = exp(-pow(dx / 1.75, 2.0) - pow((altitude - 84.6) / 1.35, 2.0)) * 0.9;   // NT+ 1N 1st negative cap
+  vec3 red = vec3(1.0, 0.05, 0.04) * (body * 6.5 + lobes * 3.0 + halo * 2.3 + filaments * 10.5 + columnCore * 2.6);
+  vec3 blue = vec3(0.33, 0.40, 1.0) * cap;
+  return (red + blue) * fade * strength;
+}
+
 vec3 drawUpperAtmosphereLightning()
 {
   if (!inLightningWorldTile())
@@ -1374,55 +1535,39 @@ vec3 drawUpperAtmosphereLightning()
       continue;
     float dx = (texCoord.x - data.x) * aspectRatios.x * heightKm;
     if (hasOpticalEffect(meta.w, 2.0) && altitude >= 45.0 && altitude <= 90.0 && abs(dx) < 14.0) {
-      // Red sprite, reworked to the physical picture: a compact, two-lobed
-      // "carrot" body near 74-80 km fed by the parent stroke's NT excitation, a
-      // diffuse halo around it, 5-8 seeded downward tendrils reaching 45-60 km
-      // with their own bright beads, an NT+ 1N blue-violet cap above the body,
-      // and a stepped onset (~50-80 ms after the parent) with a two-pulse
-      // strobe as the air pocket relaxes. Colours: NT 1P red (630-750 nm)
-      // body, NT+ 1N (391/428 nm) cap.
+      // Red sprite, reworked to the physical picture: a seeded cluster of
+      // column/carrot sprites above the parent stroke's positive charge
+      // centre - one primary body plus up to two weaker secondaries sharing
+      // the event. Each body: compact two-lobed body near 74-80 km, a column
+      // core between the lobes, a diffuse halo, 5-8 downward tendrils with
+      // stalled-leader beads and forked tips, an NT+ 1N blue-violet cap, and
+      // a stepped onset (~50-80 ms after the parent) strobed twice as the air
+      // pocket relaxes. Colours: NT 1P red (630-750 nm) body, NT+ 1N
+      // (391/428 nm) cap.
       float seedR = random2d(vec2(data.x * 61.7, data.y * 29.3));
       float seedT = random2d(vec2(data.x * 17.3 + 0.71, data.y * 67.1));
-      float local = t - 0.10 - 0.06 * seedR;            // stepped onset after the parent
-      float onset = smoothstep(0.0, 0.09, local);
-      float decay = exp(-max(local - 0.16, 0.0) / 0.42);
-      float strobe = 0.66 + 0.34 * (0.5 + 0.5 * cos(local * 34.0 + seedR * 6.283)) * (0.6 + 0.4 * cos(local * 13.0 + seedT * 6.283));
-      float fade = onset * decay * strobe * (1.0 - smoothstep(1.7, 2.45, t));
-      float body = exp(-pow(dx / 2.35, 2.0) - pow((altitude - 76.5) / 4.3, 2.0));
-      float lobes = exp(-pow((abs(dx) - 2.6) / 1.7, 2.0) - pow((altitude - 78.5) / 2.6, 2.0)) * 0.55;
-      float halo = exp(-pow(dx / 7.4, 2.0) - pow((altitude - 73.5) / 8.2, 2.0)) * 0.50;
-      float filaments = 0.0;
-      int tendrilCount = 5 + int(floor(seedT * 3.999));  // 5-8 tendrils
-      for (int i = 0; i < 8; i++) {
-        if (i >= tendrilCount)
+      vec3 spriteLight = spriteBody(dx, altitude, seedR, seedT, t, 1.0);
+      int secondaryCount = int(floor(random2d(vec2(seedR * 5.3 + 0.13, seedT * 7.9 + 0.41)) * 2.35));
+      for (int s = 0; s < 2; s++) {
+        if (s >= secondaryCount)
           break;
-        float fi = float(i);
-        float r1 = random2d(vec2(seedR * 9.3 + fi * 1.7, data.x * 13.1 + fi * 2.1));
-        float r2 = random2d(vec2(seedT * 7.1 + fi * 2.9, data.y * 11.7 + fi * 1.3));
-        float r3 = random2d(vec2(seedR * 3.7 + fi * 4.3, seedT * 5.9 + fi));
-        float spread = (fi - float(tendrilCount - 1) * 0.5) * mix(0.78, 1.45, r1);
-        float lenKm = mix(11.0, 27.0, r2);
-        float footAlt = 77.0 - lenKm;
-        if (altitude < footAlt - 1.5 || altitude > 79.0)
-          continue;
-        float drift = (r3 - 0.5) * 2.4 * sin((altitude - 77.0) * 0.19 + r1 * 5.1);
-        float kink = exp(-pow((altitude - (77.0 - lenKm * 0.55)) / 1.1, 2.0)) * (r2 - 0.5) * 1.3; // bead mid-tendril
-        float strand = exp(-pow((dx - spread - drift - kink) / 0.17, 2.0));
-        float topFade = smoothstep(footAlt + 0.8, footAlt + 3.2, altitude);
-        float rootFade = 1.0 - smoothstep(76.5, 79.0, altitude);
-        filaments += strand * topFade * rootFade * (0.55 + 0.45 * r2);
+        float sf = float(s);
+        float sSeed = random2d(vec2(seedR * 3.3 + sf * 1.7 + 0.31, seedT * 5.1 + sf * 2.3 + 0.77));
+        float sSeedT = random2d(vec2(seedT * 6.1 + sf * 2.9 + 0.53, seedR * 4.7 + sf * 1.3 + 0.19));
+        float sOffset = (sSeed < 0.5 ? -1.0 : 1.0) * (2.9 + 2.6 * random2d(vec2(sSeed * 7.7, seedT * 3.1)));
+        spriteLight += spriteBody(dx - sOffset, altitude, fract(sSeed * 13.7 + 0.19), fract(sSeedT * 29.3 + 0.53),
+                                  t - (0.04 + 0.05 * sSeed), 0.48 + 0.30 * sSeed);
       }
-      float cap = exp(-pow(dx / 1.75, 2.0) - pow((altitude - 84.6) / 1.35, 2.0)) * 0.9;   // NT+ 1N 1st negative cap
-      light += vec3(1.0, 0.05, 0.04) * (body * 6.5 + lobes * 3.0 + halo * 2.3 + filaments * 10.5) * fade;
-      light += vec3(0.33, 0.40, 1.0) * cap * fade;
+      light += spriteLight;
     }
     if (hasOpticalEffect(meta.w, 4.0)) {
       // Blue jet, reworked to the physical picture: it climbs in a V from the
-      // cloud top (~16-18 km) toward the NT layer, bright and narrow at the
-      // root, fanning as it ascends (half-angle ~20-30 deg), capped at ~40 km.
-      // NT+ 1N (391/428 nm) dominates with N2 2P (337-380 nm) at the tip; a
-      // brief NT+ "blue starter" flash marks the root at onset, the front
-      // climbs in under a second and then decays in place.
+      // cloud top (~16-18 km) toward the NT layer - a bright narrow root
+      // fanning to a half-angle of ~19-30 deg, a stepped central bolt up the
+      // cone axis, a hot inner cone inside the outer V, an NT-layer cap at the
+      // stall altitude, a brief NT+ "blue starter" at the root, and a lingering
+      // afterglow once the front tops out. NT+ 1N (391/428 nm) dominates with
+      // N2 2P (337-380 nm) at the tip.
       float seedJ = random2d(vec2(data.x * 43.7, data.y * 71.3));
       float seedJ2 = random2d(vec2(data.x * 23.1 + 0.37, data.y * 37.9));
       float baseKm = artificialMetaRawZ(meta.z) * heightKm;
@@ -1448,28 +1593,54 @@ vec3 drawUpperAtmosphereLightning()
           float wob = 0.14 * sin(altitude * 0.38 + float(i) * 2.4 + seedJ * 6.283);
           streamers += exp(-pow((dx - ray - wob) / 0.15, 2.0)) * (0.55 + 0.45 * r1);
         }
-        light += vec3(0.30, 0.38, 1.0) * ((fan * 2.6 + (edgeL + edgeR) * 1.7 + streamers * 4.6) * frontMask) * fade;
+        // Central stepped channel: a narrow bolt climbing the cone axis, wide
+        // at the root where the starter releases and thinning as it climbs.
+        float climb = max(frontKm - baseKm, 1.0);
+        float channelProgress = clamp((altitude - baseKm) / climb, 0.0, 1.0);
+        float channelOn = altitude <= frontKm ? 1.0 : 0.0;
+        float channelWobble = extTriWave(altitude * 0.22 + seedJ * 6.283) * 0.26 +
+                              extTriWave(altitude * 0.55 + seedJ2 * 4.7) * 0.10;
+        float channelCore = exp(-pow((dx - channelWobble) / mix(0.16, 0.075, channelProgress), 2.0)) *
+                            (0.55 + 0.45 * extTriWave(altitude * 2.1 + seedJ2 * 9.1)) * channelOn;
+        // Inner hot cone inside the outer V: same apex, steeper opening.
+        float widthInner = 0.14 + rel * tanA * 0.52;
+        float fanInner = exp(-pow(dx / max(widthInner, 0.13), 2.0));
+        // Afterglow: once the front tops out, the ionised column lingers and
+        // dies exponentially instead of snapping off.
+        float afterglow = exp(-max(t - 0.80, 0.0) / 0.40);
+        light += vec3(0.30, 0.38, 1.0) * ((fan * 2.0 + fanInner * 1.7 + (edgeL + edgeR) * 1.5 + streamers * 4.2 +
+                                            channelCore * 3.6) * frontMask) * fade;
+        light += vec3(0.74, 0.82, 1.0) * channelCore * frontMask * fade * 2.0;
         light += vec3(0.55, 0.70, 1.0) * front * 0.85 * fade * (frontKm > altitude - 3.0 ? 1.0 : 0.0);
+        light += vec3(0.36, 0.42, 0.92) * fan * frontMask * afterglow * 1.15;
         light += vec3(0.62, 0.74, 1.0) * starter * 6.5;          // blue starter flash at the root
       }
     }
     if (hasOpticalEffect(meta.w, 8.0) && altitude >= 82.0 && altitude <= 98.0) {
-      // Elve, reworked to the physical picture: a fast ionisation ring that
-      // expands radially from the parent stroke's vertical surge at ~90 km.
-      // The ring is thin (a couple of km), expands to a few hundred km across,
-      // its radiance falls off ~1/r, it does not flicker, and it is over in
-      // roughly a millisecond (one strobe, not a train). NT 1P red with a
-      // faint NT+ 428 nm inner edge on the rising rim.
+      // Elve, reworked to the physical picture: a fast ionisation shell that
+      // expands radially from the parent stroke's vertical surge at ~90 km -
+      // a thin expanding rim (a couple of km), a brief inner NT 1P disk, a
+      // thin central EMP shaft at the stroke's line, ~1/r amplitude falloff,
+      // a strong NT+ 428 nm blue rim only on the rising edge, no flicker, over
+      // in roughly a millisecond. NT 1P red with the NT+ 1N inner rim.
       float seedE = random2d(vec2(data.x * 37.1, data.y * 51.7));
       float radius = mix(3.0, 165.0, pow(clamp(t / 1.35, 0.0, 1.0), 1.32)); // radius in km, diameter few hundred km
       float thickness = mix(1.1, 10.5, pow(clamp(t / 1.35, 0.0, 1.0), 1.15));
       float altitudeCenter = 88.5 + 3.0 * sin(seedE * 6.283);
       float shell = exp(-pow((abs(dx) - radius) / thickness, 2.0) - pow((altitude - altitudeCenter) / 1.9, 2.0));
       float amplitude = 1.0 / (1.0 + radius * 0.065);                     // 1/r dimming as it expands
+      // Inner NT 1P disk: the ionised interior flashes briefly inside the rim.
+      float disk = (1.0 - smoothstep(radius * 0.30, radius, abs(dx))) *
+                   exp(-pow((altitude - altitudeCenter) / 1.5, 2.0)) * 0.36;
+      // Central shaft: the direct EMP surge glows as a thin bright vertical
+      // column at the stroke's line, dying within the first fraction of a second.
+      float column = exp(-pow(dx / 0.9, 2.0) - pow((altitude - (altitudeCenter - 1.0)) / 3.4, 2.0)) *
+                     exp(-t / 0.17);
       float onset = smoothstep(0.0, 0.045, t);
       float fade = onset * (1.0 - smoothstep(0.62, 1.42, t));
-      light += vec3(1.0, 0.13, 0.08) * shell * fade * amplitude * 15.0;
-      light += vec3(0.40, 0.44, 1.0) * shell * fade * amplitude * 2.2 * (1.0 - smoothstep(0.18, 0.55, t)); // NT+ rim on the rising edge
+      light += vec3(1.0, 0.13, 0.08) * (shell + disk) * fade * amplitude * 15.0;
+      light += vec3(1.0, 0.30, 0.20) * column * fade * 8.5;
+      light += vec3(0.40, 0.44, 1.0) * shell * fade * amplitude * (2.2 + 2.7 * (1.0 - smoothstep(0.08, 0.34, t))) * (1.0 - smoothstep(0.18, 0.55, t)); // NT+ rim on the rising edge
     }
   }
   return light;
@@ -1625,9 +1796,10 @@ vec4 computeAirColor(vec2 bndFragCoord)
     const vec3 hyperboltColor = vec3(0.25, 0.38, 1.0);
     float strokeBrightnessMult = isHyperbolt ? hyperboltBrightnessMult : superboltBrightnessMult;
     float strokeDurationShorten = isHyperbolt ? hyperboltDurationShorten : superboltDurationShorten;
-    // Ordinary external positive CG runs near 34,000 K; superbolt (52,000 K) and
-    // hyperbolt (720,000 K nominal) keep their pinned hues.
-    vec3 positiveLightningCol = planckBlackbody(34000.0 + 4000.0 * (random2d(vec2(lightningPos.y * 4.7, lightningMeta.x * 9.1)) - 0.5));
+    // Ordinary external positive CG runs near 30,000 K like every other ordinary
+    // arc; superbolt (52,000 K) and hyperbolt (720,000 K nominal) keep their
+    // pinned hues.
+    vec3 positiveLightningCol = planckBlackbody(30000.0 + 5000.0 * (random2d(vec2(lightningPos.y * 4.7, lightningMeta.x * 9.1)) - 0.5));
     float repeatPeriod = map_range(random2d(lightningPos), 0., 1., 1.5, 3.0);
     if (isSuperbolt && lightningTime >= repeatPeriod * lightningFlickers(lightningData) + (2.924 - strokeDurationShorten))
       continue;

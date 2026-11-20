@@ -37,7 +37,7 @@ function check(name, condition, detail) {
 
 check('guiControls_default initializes superSharpDetail to false',
   /superSharpDetail\s*:\s*false/.test(appSource) &&
-  /'temporalAAEnabled', 'superSharpDetail', 'realTimeCycle', 'motionBlurEnabled'\]/.test(appSource),
+  /'temporalAAEnabled', 'superSharpDetail', 'realTimeCycle'\]/.test(appSource),
   'superSharpDetail must default to false and be normalized as boolean on load');
 
 check('Performance folder adds Super Sharp Detail Mode toggle with warning before enabling',

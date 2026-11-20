@@ -50,16 +50,15 @@ check('planckBlackbody exists and is the Tanner Helland blackbody fit, unit blue
   /288\.1221695283 \* pow\(t - 60\.0, -0\.0755148492\)/.test(display) &&
   /rgb \/ max\(rgb\.b, 0\.35\)/.test(display));
 
-check('no natural arc variant is hand-picked any more - every one feeds the blackbody',
+check('every ordinary arc runs the same ~30,000 K blackbody; superbolt/hyperbolt keep their fictional hues',
   /planckBlackbody\(30000\.0/.test(display) &&
-  /planckBlackbody\(25000\.0/.test(display) &&
-  /planckBlackbody\(35000\.0/.test(display) &&
-  /planckBlackbody\(\(isPositiveCC \? 38000\.0 : 26000\.0\)/.test(display) &&
-  /planckBlackbody\(20000\.0\)/.test(display) &&
-  /planckBlackbody\(24000\.0\)/.test(display) &&
-  /planckBlackbody\(21000\.0\)/.test(display) &&
-  /planckBlackbody\(27000\.0\)/.test(display) &&
-  /planckBlackbody\(34000\.0/.test(display));
+  !/planckBlackbody\(25000\.0/.test(display) &&
+  !/planckBlackbody\(35000\.0/.test(display) &&
+  !/planckBlackbody\(\(isPositiveCC \? 38000\.0 : 26000\.0\)/.test(display) &&
+  !/planckBlackbody\(26000\.0/.test(display) &&
+  !/planckBlackbody\(34000\.0/.test(display) &&
+  /planckBlackbody\(23000\.0\), planckBlackbody\(30000\.0\)/.test(display) &&   // GC cold leader -> hot return stroke
+  /planckBlackbody\(23500\.0\), planckBlackbody\(30000\.0\)/.test(display));    // crawler deck -> parent junction
 
 check('superbolt and hyperbolt keep their pinned fictional hues (existing look off-limits)',
   /const vec3 superboltColor = vec3\(0\.332, 0\.469, 1\.0\);/.test(display) &&
@@ -101,27 +100,51 @@ check('CC fork budget is strike-seeded: -CC 3-4, +CC 1-2',
   /float branchMax = isPositiveCC \? \(1\.0 \+ floor\(branchBudget \* 2\.0\)\)/.test(display) &&
   /: \(3\.0 \+ floor\(branchBudget \* 2\.0\)\);/.test(display));
 
-check('GC leaders fork 3-5 seeded',
-  /int branchMax = 3 \+ int\(floor\(branchBudget \* 2\.999\)\);/.test(display));
+check('GC reworked: stepped bursts, streamer fan ahead of the tip, ground-strike shock ring, M-component rebrightenings',
+  /float stepFlare = 0\.74 \+ 0\.52 \*/.test(display) &&
+  /\/\/ Streamer fan: a cold leader drags a fan of faint streamers in front of the/.test(display) &&
+  /float shockClock = clamp\(\(time - 0\.88\) \/ 0\.34, 0\.0, 1\.0\);/.test(display) &&
+  /float mClockA = clamp\(\(time - 1\.16\) \/ 0\.30, 0\.0, 1\.0\);/.test(display) &&
+  /float mClockB = clamp\(\(time - 1\.52\) \/ 0\.26, 0\.0, 1\.0\);/.test(display));
+
+check('anvil crawler reworked: horizontal dart-leader restrike along established lanes, stubbled roots, 30,000 K junction',
+  /float dartClock = clamp\(\(time - \(delay \+ 1\.04\)\) \/ 0\.34, 0\.0, 1\.0\);/.test(display) &&
+  /float dartGain = dartLive \* exp\(-pow\(\(along - dartClock\) \/ 0\.055, 2\.0\)\)/.test(display) &&
+  /stubDir = normalize\(vec2\(side \* cos\(stubAngle\)/.test(display) &&
+  /planckBlackbody\(23500\.0\), planckBlackbody\(30000\.0\)/.test(display));
+
+check('GC leaders fork 4-6 seeded',
+  /int branchMax = 4 \+ int\(floor\(branchBudget \* 2\.999\)\);/.test(display));
 
 /* ------------------------------------------- sprites / jets / elves */
 
-check('red sprite reworked: 5-8 seeded tendrils, two-lobed carrot head, NT+ 1N cap, stepped onset',
+check('red sprite reworked: cluster of column/carrot bodies, 5-8 seeded tendrils with stalled beads and forked tips, column core, NT+ 1N cap',
   /int tendrilCount = 5 \+ int\(floor\(seedT \* 3\.999\)\);/.test(display) &&
   /float lobes = exp\(-pow\(\(abs\(dx\) - 2\.6\) \/ 1\.7, 2\.0\)/.test(display) &&
-  /vec3\(0\.33, 0\.40, 1\.0\) \* cap/.test(display) &&
-  /float local = t - 0\.10 - 0\.06 \* seedR;/.test(display));
+  /vec3 red = vec3\(1\.0, 0\.05, 0\.04\)/.test(display) &&
+  /float local = t - 0\.10 - 0\.06 \* seedB;/.test(display) &&
+  /int secondaryCount = int\(floor\(random2d\(vec2\(seedR \* 5\.3 \+ 0\.13, seedT \* 7\.9 \+ 0\.41\)\) \* 2\.35\)\);/.test(display) &&
+  /spriteBody\(dx - sOffset, altitude/.test(display) &&
+  /float columnCore = exp\(-pow\(dx \/ 0\.62, 2\.0\)/.test(display) &&
+  /float bead = exp\(-pow\(\(altitude - beadAlt\) \/ 0\.58, 2\.0\)\)/.test(display) &&
+  /\/\/ Forked tips: below the foot each tendril splits into two short prongs\./.test(display));
 
-check('blue jet reworked: climbing V-shaped fan, front cap, and a root starter flash',
+check('blue jet reworked: climbing V-shaped fan, stepped central bolt, hot inner cone, afterglow, front cap, root starter flash',
   /float rise = clamp\(t \/ 0\.55, 0\.0, 1\.0\);/.test(display) &&
   /float frontKm = baseKm \+ \(41\.0 - baseKm\) \* rise;/.test(display) &&
   /float halfAngle = mix\(0\.34, 0\.52, seedJ\);/.test(display) &&
-  /vec3\(0\.62, 0\.74, 1\.0\) \* starter \* 6\.5/.test(display));
+  /vec3\(0\.62, 0\.74, 1\.0\) \* starter \* 6\.5/.test(display) &&
+  /float climb = max\(frontKm - baseKm, 1\.0\);/.test(display) &&
+  /float channelCore = exp\(-pow\(\(dx - channelWobble\) \/ mix\(0\.16, 0\.075, channelProgress\), 2\.0\)\)/.test(display) &&
+  /float fanInner = exp\(-pow\(dx \/ max\(widthInner, 0\.13\), 2\.0\)\);/.test(display) &&
+  /float afterglow = exp\(-max\(t - 0\.80, 0\.0\) \/ 0\.40\);/.test(display));
 
-check('elve reworked: expanding thin ring, 1/r dimming, no flicker, NT+ rising-edge rim',
+check('elve reworked: expanding thin ring, inner disk, central EMP shaft, 1/r dimming, NT+ rising-edge rim',
   /float radius = mix\(3\.0, 165\.0, pow\(clamp\(t \/ 1\.35, 0\.0, 1\.0\), 1\.32\)\);/.test(display) &&
   /float amplitude = 1\.0 \/ \(1\.0 \+ radius \* 0\.065\);/.test(display) &&
-  /1\.0 - smoothstep\(0\.62, 1\.42, t\)/.test(display));
+  /1\.0 - smoothstep\(0\.62, 1\.42, t\)/.test(display) &&
+  /float disk = \(1\.0 - smoothstep\(radius \* 0\.30, radius, abs\(dx\)\)\)/.test(display) &&
+  /float column = exp\(-pow\(dx \/ 0\.9, 2\.0\)/.test(display));
 
 /* ------------------------------------------- precipitation fall physics */
 

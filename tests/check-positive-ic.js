@@ -7,7 +7,7 @@
 //   2. Are never captured by ground lightning rods (because intensity <= 1.0).
 //   3. Render via displayPositiveFlash() with warm positive polarity color
 //      vec3(1.0, 0.88, 0.80), broader anvil spread (0.095 vs 0.075), 50% brighter
-//      peak radiance (10500 vs 7000), and 50% brighter cloud onLight glow without
+//      peak radiance (10500 vs 7000), ~30,000 K arc (like every ordinary arc), and 50% brighter cloud onLight glow without
 //      disturbing normal negative IC flashes (-IC).
 //   4. Route in app.js before cloud-to-cloud (metaType >= 3.5) so cloud thunder
 //      fires from (targetX, originY) using cc*.mp3.
@@ -84,7 +84,7 @@ check('realisticDisplayShader.frag defines displayPositiveFlash() with +50% brig
   /bool isPositiveIC = isFlash && lightningMeta\.y >= 3\.5;/.test(displayShader) &&
   /float flashHeight = 0\.095 \* lightningHeightScale\(\);/.test(displayShader) &&
   /const float mainBoltBrightness = 10500\.;/.test(displayShader) &&
-  /vec3 positiveIcCol = planckBlackbody\(35000\.0 \+ 6000\.0 \* \(random2d\(vec2\(pos\.y \* 5\.9, pos\.x \* 3\.3\)\) - 0\.5\)\);/.test(displayShader) &&
+  /vec3 positiveIcCol = planckBlackbody\(30000\.0 \+ 5000\.0 \* \(random2d\(vec2\(pos\.y \* 5\.9, pos\.x \* 3\.3\)\) - 0\.5\)\);/.test(displayShader) &&
   /if \(isPositiveIC\)\s*\n\s*lightningOnLight \*= 1\.5;/.test(displayShader),
   'expected dedicated positive IC render path and 1.5x cloud glow');
 

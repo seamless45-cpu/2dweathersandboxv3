@@ -647,8 +647,8 @@ const guiControls_default = {
   fxaaEnabled : false,
   volumetricCloudLighting : true,
   temporalAAEnabled : false,
-  motionBlurEnabled : false,
-  motionBlurIntensity : 100, // 0-350 (%); 100 = subtle trails, 350 = long-exposure smear
+  motionBlurEnabled : true,  // always on: the shutter integral is part of the look, not an option
+  motionBlurIntensity : 100, // 0-350 (%); 0 disables the taps at shader level, 100 = subtle trails, 350 = long-exposure smear
   superSharpDetail : false,
   fullscreenMode : false,
   cameraShakeEnabled : true,
@@ -5197,8 +5197,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     bloomRenderScale = renderQualityScales[guiControls.bloomQuality];
     if (!['Extreme', 'Quality', 'Balanced', 'Performance', 'Custom'].includes(guiControls.performancePreset))
       guiControls.performancePreset = 'Balanced';
-    for (const setting of ['filmicToneMapping', 'fxaaEnabled', 'volumetricCloudLighting', 'temporalAAEnabled', 'superSharpDetail', 'realTimeCycle', 'motionBlurEnabled'])
+    for (const setting of ['filmicToneMapping', 'fxaaEnabled', 'volumetricCloudLighting', 'temporalAAEnabled', 'superSharpDetail', 'realTimeCycle'])
       guiControls[setting] = guiControls[setting] === true;
+    // Motion blur is always active: the toggle was removed and saved-off values
+    // are ignored on load. Strength 0 still flattens the taps in the shader for
+    // anyone who wants the motion vectors without the veil.
+    guiControls.motionBlurEnabled = true;
     guiControls.motionBlurIntensity = clamp(Number(guiControls.motionBlurIntensity) || 0, 0, 350);
     guiControls.fullscreenMode = isDocumentFullscreen();
     if (!['Unlocked', '30', '60', '90', '120', '144', '165', '240'].includes(guiControls.autoFpsTarget))
@@ -5822,8 +5826,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       ['volumetricCloudLighting', 'Volumetric Cloud Lighting'],
       ['temporalAAEnabled', 'Temporal Anti-Aliasing']
     ];
-    performanceFolder.add(guiControls, 'motionBlurEnabled')
-      .name('Motion Blur');
     performanceFolder.add(guiControls, 'motionBlurIntensity', 0, 350, 10)
       .name('Motion Blur Strength %')
       .listen();
@@ -7140,8 +7142,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.57'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.57')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.58'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.58')
   ]);
 
   const [
@@ -8094,7 +8096,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.57');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.58');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8192,8 +8194,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   createHdrFBO();
 
   createBloomFBOs();
-  // The TAA / motion-blur history costs one canvas-sized RGB8 texture;
-  // allocate it lazily - only when one of those effects is in use.
+  // Motion blur is always on, so the canvas-sized RGB8 history texture it
+  // shares with TAA is always allocated. The guard stays for TAA-only sessions
+  // and for older saved settings paths that may flip motionBlurEnabled off
+  // before normalization runs.
   if (guiControls.temporalAAEnabled || guiControls.motionBlurEnabled)
     createTemporalHistoryTexture();
 
@@ -9575,8 +9579,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);
       // draw-time sampler validation covers every statically used sampler, even
-      // ones this frame never actually taps (motion blur / TAA are off unless
-      // the history texture exists). Units 1 and 2 can still hold the textures
+      // ones this frame never actually taps (TAA is off by default, and the
+      // motion-blur trail is gated on motionBlurHistoryValid). Units 1 and 2
+      // can still hold the textures
       // the HDR pass bound — and unit 2 can hold the signed-integer wall
       // texture (RGBA8I). A float sampler sampling an integer texture is
       // GL_INVALID_OPERATION at draw time, the whole fullscreen draw is
@@ -10321,7 +10326,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.57');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.58');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
