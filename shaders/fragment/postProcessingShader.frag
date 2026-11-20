@@ -152,11 +152,14 @@ void main()
     //    blurs along the wind. The gather axis is the SUM of both paths, so a
     //    panning camera over a storm streaks along the true trajectory.
     //
-    // Twelve taps with a raised-cosine weighting approximate the shutter
-    // integral. History taps are clamped to the five-tap neighborhood of this
-    // pixel, which keeps the recursive feedback from dragging ghosts across the
-    // frame. Taps that fall outside the frame lose their weight; the blend is
-    // scaled by the covered fraction so edges are softened, never smeared.
+    // Sixteen taps with a raised-cosine weighting approximate the shutter
+    // integral. The gather span scales with the strength slider, so 100 % is a
+    // soft two-frame veil and 350 % a genuinely long exposure instead of a
+    // one-frame smear at the same mix opacity. History taps are clamped to the
+    // five-tap neighborhood of this pixel, which keeps the recursive feedback
+    // from dragging ghosts across the frame. Taps that fall outside the frame
+    // lose their weight; the blend is scaled by the covered fraction so edges
+    // are softened, never smeared.
     vec2 ndc = texCoord * 2.0 - 1.0;
     float sa = motionBlurAspects.x;
     float ca = motionBlurAspects.y;
@@ -166,6 +169,11 @@ void main()
            - ((ndc.x / zoom - motionBlurView.x) * 0.5 + 0.5);
     flow.y = ((ndc.y * sa / (motionBlurPrevView.z * ca) - motionBlurPrevView.y * sa) * 0.5 + 0.5)
            - ((ndc.y * sa / (zoom * ca) - motionBlurView.y * sa) * 0.5 + 0.5);
+    // The world tiles horizontally every 2.0 of view.x, which is exactly 1.0 uv.
+    // A camera crossing the seam shifts every sample by one full uv between
+    // frames; folding back into [-0.5, 0.5) keeps the wrap from reading as a
+    // one-frame smear across the whole frame.
+    flow.x = mod(flow.x + 0.5, 1.0) - 0.5;
 
     // Scene path: simulation coordinate of this canvas pixel (same inverse view
     // transform the camera path uses), then velocity -> uv -> canvas uv.
@@ -179,14 +187,21 @@ void main()
     flow -= sceneFlow;                       // material came *from* upwind, not downwind
 
     float flowLength = length(flow);
-    // A seam wrap (camera wraps horizontally) or an extreme view jump makes the
-    // reprojection meaningless for one frame; skip rather than smear the world.
-    // A truly static frame produces a zero vector and is left untouched.
-    if (flowLength <= 0.05 && flowLength > 0.0) {
+    // The fold above keeps the horizontal seam inside [-0.5, 0.5) uv, so a real
+    // reprojection never lands here with a huge vector; this only catches an
+    // absurd view jump between frames (a zoom explosion, a broken upload), for
+    // which the history cannot be reprojected at all - skip rather than smear.
+    // A truly static frame produces a zero vector and is left untouched (the
+    // flow gate below flattens the blend to 0).
+    if (flowLength <= 1.5) {
       float strength = clamp(motionBlurStrength / 350.0, 0.0, 1.0);
+      // The shutter stays open longer as the slider rises: one frame of motion
+      // at 0 %, ~2.1 frames at 100 %, five frames at 350 % - the difference
+      // between a faint one-frame smear and a real long exposure.
+      float exposureSpan = 1.0 + 4.0 * strength;
       // The effect fades in with the motion instead of smearing a static image.
       float flowGate = smoothstep(0.0, 0.002, flowLength);
-      const int TAPS = 12;
+      const int TAPS = 16;
       float weightSum = 0.0;
       float coveredWeight = 0.0;
       vec3 acc = vec3(0.0);
@@ -195,7 +210,7 @@ void main()
         // Raised-cosine: a uniform shutter box would be ideal, this just
         // suppresses the banding a box leaves on hard edges.
         float w = 0.7 + 0.3 * cos(2.0 * PI * (t - 0.5));
-        vec2 rawUV = texCoord + flow * t;
+        vec2 rawUV = texCoord + flow * (t * exposureSpan);
         bool inBounds = rawUV.x >= 0.0 && rawUV.x <= 1.0 && rawUV.y >= 0.0 && rawUV.y <= 1.0;
         vec2 tapUV = clamp(rawUV, vec2(0.0), vec2(1.0));
         vec3 currentTap = safeSample(mappedColor(tapUV).rgb);
