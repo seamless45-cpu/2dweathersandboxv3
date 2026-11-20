@@ -313,10 +313,14 @@ vec2 ccFractalDisp(float s, float span, float jagPhase, float jagScale)
   return vec2(d, clamp(slope, -2.5, 2.5));
 }
 
-// Signed-distance core + sheath evaluation for a forked CC side branch.
+// Signed-distance core + sheath evaluation for a forked side branch.
 // Returns vec2(coreMask, combinedSignal).
+// pixelT is the pixel footprint in the same units as target - callers compute
+// it from the captured screenTexDx/Dy so the branch is anti-aliased at any zoom
+// (a distance-shaped edge narrower than a pixel breaks into stair-stepped
+// dashes otherwise).
 vec2 ccEvalBranch(vec2 target, vec2 bStart, vec2 bDir, float bLen, float curveSign,
-                  float seed, float coreW, float weight)
+                  float seed, float coreW, float weight, float pixelT)
 {
   float hScale = lightningHeightScale();
   vec2 bNorm = vec2(-bDir.y, bDir.x);
@@ -338,7 +342,14 @@ vec2 ccEvalBranch(vec2 target, vec2 bStart, vec2 bDir, float bLen, float curveSi
   float endMask = smoothstep(-0.006 * hScale, 0.004 * hScale, along) * smoothstep(bLen + 0.008 * hScale, bLen - 0.006 * hScale, along);
   float taper = mix(0.74, 0.26, bt);
   float bw = max(coreW * taper, 0.0011 * hScale);
-  float core = smoothstep(bw * 1.45, bw * 0.15, dist) * endMask;
+  // Filter the core profile over the pixel it will be drawn on (the same
+  // Gaussian footprint idiom as channelGlow), preserving integrated energy:
+  // a branch narrower than a pixel dims smoothly instead of dissolving into
+  // dashes or sparkling along its path.
+  float aa = max(pixelT, 1e-6);
+  float f2 = bw * bw + 0.5625 * aa * aa;
+  float invF = inversesqrt(f2);
+  float core = exp(-dist * dist * invF * invF) * clamp(bw * invF, 0.0, 1.0) * endMask;
   float halo = exp(-dist / max(bw * 3.0, 0.0040 * hScale)) * 0.20 * endMask;
   float fade = smoothstep(1.0, 0.10, bt) * weight;
   return vec2(core * fade, (core + halo) * fade);
@@ -454,7 +465,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
     vec2 bDir = normalize(vec2(sideSign * sin(forkAngle), -cos(forkAngle)));
     float bLen = spanKm * mix(0.12, 0.26, br2);
     float coreW = max(0.0021 * lightningHeightScale(), 0.0013);
-    vec2 bVal = ccEvalBranch(pKm, anchor, bDir, bLen, sideSign, pos.x * 17.3 + fi * 5.7, coreW, mix(0.50, 0.72, br1));
+    vec2 bVal = ccEvalBranch(pKm, anchor, bDir, bLen, sideSign, pos.x * 17.3 + fi * 5.7, coreW, mix(0.50, 0.72, br1), max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)), length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * heightKm);
     branchSum += bVal.x * 1.05 + bVal.y * 0.30;
   }
   outputColor += lightningCol * branchSum * intensityRaw * 1200.0;
@@ -543,7 +554,7 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
     vec2 bDir = vec2(cos(ang), sin(ang));
     float bLen = icHeightKm * mix(0.10, 0.24, br1);
     float coreW = max(0.0018 * lightningHeightScale(), 0.0011);
-    vec2 bVal = ccEvalBranch(icP, anchor, bDir, bLen, br2 < 0.5 ? -1.0 : 1.0, pos.y * 21.7 + fi * 9.3, coreW, mix(0.45, 0.62, br2));
+    vec2 bVal = ccEvalBranch(icP, anchor, bDir, bLen, br2 < 0.5 ? -1.0 : 1.0, pos.y * 21.7 + fi * 9.3, coreW, mix(0.45, 0.62, br2), max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)), length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * icHeightKm);
     icBranchSum += bVal.x * 1.0 + bVal.y * 0.28;
   }
   outputColor += lightningCol * icBranchSum * icIntensityRaw * 850.0;
@@ -618,7 +629,7 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
     vec2 bDir = vec2(cos(ang), sin(ang));
     float bLen = picHeightKm * mix(0.12, 0.26, br1);
     float coreW = max(0.0019 * lightningHeightScale(), 0.00115);
-    vec2 bVal = ccEvalBranch(picP, anchor, bDir, bLen, br2 < 0.5 ? -1.0 : 1.0, pos.y * 19.3 + fi * 8.1, coreW, mix(0.45, 0.62, br2));
+    vec2 bVal = ccEvalBranch(picP, anchor, bDir, bLen, br2 < 0.5 ? -1.0 : 1.0, pos.y * 19.3 + fi * 8.1, coreW, mix(0.45, 0.62, br2), max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)), length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * picHeightKm);
     picBranchSum += bVal.x * 1.0 + bVal.y * 0.28;
   }
   return max(positiveIcOut + positiveIcCol * picBranchSum * picIntensityRaw * 950.0, vec3(0));
@@ -710,6 +721,8 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   // Seeded side leaders, different budgets per class of strike: ordinary
   // external positives fork 1-2 times, superbolts 2-3, hyperbolts 3-4. Each is
   // a short torturous daughter channel off the main arc.
+  float branchPixelT = max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)),
+                         length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y)));
   float intensityRaw = currentLightningIntensity; // un-scaled by the artwork gain
   float extBranchSeed = random2d(vec2(groundPos.y * 8.3, originX * 6.1));
   int extBranchCount = int(branchFamily) + (extBranchSeed < 0.5 ? 0 : 1);
@@ -735,7 +748,7 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
     vec2 bDir = ccRotate(arcTan, sideSign * mix(0.52, 0.88, br1));
     float bLen = scaleLen * mix(0.10, 0.21, br2);
     float coreW = max(scaleLen * 0.0034, 0.0016);
-    vec2 bVal = ccEvalBranch(target, bStart, bDir, bLen, sideSign, groundPos.x * 23.7 + fi * 7.3, coreW, mix(0.48, 0.66, br1));
+    vec2 bVal = ccEvalBranch(target, bStart, bDir, bLen, sideSign, groundPos.x * 23.7 + fi * 7.3, coreW, mix(0.48, 0.66, br1), branchPixelT);
     extBranchGain += bVal.x * 1.15 + bVal.y * 0.34;
   }
 
@@ -840,7 +853,15 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
                        length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y)));
   float coreW = max(0.0018 * hScale, worldPix * 0.90) * (isPositiveCC ? 1.28 : 1.0);
   float edgeFade = smoothstep(0.0, 0.025, t) * smoothstep(1.0, 0.975, t);
-  float mainCore = smoothstep(coreW * 1.50, coreW * 0.15, distMain) * edgeFade;
+  // Footprint-filtered core (same Gaussian idiom as channelGlow /
+  // ccEvalBranch): a fixed world-space edge snaps to 0 or full coverage
+  // once the channel is narrower than a pixel. The filter integrates
+  // coverage over the actual render-target pixel instead.
+  float mainAA = max(worldPix, 1e-6);
+  float mainF2 = coreW * coreW + 0.5625 * mainAA * mainAA;
+  float mainInvF = inversesqrt(mainF2);
+  float mainCore = exp(-distMain * distMain * mainInvF * mainInvF)
+                 * clamp(coreW * mainInvF, 0.0, 1.0) * edgeFade;
   float mainHalo = exp(-distMain / max(coreW * 3.2, 0.0045 * hScale)) * 0.20 * edgeFade;
   float mainOuter = exp(-distMain / max(coreW * 7.5, 0.011 * hScale)) * 0.018 * edgeFade;
   float mainSignal = mainCore + mainHalo + mainOuter;
@@ -870,7 +891,7 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
     vec2 bDir = ccRotate(rtan, forkAngle);
     float bLen = span * mix(0.20, 0.42, br1) * (isPositiveCC ? 0.78 : 1.0);
     float bWeight = isPositiveCC ? 0.62 : mix(0.68, 0.88, br2);
-    vec2 bVal = ccEvalBranch(target, bStart, bDir, bLen, sideSign, seed + float(b) * 1.37, coreW, bWeight);
+    vec2 bVal = ccEvalBranch(target, bStart, bDir, bLen, sideSign, seed + float(b) * 1.37, coreW, bWeight, worldPix);
     branchCore = max(branchCore, bVal.x);
     branchSignal = max(branchSignal, bVal.y);
 
@@ -883,7 +904,7 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
       vec2 subStart = bStart + bDir * subAlong + bNorm * (subArch + subJag.x * 0.868);
       vec2 subDir = ccRotate(bDir, -sideSign * mix(0.38, 0.68, br1));
       vec2 subVal = ccEvalBranch(target, subStart, subDir, bLen * 0.50, -sideSign, seed + float(b) * 3.11,
-                                 coreW * 0.82, bWeight * 0.65);
+                                 coreW * 0.82, bWeight * 0.65, worldPix);
       branchCore = max(branchCore, subVal.x);
       branchSignal = max(branchSignal, subVal.y);
     }
@@ -1082,7 +1103,7 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
                                          -side * (0.24 + 0.24 * random2d(vec2(branchSeed, 5.2))),
                                          branchSeed * 1.37,
                                          max(max(0.0018, pixelKm * 0.82), 0.0011),
-                                         branchWeight);
+                                         branchWeight, pixelKm);
     branchCore = max(branchCore, branchSignalPair.x);
     branchSignal = max(branchSignal, branchSignalPair.y);
 
@@ -1103,7 +1124,7 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
                                          fingerSide * 0.17,
                                          branchSeed * 2.11 + float(finger) * 3.7,
                                          max(max(0.0012, pixelKm * 0.62), 0.00075),
-                                         branchWeight * (inner ? 0.74 : 0.56));
+                                         branchWeight * (inner ? 0.74 : 0.56), pixelKm);
         branchCore = max(branchCore, fingerSignal.x);
         branchSignal = max(branchSignal, fingerSignal.y);
       }
@@ -1280,7 +1301,7 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time, float parentIntensity)
                                        vertical * (0.22 + 0.30 * bRand),
                                        laneSeed + k * 1.71 + float(branch) * 7.9,
                                        max(max(0.0017, pixelKm * 0.70), 0.00085),
-                                       laneGain * (0.58 + 0.22 * parentPulse) * leaderLive);
+                                       laneGain * (0.58 + 0.22 * parentPulse) * leaderLive, pixelKm);
             glow += branchSignal.y * 0.92;
             hotCore += branchSignal.x * 0.52;
 
@@ -1299,7 +1320,7 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time, float parentIntensity)
                                                  (inward ? -vertical : vertical) * 0.16,
                                                  laneSeed + k * 3.7 + float(branch * 2 + finger) * 2.13,
                                                  max(max(0.0010, pixelKm * 0.48), 0.00062),
-                                                 laneGain * (0.40 + 0.18 * parentPulse) * leaderLive);
+                                                 laneGain * (0.40 + 0.18 * parentPulse) * leaderLive, pixelKm);
                 glow += fingerSignal.y * 0.66;
                 hotCore += fingerSignal.x * 0.38;
               }
