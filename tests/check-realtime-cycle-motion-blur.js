@@ -14,8 +14,11 @@
 // the clouds, so the velocity field is sampled at the pixel's simulation
 // coordinate (cells per iteration -> uv per rendered frame -> canvas uv through
 // the view-transform derivative) and subtracted, letting a static camera over a
-// moving storm smear along the wind. Twelve taps with a raised-cosine weighting
-// approximate the shutter integral; history taps are clamped to the five-tap
+// moving storm smear along the wind. The horizontal camera-wrap seam is folded
+// back into [-0.5, 0.5) uv so crossing the seam never smears the frame, and the
+// gather span scales with the strength slider (one frame of motion at 0 %,
+// ~2.1 frames at 100 %, five frames at 350 %) - sixteen raised-cosine taps
+// approximate the shutter integral. History taps are clamped to the five-tap
 // neighbourhood (no ghost drag through the recursive feedback) and taps that
 // fall outside the frame lose their weight, so edges soften instead of smearing.
 // Strength is 0-350 (%); 100 is a soft veil, 350 is a full long exposure.
@@ -109,7 +112,7 @@ check('post shader declares the motion blur uniforms (incl. the scene-velocity p
   /uniform float motionBlurIterPerFrame;/.test(postShader) &&
   /if \(motionBlurEnabled && motionBlurHistoryValid\) \{/.test(postShader));
 
-check('the trail is a 12-tap raised-cosine shutter integral along camera + scene motion',
+check('the trail is a 16-tap raised-cosine shutter integral along camera + scene motion',
   /vec2 ndc = texCoord \* 2\.0 - 1\.0;/.test(postShader) &&
   /float sa = motionBlurAspects\.x;/.test(postShader) &&
   /float ca = motionBlurAspects\.y;/.test(postShader) &&
@@ -122,9 +125,9 @@ check('the trail is a 12-tap raised-cosine shutter integral along camera + scene
   /vec2 uvPerFrame = velocity \* motionBlurIterPerFrame \/ max\(motionBlurResolution, vec2\(1\.0\)\);/.test(postShader) &&
   /vec2 sceneFlow = 0\.5 \* zoom \* vec2\(uvPerFrame\.x, uvPerFrame\.y \* ca \/ sa\);/.test(postShader) &&
   /flow -= sceneFlow;/.test(postShader) &&
-  /const int TAPS = 12;/.test(postShader) &&
+  /const int TAPS = 16;/.test(postShader) &&
   /float w = 0\.7 \+ 0\.3 \* cos\(2\.0 \* PI \* \(t - 0\.5\)\);/.test(postShader) &&
-  /vec2 rawUV = texCoord \+ flow \* t;/.test(postShader) &&
+  /vec2 rawUV = texCoord \+ flow \* \(t \* exposureSpan\);/.test(postShader) &&
   /bool inBounds = rawUV\.x >= 0\.0 && rawUV\.x <= 1\.0 && rawUV\.y >= 0\.0 && rawUV\.y <= 1\.0;/.test(postShader) &&
   /vec3 currentTap = safeSample\(mappedColor\(tapUV\)\.rgb\);/.test(postShader) &&
   /vec3 historyTap = clamp\(safeSample\(texture\(historyTex, tapUV\)\.rgb\), neighborhoodMin, neighborhoodMax\);/.test(postShader) &&
@@ -134,9 +137,11 @@ check('the trail is a 12-tap raised-cosine shutter integral along camera + scene
   /float blend = strength \* flowGate \* coverage \* coverage;/.test(postShader) &&
   /outputCol = mix\(outputCol, blurred, blend\);/.test(postShader));
 
-check('the shutter path length is honoured, radial zoom included, and clipped at seam wraps',
+check('the shutter path length is honoured, radial zoom included, and seam wraps fold instead of smearing',
   /float flowLength = length\(flow\);/.test(postShader) &&
-  /if \(flowLength <= 0\.05 && flowLength > 0\.0\) \{/.test(postShader) &&
+  /flow\.x = mod\(flow\.x \+ 0\.5, 1\.0\) - 0\.5;/.test(postShader) &&
+  /if \(flowLength <= 1\.5\) \{/.test(postShader) &&
+  /float exposureSpan = 1\.0 \+ 4\.0 \* strength;/.test(postShader) &&
   /float flowGate = smoothstep\(0\.0, 0\.002, flowLength\);/.test(postShader) &&
   /float strength = clamp\(motionBlurStrength \/ 350\.0, 0\.0, 1\.0\);/.test(postShader) &&
   // stationary camera: flow == 0 -> no sample is ever gathered, frame untouched
@@ -146,8 +151,18 @@ check('the shutter path length is honoured, radial zoom included, and clipped at
     return !/flowLength \*\*|pow\(flowLength/.test(seg);
   })());
 
+check('the strength slider opens the shutter: one frame of motion at 0 %, ~2.1 at 100 %, five at 350 %',
+  (() => {
+    const spanAt = (s) => 1.0 + 4.0 * Math.min(Math.max(s / 350, 0), 1);
+    return Math.abs(spanAt(0) - 1.0) < 1e-9 &&
+           Math.abs(spanAt(100) - (1.0 + 4.0 / 3.5)) < 1e-9 &&
+           Math.abs(spanAt(350) - 5.0) < 1e-9;
+  })() &&
+  /float exposureSpan = 1\.0 \+ 4\.0 \* strength;/.test(postShader) &&
+  /vec2 rawUV = texCoord \+ flow \* \(t \* exposureSpan\);/.test(postShader));
+
 check('history clamping for the motion blur is the same five-tap neighbourhood TAA uses',
-  /const int TAPS = 12;/.test(postShader) &&
+  /const int TAPS = 16;/.test(postShader) &&
   /neighborhoodMin = min\(neighborhoodMin, mappedColor\(texCoord - vec2\(outputTexelSize\.x, 0\.0\)\)\);/.test(postShader) &&
   /needsNeighborhood/.test(postShader));
 
