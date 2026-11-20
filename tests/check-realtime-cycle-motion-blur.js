@@ -1,5 +1,5 @@
 // Verification harness for the Real Time Cycle toggle (Sun & Radiation folder)
-// and the always-on Motion Blur strength slider (Performance folder).
+// and the Motion Blur toggle + strength slider (Performance folder).
 //
 // Real Time Cycle (2026-11-18): the simulation clock is synchronized to the
 // user's wall clock (full date and time), so the sun tracks the real sun for
@@ -51,14 +51,14 @@ function check(name, condition, detail) {
 
 /* ----------------------------------------------------------- gui defaults */
 
-check('guiControls defaults: realTimeCycle off, motion blur always on at 100 strength',
+check('guiControls defaults: realTimeCycle off, motion blur on at 100 strength',
   /realTimeCycle : false, \/\/ sync the sun to the user's wall clock/.test(appSource) &&
   /motionBlurEnabled : true,/.test(appSource) &&
   /motionBlurIntensity : 100, \/\/ 0-350 \(%\);/.test(appSource));
 
-check('old saves load cleanly: booleans normalized, saved motion-blur-off ignored, strength clamped to 0..350',
-  /\['filmicToneMapping', 'fxaaEnabled', 'volumetricCloudLighting', 'temporalAAEnabled', 'superSharpDetail', 'realTimeCycle'\]/.test(appSource) &&
-  /guiControls\.motionBlurEnabled = true;/.test(appSource) &&
+check('old saves load cleanly: booleans normalized, saved motion-blur choice respected, strength clamped to 0..350',
+  /\['filmicToneMapping', 'fxaaEnabled', 'volumetricCloudLighting', 'temporalAAEnabled', 'superSharpDetail', 'realTimeCycle', 'motionBlurEnabled'\]/.test(appSource) &&
+  !/guiControls\.motionBlurEnabled = true;/.test(appSource) &&
   /guiControls\.motionBlurIntensity = clamp\(Number\(guiControls\.motionBlurIntensity\) \|\| 0, 0, 350\);/.test(appSource));
 
 /* ------------------------------------------------------- Real Time Cycle */
@@ -86,8 +86,8 @@ check('the synced clock drives the sun through updateSunlight(0) - no iteration-
 
 /* -------------------------------------------------------------- motion blur */
 
-check('Performance folder keeps no Motion Blur toggle (always active) and the 0-350 strength slider',
-  !/performanceFolder\.add\(guiControls, 'motionBlurEnabled'\)/.test(appSource) &&
+check('Performance folder adds the Motion Blur toggle and the 0-350 strength slider',
+  /performanceFolder\.add\(guiControls, 'motionBlurEnabled'\)\s*\n\s*\.name\('Motion Blur'\);/.test(appSource) &&
   /performanceFolder\.add\(guiControls, 'motionBlurIntensity', 0, 350, 10\)\s*\n\s*\.name\('Motion Blur Strength %'\)\s*\n\s*\.listen\(\);/.test(appSource));
 
 check('motion blur strength scales the shutter mix linearly 0..1 at 350%, gated by motion',
