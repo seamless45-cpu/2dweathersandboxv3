@@ -9,12 +9,13 @@
 // every simulation start, while every pin suite in tests/ stayed green —
 // because none of them ran the startup path at all. This suite runs it.
 //
-// Four phases, each with a fresh sandbox:
+// Five phases, each with a fresh sandbox:
 //   A. happy path — every file loads, startup completes, no alert
 //   B. one flaky shader request — retried, startup still completes
 //   C. one shader that always fails — startup shows the alert naming the file,
 //      and the Start button is re-enabled afterwards
 //   D. an image that always fails — same surface (alert naming the image)
+//   E. oversized HDR target — startup degrades down the scale ladder and completes
 //
 // Usage:  node tests/check-startup.js
 
@@ -61,7 +62,9 @@ function makeChainable() {
 // WebGL2 stand-in. Anything in CAPS is treated as a constant (number 1),
 // anything else an unknown method (no-op); the hot paths carry real values.
 // ---------------------------------------------------------------------
-function makeFakeGL(spies) {
+function makeFakeGL(spies, options) {
+  options = options || {};
+  let incompleteFBOs = options.incompleteFBOs || 0;
   const base = {
     canvas: null,
     getParameter: () => 16384,
@@ -85,7 +88,8 @@ function makeFakeGL(spies) {
     createVertexArray: () => ({}),
     createTransformFeedback: () => ({}),
     createSampler: () => ({}),
-    checkFramebufferStatus: () => 36053, // FRAMEBUFFER_COMPLETE
+    FRAMEBUFFER_COMPLETE: 36053, // the stub's CAPS-to-1 rule would make this 1 otherwise
+    checkFramebufferStatus: () => (incompleteFBOs-- > 0 ? 1 : 36053), // FRAMEBUFFER_INCOMPLETE_ATTACHMENT=1, FRAMEBUFFER_COMPLETE=36053
     isContextLost: () => false
   };
   return new Proxy(base, {
@@ -212,7 +216,7 @@ function runStartup(phase) {
     loadingScreenRemoved: false
   };
 
-  const fakeGL = makeFakeGL(spy);
+  const fakeGL = makeFakeGL(spy, options);
 
   const knownIds = {};
   function elementById(id) {
@@ -485,6 +489,14 @@ function assertStartupCompleted(name, result) {
   check('fatal image: an alert names the failing image',
         D.spy.alertCalls.length === 1 && D.spy.alertCalls[0].indexOf('ColorScales') >= 0,
         D.spy.alertCalls.join(' | '));
+
+  // ---------------------------------------------------------
+  // phase E: the 150% and 100% HDR targets are not renderable on the
+  // device (oversized texture) — startup must degrade to a smaller HDR
+  // target and complete, never black out with no message.
+  // ---------------------------------------------------------
+  const E = await runStartup({ incompleteFBOs: 2 });
+  assertStartupCompleted('oversized HDR demotes instead of blacking out', E);
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
   process.exit(fail ? 1 : 0);

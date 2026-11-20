@@ -41,7 +41,7 @@ function check(name, ok, detail) {
 }
 
 check('shared render-quality map exposes 150% and 200% HDR supersampling',
-  /const renderQualityScales = \{[^}]*'150%': 1\.5, '200%': 2\.0\}/.test(appSource));
+  /const RENDER_QUALITY_SCALES = \{[^}]*'150%': 1\.5, '200%': 2\.0\}/.test(appSource));
 
 check('fresh default renders HDR at 150%',
   /\/\/ HDR renders above native resolution by default[\s\S]{0,400}?hdrQuality : '150%',/.test(appSource));
@@ -55,9 +55,9 @@ check('Performance folder exposes both supersampling options for HDR',
 check('bloom quality stays capped at 100% (supersampling bloom costs, returns nothing)',
   /performanceFolder\.add\(guiControls, 'bloomQuality', \['25%', '35%', '50%', '60%', '75%', '85%', '100%'\]\)/.test(appSource));
 
-check('createHdrFBO still sizes the target from canvas * scale (existing mechanism)',
-  /const width = Math\.max\(1, Math\.floor\(canvas\.width \* hdrRenderScale\)\);/.test(appSource) &&
-  /const height = Math\.max\(1, Math\.floor\(canvas\.height \* hdrRenderScale\)\);/.test(appSource));
+check('createHdrFBO still sizes the target from canvas * scale (existing mechanism, now in the fallback ladder)',
+  /const width = Math\.max\(1, Math\.floor\(canvas\.width \* scale\)\);/.test(appSource) &&
+  /const height = Math\.max\(1, Math\.floor\(canvas\.height \* scale\)\);/.test(appSource));
 
 check('post pass steps by the HDR source texel, not the canvas pixel',
   /gl\.uniform2f\(getUniformLoc\(postProcessingProgram, 'outputTexelSize'\), 1\.0 \/ hdrFBO\.width, 1\.0 \/ hdrFBO\.height\);/.test(appSource) &&

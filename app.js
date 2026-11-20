@@ -741,6 +741,8 @@ var sim_height = 12000;
 var cellHeight = 12000. / 300.; // guiControls.simHeight / sim_res_y;  // in meters // cell width is the same
 
 var frameNum = 0;
+// Consecutive-frame exception counter for the draw loop; see draw().
+let drawFrameErrorStreak = 0;
 var lastClockContrastSampleTime = -Infinity;
 const sceneContrastSamples = new Uint8Array(9 * 9 * 4);
 function getSceneContrastTextColor(screenX, screenY)
@@ -827,6 +829,16 @@ let emittedLightFBO;
 let ambientLightDirty = true;
 let hdrRenderScale = 0.75;
 let bloomRenderScale = 0.5;
+// Single source of truth for the HDR/bloom quality scales; the FBO creation
+// code needs it too when it degrades gracefully on small GPUs.
+const RENDER_QUALITY_SCALES = {'25%': 0.25, '35%': 0.35, '50%': 0.5, '60%': 0.6, '75%': 0.75, '85%': 0.85, '100%': 1.0, '150%': 1.5, '200%': 2.0};
+function renderQualityLabelForScale(scale)
+{
+  for (const key of Object.keys(RENDER_QUALITY_SCALES))
+    if (Math.abs(RENDER_QUALITY_SCALES[key] - scale) < 1e-6)
+      return key;
+  return null;
+}
 
 const uniformLocationCache = new WeakMap();
 function getUniformLoc(program, name)
@@ -1244,36 +1256,93 @@ class FBO // wraps texture, frambuffer and info in one
 
 function createHdrFBO()
 {
-  if (hdrFBO)
-    hdrFBO.dispose();
-  const width = Math.max(1, Math.floor(canvas.width * hdrRenderScale));
-  const height = Math.max(1, Math.floor(canvas.height * hdrRenderScale));
-  hdrFBO = new FBO(width, height, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, gl.LINEAR);
+  const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+  const requested = hdrRenderScale;
+  // texImage2D beyond MAX_TEXTURE_SIZE fails silently and leaves an incomplete
+  // framebuffer - which used to leave a black canvas with no message anywhere.
+  // Try the requested scale, then step down until the device can render it.
+  const ladder = [...new Set([requested, ...[1.5, 1.0, 0.85, 0.75, 0.6, 0.5, 0.35, 0.25]
+    .filter(scale => scale <= requested)])];
+  for (const scale of ladder) {
+    const width = Math.max(1, Math.floor(canvas.width * scale));
+    const height = Math.max(1, Math.floor(canvas.height * scale));
+    if (width > maxTextureSize || height > maxTextureSize)
+      continue;
+    const candidate = new FBO(width, height, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, gl.LINEAR);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, candidate.frameBuffer);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) == gl.FRAMEBUFFER_COMPLETE) {
+      if (hdrFBO)
+        hdrFBO.dispose();
+      hdrFBO = candidate;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      if (scale != requested) {
+        hdrRenderScale = scale;
+        const label = renderQualityLabelForScale(scale);
+        if (label && guiControls)
+          guiControls.hdrQuality = label;
+        console.warn(`This device cannot render a ${Math.round(requested * 100)}% HDR target; using ${Math.round(scale * 100)}% instead.`);
+      }
+      return true;
+    }
+    candidate.dispose();
+    console.warn(`HDR render target ${width}x${height} is not renderable on this device; trying a smaller one.`);
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  if (hdrFBO) {
+    // Resize could not recreate the target; the previous one still works.
+    console.warn('HDR render target could not be recreated; keeping the previous one.');
+    return false;
+  }
+  throw new Error('This graphics device cannot allocate the floating-point HDR target the display needs.');
 }
 
 function createBloomFBOs()
 {
-  for (const fbo of bloomFBOs)
-    fbo.dispose();
-
+  const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
   let res = new Vec2D(
     Math.max(1, Math.floor(canvas.width * bloomRenderScale)),
     Math.max(1, Math.floor(canvas.height * bloomRenderScale))
   );
 
-  bloomFBOs.length = 0;           // empty array
+  const candidate = [];
   for (let i = 0; i < 100; i++) { // max bloom iterations
     let width = res.x >> i;       // right shift to devide by 2 multiple times
     let height = res.y >> i;
 
-    //  console.log('BloomFBO', i, width, height)
-
     if (width < 2 || height < 2)
       break; // stop when texture resolution is 2 x 2
+    if (width > maxTextureSize || height > maxTextureSize)
+      continue; // skip mips the device cannot hold; smaller ones still work
 
     let fbo = new FBO(width, height, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, gl.LINEAR);
-    bloomFBOs.push(fbo);
+    candidate.push(fbo);
   }
+
+  let complete = candidate.length > 0;
+  for (const fbo of candidate) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.frameBuffer);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE)
+      complete = false;
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+  if (complete) {
+    for (const fbo of bloomFBOs)
+      fbo.dispose();
+    bloomFBOs = candidate;
+  } else {
+    for (const fbo of candidate)
+      fbo.dispose();
+    if (bloomFBOs.length == 0) {
+      // Never had a working pyramid: turning bloom off keeps the scene visible.
+      if (guiControls)
+        guiControls.bloomEnabled = false;
+      console.warn('The bloom target is not renderable on this device; bloom was turned off.');
+    } else {
+      console.warn('The bloom target could not be recreated; keeping the previous one.');
+    }
+  }
+
 }
 
 function createTemporalHistoryTexture()
@@ -5109,7 +5178,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     datGui = new dat.GUI();
     guiControls = { ...guiControls_default, ...JSON.parse(strGuiControls) }; // load settings object
-    const renderQualityScales = {'25%': 0.25, '35%': 0.35, '50%': 0.5, '60%': 0.6, '75%': 0.75, '85%': 0.85, '100%': 1.0, '150%': 1.5, '200%': 2.0};
+    const renderQualityScales = RENDER_QUALITY_SCALES;
     if (!Object.prototype.hasOwnProperty.call(renderQualityScales, guiControls.hdrQuality))
       guiControls.hdrQuality = '75%';
     if (!Object.prototype.hasOwnProperty.call(renderQualityScales, guiControls.bloomQuality))
@@ -7071,8 +7140,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.55'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.55')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.56'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.56')
   ]);
 
   const [
@@ -8025,7 +8094,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.55');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.56');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8595,6 +8664,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   { // Runs for every frame
     if (graphicsContextLost) // nothing left to draw with; the overlay explains why
       return;
+
+    // Queue the next frame before doing any work: an exception inside a frame
+    // must never stop the loop. A stopped loop is a permanently black canvas
+    // with no visible symptom, which is exactly the failure this guards.
+    requestAnimationFrame(draw);
+
+    try {
 
     let artificialAttemptedThisFrame = false;
     const hasSuperLightningRods = lightningRods.some(rod => rod.isSuper);
@@ -9499,7 +9575,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);
       gl.activeTexture(gl.TEXTURE1);
-      gl.bindTexture(gl.TEXTURE_2D, bloomFBOs[0].texture);
+      if (bloomFBOs.length) // bloom may have been turned off if its target is not renderable
+        gl.bindTexture(gl.TEXTURE_2D, bloomFBOs[0].texture);
       gl.activeTexture(gl.TEXTURE2);
       if (temporalHistoryTexture)
         gl.bindTexture(gl.TEXTURE_2D, temporalHistoryTexture);
@@ -9724,7 +9801,36 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     updateDiagnosticOverlays();
     frameNum++;
-    requestAnimationFrame(draw);
+    drawFrameErrorStreak = 0;
+    } catch (error) {
+      drawFrameErrorStreak++;
+      console.error('draw() failed (consecutive frames: ' + drawFrameErrorStreak + ')', error);
+      if (drawFrameErrorStreak == 120)
+        showDrawLoopErrorOverlay();
+    }
+  }
+
+  // Shown only when every frame fails for a long stretch: one bad frame is a
+  // hiccup; 120 in a row is a dead render. Says so instead of a black tab.
+  function showDrawLoopErrorOverlay()
+  {
+    if (document.getElementById('drawLoopError'))
+      return;
+    const note = document.createElement('div');
+    note.id = 'drawLoopError';
+    note.style.cssText = 'position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;' +
+      'background:rgba(6,9,12,0.92);color:#e8eef6;font:16px/1.5 Arial,sans-serif;text-align:center;padding:24px;';
+    note.innerHTML = '<div style="max-width:560px">' +
+      '<h2 style="margin:0 0 12px;font-size:20px">The simulation stopped rendering</h2>' +
+      '<p style="margin:0 0 18px;color:#b9c6d4">The simulation is running but the display failed 120 ' +
+      'frames in a row. Reloading usually recovers it. If it happens again, lower the HDR and bloom ' +
+      'resolution in the Performance folder.</p>' +
+      '<button id="drawLoopErrorReload" style="padding:10px 18px;border-radius:8px;border:1px solid #3a4a5c;' +
+      'background:#182430;color:#e8eef6;font:inherit;cursor:pointer">Reload</button></div>';
+    document.body.appendChild(note);
+    const button = note.querySelector('#drawLoopErrorReload');
+    if (button)
+      button.addEventListener('click', () => location.reload());
   }
 
   //////////////////////////////////////////////////////// functions:
@@ -10203,7 +10309,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.55');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.56');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
