@@ -7140,8 +7140,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.56'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.56')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.57'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.57')
   ]);
 
   const [
@@ -8094,7 +8094,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.56');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.57');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9574,12 +9574,24 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.useProgram(postProcessingProgram);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);
+      // draw-time sampler validation covers every statically used sampler, even
+      // ones this frame never actually taps (motion blur / TAA are off unless
+      // the history texture exists). Units 1 and 2 can still hold the textures
+      // the HDR pass bound — and unit 2 can hold the signed-integer wall
+      // texture (RGBA8I). A float sampler sampling an integer texture is
+      // GL_INVALID_OPERATION at draw time, the whole fullscreen draw is
+      // discarded and the canvas stays black. Never leave a non-float texture
+      // on those units.
       gl.activeTexture(gl.TEXTURE1);
       if (bloomFBOs.length) // bloom may have been turned off if its target is not renderable
         gl.bindTexture(gl.TEXTURE_2D, bloomFBOs[0].texture);
+      else
+        gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);
       gl.activeTexture(gl.TEXTURE2);
       if (temporalHistoryTexture)
         gl.bindTexture(gl.TEXTURE_2D, temporalHistoryTexture);
+      else
+        gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);
       gl.activeTexture(gl.TEXTURE3);
       gl.bindTexture(gl.TEXTURE_2D, baseTexture_1); // fluid state: scene velocity for motion blur
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'velocityTex'), 3);
@@ -10309,7 +10321,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.56');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.57');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
