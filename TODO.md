@@ -107,6 +107,8 @@
 
 - [x] Motion-blur strength was effectively capped: a hard inverted guard (`flowLength <= 0.05`) only let the shutter gather on near-static frames, so any real pan, zoom or superbolt shake fell straight through with zero blur, and the gather span was fixed at one frame no matter where the slider sat. The guard is gone (the horizontal seam jump is folded back into [-0.5, 0.5) uv, and only an absurd view jump is skipped), the strength slider now opens the shutter (one frame of motion at 0 %, ~2.1 at 100 %, five at 350 %), the integral runs sixteen cosine-weighted taps, and radial zoom and panning both engage at full strength
 
+- [x] Motion blur has its Performance-folder toggle again (default on); saved-off values from older settings are respected again. The strength slider is unchanged (0 flattens the taps, 100 is a soft veil, 350 opens the shutter to five frames of gather)
+
 # In Progress
 
 

@@ -17,6 +17,7 @@ const SHADER_DIR = path.join(ROOT, 'shaders');
 
 function findValidator() {
   const candidates = [
+    path.join(ROOT, 'node_modules', 'glslang-validator-prebuilt-predownloaded', 'bin', 'glslangValidator.linux'),
     path.join(ROOT, '..', 'node_modules', 'glslang-validator-prebuilt-predownloaded', 'bin', 'glslangValidator.linux'),
     path.join('/home/user', 'node_modules', 'glslang-validator-prebuilt-predownloaded', 'bin', 'glslangValidator.linux'),
     'glslangValidator'
