@@ -40,7 +40,7 @@ check('rendering uses wrapped physical coordinates, cloud top, and altitude-spec
   /1\.0 \/ \(1\.0 \+ radius \* 0\.065\)/.test(display) &&                       // elve 1/r dimming
   /float rise = clamp\(t \/ 0\.55, 0\.0, 1\.0\);/.test(display));                   // jet climbing front
 check('sky effects render above the simulation when there are no rods as well as with rods',
-  /vec3 upperAtmosphereLight = drawUpperAtmosphereLightning\(\);[\s\S]{0,120}if \(rodCount == 0\)/.test(display) &&
+  /vec3 upperAtmosphereLight = displayLightningRadiance\(drawUpperAtmosphereLightning\(\)\);[\s\S]{0,120}if \(rodCount == 0\)/.test(display) &&
   /fragmentColor = vec4\(softHdrClamp\(upperAtmosphereLight\)/.test(display) && /emittedLight \+= upperAtmosphereLight/.test(display));
 check('display mesh and camera can reach 100 km even for a 5 km simulation',
   /const float Ymult = 45\./.test(vertex) && /100000\.0 \/ guiControls\.simHeight/.test(app));

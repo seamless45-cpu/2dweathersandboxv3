@@ -255,6 +255,18 @@ vec3 planckBlackbody(float kelvin)
   return rgb / max(rgb.b, 0.35); // blue stays unit gain for HDR tinting
 }
 
+// The canvas clips RGB independently to [0,1] when filmic tone mapping is
+// disabled (the default). Lightning radiance can exceed 1000, turning every
+// temperature and even blue/red transients into identical white pixels.
+// Compress just emitted lightning by its maximum component, not each channel,
+// so hue survives. Scene exposure, bloom and surrounding sky still apply.
+vec3 displayLightningRadiance(vec3 radiance)
+{
+  vec3 c = max(radiance, vec3(0.0));
+  float peak = max(c.r, max(c.g, c.b));
+  return c / (1.0 + peak / 0.65);
+}
+
 // Preserve saturated channel radiance while suppressing low-coverage haze.
 // Gradual coverage remains nonzero for thin, minified branches.
 float lightningCoverage(float sampleValue, float threshold)
@@ -1496,18 +1508,24 @@ vec3 spriteBody(float dx, float altitude, float seedB, float seedT, float t, flo
     if (altitude < footAlt - 1.5 || altitude > 79.0)
       continue;
     float drift = (r3 - 0.5) * 0.9 * sin((altitude - 77.0) * 0.16 + r1 * 5.1) + 0.12 * extTriWave(altitude * 0.4 + r2 * 5.0);
-    float strand = exp(-pow((dx - spread - drift) / 0.15, 2.0));
+    // A sprite's fine tendrils propagate down from the bright head; reveal
+    // each strand progressively rather than switching the full curtain on.
+    float growth = clamp((local - 0.05 - 0.04 * r1) / 0.22, 0.0, 1.0);
+    float growthFront = 77.0 - lenKm * growth;
+    float growthMask = smoothstep(growthFront - 0.8, growthFront + 0.8, altitude);
+    float taper = mix(0.055, 0.16, clamp((altitude - footAlt) / lenKm, 0.0, 1.0));
+    float strand = exp(-pow((dx - spread - drift) / taper, 2.0));
     float topFade = smoothstep(footAlt + 0.8, footAlt + 3.2, altitude);
     float rootFade = 1.0 - smoothstep(76.5, 79.0, altitude);
     // Bright bead about halfway down each tendril, where the leader stalled.
     float beadAlt = 77.0 - lenKm * 0.5;
     float bead = exp(-pow((altitude - beadAlt) / 0.58, 2.0)) *
                  exp(-pow((dx - spread - drift) / 0.30, 2.0));
-    filaments += strand * topFade * rootFade * (0.55 + 0.45 * r2);
-    filaments += bead * topFade * rootFade * 0.85;
+    filaments += strand * topFade * rootFade * growthMask * (0.55 + 0.45 * r2);
+    filaments += bead * topFade * rootFade * growthMask * 0.45;
     // Forked tips: below the foot each tendril splits into two short prongs.
     float prong = footAlt - altitude;
-    if (prong > 0.0 && prong < 2.6) {
+    if (prong > 0.0 && prong < 2.6 && growth > 0.94) {
       float prongPhase = prong / 2.6;
       float dxL = dx - (spread + drift - 0.38 * prongPhase);
       float dxR = dx - (spread + drift + 0.38 * prongPhase);
@@ -1720,7 +1738,7 @@ vec4 computeAirColor(vec2 bndFragCoord)
 // The light a stroke throws on the clouds around it: one tight lobe and one wide
 // one. These are the original values - a return stroke lights its own
 // neighbourhood and no further.
-#define lightningOnLightBrightness 0.004  // 0.002
+#define lightningOnLightBrightness 0.0008
 
   // Every strike in the slot array is drawn until its own animation is over.
   // Slots are independent, so a new strike never truncates a running one.
@@ -1888,7 +1906,9 @@ vec4 computeAirColor(vec2 bndFragCoord)
     }
   }
 
-  emittedLight += lightningBoltLight / (1. + cloudDensity * 100.0);
+  emittedLight += displayLightningRadiance(lightningBoltLight / (1. + cloudDensity * 100.0));
+  // Upper-atmosphere effects can also lie inside a tall simulation domain.
+  emittedLight += displayLightningRadiance(drawUpperAtmosphereLightning());
 
   return vec4(color, opacity);
 }
@@ -1922,7 +1942,7 @@ void main()
   float terrainOcclusion = 0.0;
 
   if (texCoord.y > 1.0) { // above simulation area
-    vec3 upperAtmosphereLight = drawUpperAtmosphereLightning();
+    vec3 upperAtmosphereLight = displayLightningRadiance(drawUpperAtmosphereLightning());
     if (rodCount == 0) {
       // Pure additive transient over the sky background: alpha 0 so a premultiplied
       // blend leaves the destination untouched and adds the emitted light on top.

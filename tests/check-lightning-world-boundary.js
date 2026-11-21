@@ -56,7 +56,7 @@ for (const [label, name, next] of variants) {
     /^vec3 [^{]+\{\s*if \(!inLightningWorldTile\(\)\)\s*return vec3\(0\.0\);/.test(body) &&
     !/fract\(texCoord\.x\)|mod\(texCoord\.x/.test(body) && /texCoord\.x - (?:pos|groundPos|targetPos|origin|data)\.x/.test(body));
 }
-const events = chunk(display, 'vec3 lightningBoltLight = vec3(0.0)', 'emittedLight += lightningBoltLight');
+const events = chunk(display, 'vec3 lightningBoltLight = vec3(0.0)', 'emittedLight += displayLightningRadiance(lightningBoltLight');
 check('all channel dispatch and associated illumination are inside the clipped event loop',
   /for \(int slot = 0; slot < LIGHTNING_SLOTS; slot\+\+\) \{\s*if \(!inLightningWorldTile\(\)\)\s*break;/.test(events) &&
   variants.slice(0, 7).every(([, name]) => events.includes(name + '(')) &&
