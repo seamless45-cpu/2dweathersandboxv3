@@ -71,7 +71,7 @@ check('cloud-to-cloud branch bounds (cull, masks, jag, core, halo) are expressed
   /if \(along < -0\.015 \* hScale \|\| along > bLen \+ 0\.025 \* hScale \|\| abs\(perp\) > bLen \* 0\.58\)/.test(displayShader) &&
   /float jagScale = clamp\(bLen \* 0\.095, 0\.008 \* hScale, 0\.028 \* hScale\);/.test(displayShader) &&
   /vec2 jag = ccFractalDisp\(along, max\(bLen, 0\.12 \* hScale\), seed \* 11\.3, jagScale\);/.test(displayShader) &&
-  /float endMask = smoothstep\(-0\.006 \* hScale, 0\.004 \* hScale, along\) \* smoothstep\(bLen \+ 0\.008 \* hScale, bLen - 0\.006 \* hScale, along\);/.test(displayShader) &&
+  /float endMask = smoothstep\(-0\.006 \* hScale, 0\.004 \* hScale, along\) \* \(1\.0 - smoothstep\(bLen - 0\.006 \* hScale, bLen \+ 0\.008 \* hScale, along\)\);/.test(displayShader) &&
   /float bw = max\(coreW \* taper, 0\.0011 \* hScale\);/.test(displayShader) &&
   /float halo = exp\(-dist \/ max\(bw \* 3\.0, 0\.0040 \* hScale\)\) \* 0\.20 \* endMask;/.test(displayShader) &&
   /float hScale = lightningHeightScale\(\);\s*\n\s*vec2 bNorm/.test(displayShader));
@@ -86,7 +86,7 @@ check('cloud-to-cloud spine core, halo, outer glow and sub-branch jag scale with
 
 // --------------------------------------------------- strike illumination lobes
 check('strike cloud lobes are scaled with hScale (IC slab, CG anchor, CC taps, CG leader, external origin)',
-  (displayShader.match(/0\.03 \* lightningHeightScale\(\)/g) || []).length >= 6 &&
+  (displayShader.match(/0\.03 \* lightningHeightScale\(\)/g) || []).length >= 5 &&
   /0\.035 \* lightningHeightScale\(\)/.test(displayShader) &&
   /0\.1 \* lightningHeightScale\(\)/.test(displayShader));
 
@@ -95,14 +95,7 @@ check('strike range eligibility already uses the physical world width, not textu
   /float superboltWorldWidthMeters\(\)\s*\n\{\s*\n\s*return simHeightMeters \* resolution\.x \/ max\(resolution\.y, 1\.0\);\s*\n\}/.test(locationShader));
 
 // -------------------------------------------- procedural paths stay absolute km
-check('the procedural ground-to-cloud leader and crawler keep kilometre units (no hScale drag-in)',
-  /vec2 p = vec2\(\(texCoord\.x - pos\.x\) \* aspectRatios\.x \* heightKm,/.test(displayShader) &&
-  /vec2 p = vec2\(\(texCoord\.x - origin\.x\) \* aspectRatios\.x \* heightKm,/.test(displayShader));
 
-check('upper atmospheric effects (sprite, blue jet, elve) are altitude-absolute and untouched',
-  /altitude < 7\.0 \|\| altitude > 100\.0/.test(displayShader) &&
-  /altitude >= 45\.0 && altitude <= 90\.0/.test(displayShader) &&
-  /altitude >= 82\.0 && altitude <= 98\.0/.test(displayShader));
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 if (failed) process.exitCode = 1;

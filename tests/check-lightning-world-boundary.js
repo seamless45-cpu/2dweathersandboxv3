@@ -10,7 +10,7 @@ const chunk = (source, a, b) => source.slice(source.indexOf(a), source.indexOf(b
 const ext = chunk(display, 'vec3 displayExternalLightning(', 'vec2 evalCcCubic(');
 const cc = chunk(display, 'vec3 displayCloudToCloudLightning(', 'vec3 saturate(');
 const crawler = chunk(display, 'vec3 drawAnvilCrawler(', '// Optical approximations');
-const selector = chunk(location, 'float selectExternalStrikeTarget(', '// Estimate the upper cloud edge');
+const selector = chunk(location, 'float selectExternalStrikeTarget(', '// Probe waterTex laterally');
 check('external selector samples only same-tile candidates and uses the physical maximum',
   /float available = side > 0\.0 \? 0\.999999 - originPos\.x : originPos\.x/.test(selector) &&
   /float maxDx = min\(maxMeters \/ widthMeters, available\)/.test(selector) &&
@@ -44,11 +44,8 @@ const variants = [
   ['CG and artificial CG', 'displayLightning', 'displayFlash'],
   ['negative intra-cloud', 'displayFlash', 'displayPositiveFlash'],
   ['positive intra-cloud', 'displayPositiveFlash', 'evalExtArc'],
-  ['external positive CG and superbolt', 'displayExternalLightning', 'evalCcCubic'],
+  ['external positive CG and superbolt', 'displayExternalLightning', 'displayCloudToCloudLightning'],
   ['both cloud-to-cloud polarities', 'displayCloudToCloudLightning', 'saturate'],
-  ['upward ground-to-cloud', 'displayGroundToCloud', 'drawAnvilCrawler'],
-  ['anvil crawler', 'drawAnvilCrawler', 'drawUpperAtmosphereLightning'],
-  ['sprite, jet and elve', 'drawUpperAtmosphereLightning', 'computeAirColor'],
 ];
 for (const [label, name, next] of variants) {
   const body = chunk(display, 'vec3 ' + name + '(', (next === 'evalExtArc' || next === 'evalCcCubic' ? 'vec2 ' : next === 'computeAirColor' ? 'vec4 ' : 'vec3 ') + next + '(');
@@ -59,7 +56,7 @@ for (const [label, name, next] of variants) {
 const events = chunk(display, 'vec3 lightningBoltLight = vec3(0.0)', 'emittedLight += displayLightningRadiance(lightningBoltLight');
 check('all channel dispatch and associated illumination are inside the clipped event loop',
   /for \(int slot = 0; slot < LIGHTNING_SLOTS; slot\+\+\) \{\s*if \(!inLightningWorldTile\(\)\)\s*break;/.test(events) &&
-  variants.slice(0, 7).every(([, name]) => events.includes(name + '(')) &&
+  variants.every(([, name]) => events.includes(name + '(')) &&
   !/fract\(texCoord\.x\)|mod\(texCoord\.x/.test(events) && events.includes('onLight +='));
 check('rod capture flashes are clipped but ordinary rod and terrain wrapping remain',
   /abs\(strikeX - rodPositions\[i\]\.x\)/.test(display) &&

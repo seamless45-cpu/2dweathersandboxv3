@@ -117,7 +117,7 @@ check('the generator draws the two kinds of channel',
   !/mode === 'IC'/.test(generatorSource) && !/generateIntraCloudBolt/.test(generatorSource) &&
   /function generateLightningBolt\(/.test(generatorSource) &&
   /function generateLightningNetwork\(/.test(generatorSource) &&
-  /const IC_ARTWORK_SIZE = \{ width : 512, height : 256 \};/.test(generatorSource),
+  /const IC_ARTWORK_SIZE = \{ width : 1024, height : 512 \};/.test(generatorSource),
   'the old filament mode stays gone; the network is the compact 2:1 curved tile');
 check('the network forks, fans out from one strike point and never tapers to nothing',
   /leaders      : 6,/.test(generatorSource) && /forkChance   : 0\.018,/.test(generatorSource) &&

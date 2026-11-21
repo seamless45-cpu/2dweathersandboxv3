@@ -39,6 +39,7 @@ class StubContext {
     this.height = canvas.height;
     this.buffer = new Float64Array(this.width * this.height); // 0 .. 1 luminance
     this.lineWidth = 1;
+    this._scale = 1;
     this.lineCap = 'butt';
     this.lineJoin = 'miter';
     this.strokeStyle = '#000';
@@ -54,6 +55,7 @@ class StubContext {
   }
 
   clearRect() { this.buffer.fill(0); }
+  scale(x, y) { if (x !== y) throw new Error("uniform scaling only"); this._scale *= x; }
 
   /* The read the generator does: the canvas as a browser hands it over, four
    * channels of 8-bit, the same value in every one because the artwork is
@@ -71,8 +73,8 @@ class StubContext {
   }
 
   beginPath() { this._path = []; this._arcs = []; }
-  moveTo(x, y) { this._path.push([x, y]); }
-  lineTo(x, y) { this._path.push([x, y]); }
+  moveTo(x, y) { this._path.push([x * this._scale, y * this._scale]); }
+  lineTo(x, y) { this._path.push([x * this._scale, y * this._scale]); }
   closePath() { /* not used by the generator */ }
 
   /* A full circle, which is all the generator asks for (a junction spark). A
@@ -104,7 +106,7 @@ class StubContext {
     for (let i = 1; i < pts.length; i++) {
       this.segmentCount++;
       this._segment(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1],
-                    this.lineWidth, tone, alpha, mode);
+                    this.lineWidth * this._scale, tone, alpha, mode);
     }
     this._path = [];
   }
@@ -166,7 +168,7 @@ class StubContext {
   }
 
   /* Unused by the generator but present so a future call cannot silently no-op. */
-  save() {} restore() {} translate() {} scale() {}
+  save() {} restore() {} translate() {}
 }
 
 class StubCanvas {

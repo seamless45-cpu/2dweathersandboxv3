@@ -236,7 +236,7 @@ check('the slot count agrees between app.js, common.glsl and this test',
     /lightningIntensityOverTime\(lightningTime, lightningPos, lightningData\[INTENSITY\]\)/.test(displayShader),
     'no fixed offset between trigger and display');
   check('the rod corona follows the same instant as the bolt that hit it',
-    /float rodStrikeT = isUpwardStrike[\s\S]{0,180}calcLightningTime\(strikeData\[START_ITERNUM\]\)/.test(displayShader) &&
+    /float rodStrikeT = artificialMeta\(strikeMeta\.z\)[\s\S]{0,180}calcLightningTime\(strikeData\[START_ITERNUM\]\)/.test(displayShader) &&
     /lightningIntensityOverTime\(rodStrikeT, strikeData\.xy, strikeData\[INTENSITY\]\)/.test(displayShader),
     'a mast has to light up with the channel that struck it, not a unit later');
 }

@@ -90,35 +90,13 @@ check('full slots cause a retry next frame, not lost clicks or overwritten event
   /if \(acceptedSlot >= 0\)\s*\{\s*pendingArtificialLightning\.shift\(\)/.test(app) &&
   /slot == freeSlot/.test(location) && /lightningSlotEnd\(data, meta\)/.test(location));
 check('manual strike pass runs when precipitation is disabled and acknowledges once',
-  /if \(guiControls.enablePrecipitation \|\| pendingArtificialLightning.length > 0 \|\|/.test(app) &&
+  /if \(guiControls.enablePrecipitation \|\| pendingArtificialLightning.length > 0\)/.test(app) &&
   /gl\.readPixels\(0, 0, numLightningSlots, 1, gl\.RGBA, gl\.FLOAT, manualSlotReadback\)/.test(app) &&
   /countedSlotStartIter\[acceptedSlot\] = iterNum/.test(app) && /soundSystem\.soundThunder\(targetX, manualSlotReadback/.test(app));
 check('artificial channel and rod share the same extended animation clock and lifetime',
   /artificialMeta\(meta\.z\)[\s\S]{0,120}\* 4\.0/.test(common) &&
   /\(iterNum - lightningStartIterNum\) \/ 20\.0/.test(display) &&
   /\(iterNum - strikeData\[START_ITERNUM\]\) \/ 20\.0/.test(display));
-check('crawler connects the IC origin to the anvil and propagates staggered leaders',
-  /originY = \(origin.y - top\) \* heightKm/.test(display) &&
-  /float rise = clamp\(time \/ 0\.34, 0\.0, 1\.0\)/.test(display) &&
-  /mix\(parent, anvilEntry, t\)/.test(display) &&
-  /for \(int lane = 0; lane < 4/.test(display) &&
-  /vec2 root = anvilEntry/.test(display) &&
-  /float delay = 0\.34 \+ rank \* 0\.15/.test(display) &&
-  /crawlerLeaderPoint\(root, side, lengthKm, along/.test(display) &&
-  /branchStep = clamp\(\(headStep \* nodeCount - k\) \/ 3\.1/.test(display) &&
-  /fingerStep = clamp\(\(established - joint\) \/ max\(branchLen \* 0\.34, 0\.032\)/.test(display) &&
-  /float leaderLive = 1\.0/.test(display) &&
-  /vec2 nextUV = vec2\(origin\.x \+ next\.x \/ \(aspectRatios\.x \* heightKm\)/.test(display) &&
-  /leaderLive = min\(leaderLive, smoothstep\(0\.015, 0\.085, nextCloud\)\)/.test(display) &&
-  /leaderGain = laneGain \* \(0\.72 \+ 0\.28 \* \(1\.0 - along\)\) \* \(0\.68 \+ 0\.32 \* parentPulse\) \* leaderLive/.test(display) &&
-  /min\(glow \* confine \* parentPulse, 2\.35\)/.test(display) &&
-  /smoothstep\(1\.74, 2\.42, time\)/.test(display));
-check('crawler is confined to the cloud interior with only a kilometre-scale leak past the edge',
-  /float cloudHere = texture\(waterTex, uv\)\[CLOUD\]/.test(display) &&
-  /leakUV = vec2\(1\.7e3 \/ \(cellHeight \* resolution\.x\), 0\.95e3 \/ \(cellHeight \* resolution\.y\)\)/.test(display) &&
-  /float confine = smoothstep\(0\.015, 0\.085, cloudHere\)/.test(display) &&
-  /float leak = smoothstep\(0\.015, 0\.085, nearCloud\) \* \(1\.0 - confine\)/.test(display) &&
-  /confine = max\(confine, 0\.38 \* leak\)/.test(display));
 // Propagation remains attached, including every sub-branch; growth begins only
 // after the feeder reaches the common anvil root and the relevant parent joint is complete.
 const smoothstep = (edge0, edge1, value) => {
