@@ -267,7 +267,7 @@ function generateLightningBolt(width, height)
  * thin curved leaders fan outward in sweeping arcs and dendritic forks across
  * the cloud layer without overlapping into thick flat horizontal bands.
  */
-const IC_ARTWORK_SIZE = { width : 512, height : 256 };
+const IC_ARTWORK_SIZE = { width : 1024, height : 512 };
 
 const IC_SHAPE = {
   leaders      : 6,      // curved leaders radiating outward from the strike point
@@ -358,10 +358,17 @@ function icHeadingStep(strand, rand, posXFraction, posYFraction, heightAspect)
 
 function generateLightningNetwork(width, height)
 {
-  const lightningCanvas = new OffscreenCanvas(width, height);
+  const pixelWidth = width, pixelHeight = height;
+  const scale = pixelHeight / 256;
+  // Generate the same world-space geometry on a denser canvas without adding
+  // extra random walk steps or changing the relative strand width.
+  width /= scale;
+  height /= scale;
+  const lightningCanvas = new OffscreenCanvas(pixelWidth, pixelHeight);
   const ctx = lightningCanvas.getContext('2d', {willReadFrequently : true}); // see generateLightningBolt
 
-  ctx.clearRect(0, 0, width, height);
+  ctx.clearRect(0, 0, pixelWidth, pixelHeight);
+  if (scale !== 1) ctx.scale(scale, scale);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.globalCompositeOperation = 'lighten'; // strands cross; the brighter one wins
@@ -439,7 +446,7 @@ function generateLightningNetwork(width, height)
     drawStrand(startX, startY, axis, curveSign, steps, lineWidth, i === 0 ? 0 : 1);
   }
 
-  return readRedChannel(ctx, width, height);
+  return readRedChannel(ctx, pixelWidth, pixelHeight);
 }
 
 

@@ -71,7 +71,7 @@ check('ccEvalBranch takes the pixel footprint as its last argument',
 }
 
 check('channel identity pins survive (end mask, halo, jag all unchanged)',
-  /float endMask = smoothstep\(-0\.006 \* hScale, 0\.004 \* hScale, along\) \* smoothstep\(bLen \+ 0\.008 \* hScale, bLen - 0\.006 \* hScale, along\);/.test(display) &&
+  /float endMask = smoothstep\(-0\.006 \* hScale, 0\.004 \* hScale, along\) \* \(1\.0 - smoothstep\(bLen - 0\.006 \* hScale, bLen \+ 0\.008 \* hScale, along\)\);/.test(display) &&
   /float halo = exp\(-dist \/ max\(bw \* 3\.0, 0\.0040 \* hScale\)\) \* 0\.20 \* endMask;/.test(display) &&
   /vec2 jag = ccFractalDisp\(along, max\(bLen, 0\.12 \* hScale\), seed \* 11\.3, jagScale\);/.test(display));
 

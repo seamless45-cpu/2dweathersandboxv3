@@ -662,7 +662,7 @@ const guiControls_default = {
 // Artificial lightning variants: what the Artificial Lightning tool queues.
 // The slot pass translates the key picked in the in-page option list into the
 // numeric selector the slot-manager shader dispatches on. Ground-striking
-// variants (positive CG, superbolt, hyperbolt, red sprite, elve, ordinary CG)
+// variants (positive CG, superbolt, hyperbolt, ordinary CG)
 // obey rod capture exactly like natural strikes; the rest keep their formation.
 const artificialVariantOptions = {
   'Ordinary Cloud-to-Ground' : 'ordinary_cg',
@@ -672,11 +672,6 @@ const artificialVariantOptions = {
   'Cloud-to-cloud (Positive)' : 'cc_positive',
   'Positive Cloud-to-Ground' : 'positive_cg',
   'Superbolt' : 'superbolt',
-  'Ground-to-cloud (Upward)' : 'ground_to_cloud',
-  'Anvil Crawler' : 'anvil_crawler',
-  'Blue Jet' : 'blue_jet',
-  'Red Sprite' : 'red_sprite',
-  'Elve' : 'elve',
   'Hyperbolt' : 'hyperbolt'
 };
 const artificialVariantUniforms = {
@@ -687,12 +682,7 @@ const artificialVariantUniforms = {
   cc_positive: 4,
   positive_cg: 5,
   superbolt: 6,
-  hyperbolt: 12,
-  ground_to_cloud: 7,
-  anvil_crawler: 8,
-  blue_jet: 9,
-  red_sprite: 10,
-  elve: 11
+  hyperbolt: 12
 };
 
 var horizontalDisplayMult = 3.0; // 3.0 to cover srceen while zoomed out
@@ -7136,8 +7126,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.68'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.68')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.69'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.69')
   ]);
 
   const [
@@ -8090,7 +8080,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.68');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.69');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8129,8 +8119,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     };
 
     if (job.kind === 'network') {
-      // The intra-cloud channel network: 512 x 256, ~128 KB, compact 2:1 tile.
-      lightningGeneratorWorker.postMessage({kind : 'network', width : 512, height : 256});
+      // The intra-cloud channel network: 1024 x 512, ~512 KB, compact 2:1 tile.
+      lightningGeneratorWorker.postMessage({kind : 'network', width : 1024, height : 512});
     } else {
       // The original tile: 2500 x 5000 at a 9 pixel channel. The fork this repo
       // started from halved both and doubled the brightness gain (1250 x 2500 at
@@ -8670,7 +8660,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     let motionBlurSimulationSteps = 0;
     let artificialAttemptedThisFrame = false;
-    const hasSuperLightningRods = lightningRods.some(rod => rod.isSuper);
     let camPanSpeed = guiControls.camSpeed;
 
     if (rightCtrlPressed) {
@@ -9019,8 +9008,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             }
 
             // The slot pass also runs for manually queued strikes when rain is off.
-            if (guiControls.enablePrecipitation || pendingArtificialLightning.length > 0 ||
-                (hasSuperLightningRods && iterNum % 60 === 0)) {
+            if (guiControls.enablePrecipitation || pendingArtificialLightning.length > 0) {
               // Strike slot manager: a new strike takes a free slot and every
               // running strike keeps its own until its animation is over, so
               // strikes never cut each other short. Ping-pong the slot array.
@@ -9034,8 +9022,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
                            manualStrike ? manualStrike.x : 0, manualStrike ? manualStrike.y : 0, 2.8, manualStrike ? 1 : 0);
               gl.uniform1f(getUniformLoc(lightningLocationProgram, 'artificialStrikeVariant'),
                            artificialVariantUniforms[manualStrike ? manualStrike.variant : guiControls.artificialLightningVariant] ?? 0);
-              gl.uniform1f(getUniformLoc(lightningLocationProgram, 'artificialStrikeTipY'),
-                           manualStrike && manualStrike.tipY !== undefined ? manualStrike.tipY : 0);
               uploadLightningRodUniforms(lightningLocationProgram); // rods capture CG strikes
 
               gl.activeTexture(gl.TEXTURE0);
@@ -9109,12 +9095,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         // hearing thunder - and no strike is missed, because a strike is found by
         // comparing its start iteration against the last one we heard, not against
         // the previous frame.
-        const lightningReadbackTick = (guiControls.enablePrecipitation || hasSuperLightningRods || iterNum <= manualLightningActiveUntil) &&
+        const lightningReadbackTick = (guiControls.enablePrecipitation || iterNum <= manualLightningActiveUntil) &&
                                       iterNum != lastSuperboltCheckIteration &&
                                       (superboltCheckFrame++ % 3) === 0;
         const lightningSoundDue = guiControls.sound && lightningReadbackTick;
         const superboltCheckDue = lightningReadbackTick;
-        const rodCaptureCheckDue = lightningRods.length > 0 && (guiControls.enablePrecipitation || hasSuperLightningRods || iterNum <= manualLightningActiveUntil) &&
+        const rodCaptureCheckDue = lightningRods.length > 0 && (guiControls.enablePrecipitation || iterNum <= manualLightningActiveUntil) &&
                                    iterNum != lastRodCaptureCheckIteration &&
                                    (rodCaptureFrame++ % 12) === 0;
         if (lightningSoundDue || rodCaptureCheckDue || superboltCheckDue) {
@@ -9197,8 +9183,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               const isSuperbolt = strikeClassMetaW >= 0.5;
               const strikeSoundMult = strikeClassMetaW >= 1.5 ? 2.5 : (isSuperbolt ? 1.5 : 1.0);
               if (Math.abs(metaType - 5.0) < 0.25) {
-                // Upward ground-to-cloud lightning still produces CG thunder.
-                soundSystem.soundThunder(targetX, originY, Math.pow(strikeIntensity, 2.0));
+                // Ignore legacy upward-leader slots from older saved simulations.
               } else if (metaType >= 3.5) {
                 // Positive intra-cloud flash: strong cloud rumble at the origin cell via cc*.mp3.
                 soundSystem.soundThunder(targetX, originY, Math.min(Math.pow(strikeIntensity, 2.0), 1.0));
@@ -9218,7 +9203,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               lastLightningSoundIteration = newestIteration;
             }
           }
-        } else if (!guiControls.sound || (!guiControls.enablePrecipitation && !hasSuperLightningRods && iterNum > manualLightningActiveUntil)) {
+        } else if (!guiControls.sound || (!guiControls.enablePrecipitation && iterNum > manualLightningActiveUntil)) {
           lastLightningSoundIteration = iterNum;
           lastLightningSoundCheckIteration = iterNum;
         }
@@ -10324,7 +10309,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.68');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.69');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

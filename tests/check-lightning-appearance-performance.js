@@ -11,22 +11,13 @@ assert.match(app, /motionBlurEnabled : false,/);
 // Loading overlays a saved choice onto defaults, rather than forcing either value.
 assert.match(app, /guiControls = \{ \.\.\.guiControls_default, \.\.\.JSON\.parse\(strGuiControls\) \}/);
 assert.doesNotMatch(app, /guiControls\.motionBlurEnabled = (?:true|false);/);
-// The jet's cap has a lateral envelope, so it cannot light the whole width of its box.
-assert.match(shader, /front \* fan \* 0\.3 \* fade/);
-assert.match(shader, /float thickness = mix\(0\.8, 3\.5,/);
-assert.match(shader, /float attachmentGlow = exp\(-length\(p\)/);
-assert.doesNotMatch(shader, /float shockRing/);
-// Vertical rejection must happen before the costly fractal for CG and IC.
-const cg = shader.slice(shader.indexOf('vec3 displayLightning('), shader.indexOf('vec3 displayFlash('));
-assert(cg.indexOf('if (lightningTexCoord.y < 0.01') < cg.indexOf('float boltJag ='));
+// Both cloud networks reject out-of-tile fragments before texture sampling
+// and no longer apply a high-frequency secondary warp to the artwork.
 for (const name of ['displayFlash', 'displayPositiveFlash']) {
-  const body = shader.slice(shader.indexOf('vec3 ' + name + '('), shader.indexOf('vec3 ' + name + '(') + 4000);
-  assert(body.indexOf('if (flashCoord.y < 0.004') < body.indexOf('flashLateralJag('));
+  const start = shader.indexOf('vec3 ' + name + '(');
+  const body = shader.slice(start, shader.indexOf('\n}', start));
+  assert(body.indexOf('if (flashCoord.y < 0.004') < body.indexOf('textureGrad('));
+  assert.doesNotMatch(body, /flashLateralJag|flashCoord\.x \+=/);
 }
-// Each lane is rejected before node traversal; unformed nodes do no cloud fetches.
-const crawler = shader.slice(shader.indexOf('vec3 drawAnvilCrawler('), shader.indexOf('vec3 spriteBody('));
-assert(crawler.indexOf('p.x * side < -6.0') < crawler.indexOf('for (int i = 1; i <= 11; i++)'));
-assert(crawler.indexOf('if (growth <= 0.0)') < crawler.indexOf('float nextCloud = texture'));
-assert.match(crawler, /float laneCore = channelGlow\(p, previous, end, width\)/);
-assert.match(shader, /if \(abs\(dx\) > 9\.0\)\s*return vec3\(0\.0\);/);
+assert.doesNotMatch(shader, /drawUpperAtmosphereLightning|drawAnvilCrawler|displayGroundToCloud/);
 console.log('Lightning appearance, performance and defaults regression checks passed');

@@ -51,9 +51,6 @@ check('fractalLateralJagDeriv mirrors the helper (same frequencies, carries the 
   /float fractalLateralJagDeriv\(float t, float spanKm, float seed, float amp\)/.test(shader) &&
   /return \(0\.58 \* f1 \* sgn1 \+ 0\.28 \* f2 \* sgn2 \+ 0\.13 \* f3 \* sgn3\) \* spanKm \* amp \* 4\.0;/.test(shader));
 
-check('flashLateralJag helper wraps tendril fractal in tile space with derivative',
-  /vec2 flashLateralJag\(float v, float seed\)/.test(shader) &&
-  /return vec2\(shift, deriv\);/.test(shader));
 
 /* ------------------------------------------- CG bolt artwork warp */
 
@@ -77,13 +74,7 @@ check('the bolt warp derivative propagates into both mip gradients',
 
 /* ------------------------------------------- IC / +IC network warps */
 
-check('both IC render paths apply the tendril warp and propagate its derivative into gradients',
-  (shader.match(/vec2 flashJag = flashLateralJag\(clamp\(flashCoord\.y, 0\.0, 1\.0\), flashSeed\);/g) || []).length === 2 &&
-  (shader.match(/flashCoord\.x \+= flashJag\.x;/g) || []).length === 2 &&
-  (shader.match(/flashJag\.y \* flashFlip/g) || []).length >= 4);
 
-check('tendril warp amplitude is bounded (30%-tile, no mess)',
-  /\* 0\.030;/.test(shader) && !/\* 0\.0[5-9][0-9]*;/.test(shader.slice(shader.indexOf('vec2 flashLateralJag'), shader.indexOf('vec2 flashLateralJag') + 400)));
 
 /* ------------------------------------- external positive CG (+super/hyper) */
 
@@ -95,21 +86,9 @@ check('external positive CG arc jag goes through the shared fractal, no hand-rol
 
 /* --------------------------------------------------- GC leader spine */
 
-check('GC spine uses CC triwave octaves, dominant sines removed',
-  /env \* \(0\.068 \* extTriWave\(2\.3 \* t \+ phase\) \+/.test(shader) &&
-  /0\.045 \* extTriWave\(5\.4 \* t \+ phase \* 1\.73 \+ 0\.31\) \+/.test(shader) &&
-  /0\.030 \* extTriWave\(9\.6 \* t \+ phase \* 1\.27\) \+/.test(shader) &&
-  /0\.026 \* extTriWave\(11\.0 \* t \+ phase \* 0\.61\)\);/.test(shader) &&
-  !/0\.115 \* sin\(3\.15/.test(shader) &&
-  !/0\.052 \* sin\(8\.4/.test(shader));
 
 /* ----------------------------------------------- anvil crawler leaders */
 
-check('anvil crawler leaders use CC triwave octaves, smooth sine removed',
-  /envelope \* \(0\.170 \* extTriWave\(3\.6 \* along \+ phase\) \+/.test(shader) &&
-  /0\.105 \* extTriWave\(9\.2 \* along \+ phase \* 0\.63 \+ 0\.31\) \+/.test(shader) &&
-  /0\.060 \* extTriWave\(17\.4 \* along \+ phase \* 1\.71\)\);/.test(shader) &&
-  !/0\.22 \* sin\(4\.8/.test(shader));
 
 /* ----------------------------------------------- CC path itself intact */
 

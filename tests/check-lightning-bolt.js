@@ -286,7 +286,7 @@ check('and the trunk stays inside the sprite',
     'mipmap cost is about one third of the base R8 tile');
   check('the flash network is one small tile, asked for after the first bolt',
     /kind : 'network'/.test(workerBlock) &&
-    /kind : 'network', width : 512, height : 256/.test(workerBlock) &&
+    /kind : 'network', width : 1024, height : 512/.test(workerBlock) &&
     /if \(lightningTexturesReady < 1\)\s*\n\s*return \{kind : 'bolt', index : 0\};\s*\n\s*if \(!lightningNetworkReady\)/.test(workerBlock),
     'both kinds need a picture early, and the compact network is ~128 KB, not twelve MB');
   check('the display never samples a tile that has not been drawn yet',
@@ -435,7 +435,7 @@ check('the curved network is fine and sparse, not a bloated white web',
 
   check('displayFlash keeps true 2:1 world aspect ratio so IC curves are not squashed',
     /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader) &&
-    /const vec2 networkTexRes = vec2\(512\.0, 256\.0\);/.test(displayShader),
+    /const vec2 networkTexRes = vec2\(1024\.0, 512\.0\);/.test(displayShader),
     'flashSpan must match the 512 x 256 artwork aspect ratio via aspectRatios[0]');
 
   check('displayFlash keeps flashThreshold low enough that mipmapped fine curved branches stay continuous',

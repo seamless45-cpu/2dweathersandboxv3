@@ -19,8 +19,8 @@ check('realistic display premultiplies its surface colour by coverage and adds e
   /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight \* opacity, 0\.0\)[\s\S]{0,64}?\+ emittedLight \* \(1\.0 - terrainOcclusion\) \+ rodGlow\), opacity\);/.test(display));
 check('emitted light no longer inflates the coverage alpha',
   !/clamp\(opacity \+ length\(emittedLight\)/.test(display));
-check('upper-atmosphere additive branch writes pure light with alpha 0',
-  /fragmentColor = vec4\(softHdrClamp\(upperAtmosphereLight\), 0\.0\);/.test(display));
+check('empty above-domain branch remains transparent',
+  /fragmentColor = vec4\(0\.0\);/.test(display));
 check('realistic display is drawn with premultiplied blending (ONE, ONE_MINUS_SRC_ALPHA)',
   /gl\.enable\(gl\.BLEND\);\s*\n\s*\/\/ Premultiplied alpha[\s\S]{0,300}?gl\.blendFunc\(gl\.ONE, gl\.ONE_MINUS_SRC_ALPHA\);/.test(app) &&
   /\/\/ draw clouds and terrain/.test(app));

@@ -87,9 +87,6 @@ check('hyperbolt is 30x brighter (2.5x a superbolt) and lives 0.3 s instead of 2
 check('hyperbolt uses the shared superbolt-class gate with the shorter window',
   /if \(isSuperbolt && lightningTime >= repeatPeriod \* lightningFlickers\(lightningData\) \+ \(2\.924 - strokeDurationShorten\)\)/.test(displayShader));
 
-check('hyperbolt keeps the optical-effect fractional bits out of the class test',
-  /hasOpticalEffect\(float flags, float bit\)/.test(displayShader) &&
-  /mod\(floor\(fract\(flags\) \* 32\.0 \+ 0\.5\) \/ bit, 2\.0\) >= 1\.0/.test(displayShader));
 
 check('captured-rod surge honours the 0.3 s hyperbolt window and 30x gain',
   /bool rodStrikeIsHyperbolt = strikeMeta\.w >= 1\.5;/.test(displayShader) &&
@@ -132,7 +129,7 @@ check('artificial Hyperbolt variant (index 12, 720,000 K positive CG) dispatches
   /variant > 11\.5 && variant < 12\.5/.test(locationShader) &&
   /integer meta\.w = 2 hyperbolt flag/.test(locationShader) &&
   appSource.includes("'Hyperbolt' : 'hyperbolt'") &&
-  /hyperbolt: 12,/.test(appSource));
+  /hyperbolt: 12/.test(appSource));
 
 /* ------------------------------------------------------------- camera shake */
 
