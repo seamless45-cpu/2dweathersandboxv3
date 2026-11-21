@@ -634,20 +634,16 @@ const guiControls_default = {
   IterPerFrame : 10,
   auto_IterPerFrame : true,
   autoFpsTarget : '120',
-  performancePreset : 'Extreme',
-  // HDR renders above native resolution by default so thin lightning
-  // channels (sub-pixel on screen) land on more than one render-target
-  // sample per pixel; the post pass downsamples it with LINEAR filtering,
-  // which for the integer 2x case is an exact 2x2 box filter. '200%' is
-  // available in the Performance folder for maximum sharpness.
-  hdrQuality : '150%',
+  performancePreset : 'Custom',
+  // Native-resolution HDR by default; supersampling remains opt-in.
+  hdrQuality : '100%',
   bloomQuality : '100%',
   bloomEnabled : true,
   filmicToneMapping : false,
   fxaaEnabled : false,
   volumetricCloudLighting : true,
   temporalAAEnabled : false,
-  motionBlurEnabled : true,  // toggle lives in the Performance folder again; saved with settings (default on)
+  motionBlurEnabled : false, // opt in; saved user settings are preserved
   motionBlurIntensity : 100, // 0-350 (%); 0 disables the taps at shader level, 100 = subtle trails, 350 = long-exposure smear
   superSharpDetail : false,
   fullscreenMode : false,
@@ -7140,8 +7136,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.60'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.60')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.61'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.61')
   ]);
 
   const [
@@ -8094,7 +8090,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.60');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.61');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -10322,7 +10318,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.60');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.61');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

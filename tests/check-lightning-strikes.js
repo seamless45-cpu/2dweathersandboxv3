@@ -259,8 +259,8 @@ check('the slot count agrees between app.js, common.glsl and this test',
     return 255 * Math.pow(aces, 1 / 2.2);
   };
 
-  check('the CG channel is written at the original hundred thousand HDR units',
-    mainBoltBrightness === 100000,
+  check('the CG channel uses a reduced HDR gain',
+    mainBoltBrightness === 30000,
     'mainBoltBrightness ' + mainBoltBrightness);
   check('the channel is the raw curve times that, with no easing',
     /pixVal \*= currentLightningIntensity;/.test(displayShader) &&

@@ -253,8 +253,8 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
   const extMatch = displayShader.match(/const float extBoltBrightness = ([\d.]+);/);
   const mainB = mainMatch ? Number(mainMatch[1]) : NaN;
   const extB = extMatch ? Number(extMatch[1]) : NaN;
-  check('displayExternalLightning uses 200000 brightness (2x normal CG 100000) and smooth tail fade',
-    Number.isFinite(mainB) && Number.isFinite(extB) && extB === 200000 && extB === mainB * 2 &&
+  check('displayExternalLightning uses 60000 brightness (2x normal CG 30000) and smooth tail fade',
+    Number.isFinite(mainB) && Number.isFinite(extB) && extB === 60000 && extB === mainB * 2 &&
     /pixVal = 0\.05 \* lightningCoverage\(pixVal, brightnessThreshold\);/.test(displayShader) &&
     /float extBaseIntensity = clamp\(mix\(1\.8, 3\.4,/.test(displayShader) &&
     /float extTailFade = pow\(smoothstep\(2\.924, 1\.15, tailT\), 2\.4\);/.test(displayShader) &&

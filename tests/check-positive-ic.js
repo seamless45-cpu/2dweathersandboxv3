@@ -83,15 +83,15 @@ check('realisticDisplayShader.frag defines displayPositiveFlash() with +50% brig
   /vec3 displayPositiveFlash\(/.test(displayShader) &&
   /bool isPositiveIC = isFlash && lightningMeta\.y >= 3\.5;/.test(displayShader) &&
   /float flashHeight = 0\.095 \* lightningHeightScale\(\);/.test(displayShader) &&
-  /const float mainBoltBrightness = 10500\.;/.test(displayShader) &&
-  /vec3 positiveIcCol = planckBlackbody\(30000\.0 \+ 5000\.0 \* \(random2d\(vec2\(pos\.y \* 5\.9, pos\.x \* 3\.3\)\) - 0\.5\)\);/.test(displayShader) &&
+  /const float mainBoltBrightness = 3600\.;/.test(displayShader) &&
+  /vec3 positiveIcCol = planckBlackbody\(11000\.0 \+ 4000\.0 \* \(random2d\(vec2\(pos\.y \* 5\.9, pos\.x \* 3\.3\)\) - 0\.5\)\);/.test(displayShader) &&
   /if \(isPositiveIC\)\s*\n\s*lightningOnLight \*= 1\.5;/.test(displayShader),
   'expected dedicated positive IC render path and 1.5x cloud glow');
 
-check('realisticDisplayShader.frag preserves normal -IC displayFlash() path untouched',
+check('realisticDisplayShader.frag preserves normal -IC displayFlash() geometry with reduced gain',
   /vec3 displayFlash\(vec2 pos, float lightningTime, float currentLightningIntensity\)/.test(displayShader) &&
   /float flashHeight = 0\.075 \* lightningHeightScale\(\);/.test(displayShader) &&
-  /const float mainBoltBrightness = 7000\.;/.test(displayShader),
+  /const float mainBoltBrightness = 2400\.;/.test(displayShader),
   '-IC flashes must retain original geometry and violet-blue intensity');
 
 check('app.js handles +IC metaType >= 3.5 before CC routing using origin coordinates and cc*.mp3 audio',

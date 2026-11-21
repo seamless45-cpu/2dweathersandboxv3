@@ -109,6 +109,8 @@
 
 - [x] Motion blur has its Performance-folder toggle again (default on); saved-off values from older settings are respected again. The strength slider is unchanged (0 flattens the taps, 100 is a soft veil, 350 opens the shutter to five frames of gather)
 
+- [x] Default HDR to 100% and motion blur off for fresh settings; preserve saved choices. Restore distinct discharge tints, temper bright channels and special optical effects, confine the blue-jet front, and reduce crawler/sprite rendering work during strikes. Appearance and performance still require real-GPU validation across zoom levels and overlapping events.
+
 # In Progress
 
 
