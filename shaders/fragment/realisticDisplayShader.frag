@@ -151,6 +151,41 @@ float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
   return max((1. / (0.05 + pow(T * 2.0, 3.))) - 0.005, 0.) * pow(intensity, 2.0); // fading out curve
 }
 
+// Visual timeline in the existing strike clock. A stepped leader grows from
+// the source to the attachment point; after attachment a faster bright front
+// runs back up the established path. This is an animation approximation:
+// real return strokes are much faster than our iteration-based frame cadence.
+float dischargeLeader(float time)
+{
+  float progress = clamp(time / 0.45, 0.0, 1.0) * 12.0;
+  return min((floor(progress) + smoothstep(0.0, 0.42, fract(progress))) / 12.0, 1.0);
+}
+
+float dischargeBranchGrowth(float time, float root)
+{
+  return clamp((dischargeLeader(time) - root) * 4.5, 0.0, 1.0);
+}
+
+float groundChannelStage(float time, float fromCloud)
+{
+  float leader = dischargeLeader(time);
+  float visible = 1.0 - smoothstep(leader, leader + 0.035, fromCloud);
+  float returnFront = clamp((time - 0.45) / 0.20, 0.0, 1.0);
+  float returned = smoothstep(1.0 - returnFront - 0.04, 1.0 - returnFront + 0.04, fromCloud);
+  return visible * mix(0.000003, 1.0, returned);
+}
+
+// IC/CC channels do not have a ground return stroke. Their leaders extend
+// from their source, then a bright re-illumination follows the established
+// path. Upper atmospheric sprites, jets and elves keep their own physics.
+float cloudChannelStage(float time, float fromSource)
+{
+  float leader = dischargeLeader(time);
+  float visible = 1.0 - smoothstep(leader, leader + 0.035, fromSource);
+  float pulse = exp(-pow((fromSource - clamp((time - 0.45) / 0.24, 0.0, 1.0)) / 0.12, 2.0)) * smoothstep(0.43, 0.48, time);
+  return visible * (0.0003 + 0.9997 * smoothstep(0.40, 0.55, time) + pulse * 0.6);
+}
+
 float findCapturedRodTipY(float strikeX)
 {
   for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
@@ -444,6 +479,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   pixVal = 0.05 * lightningCoverage(pixVal, brightnessThreshold);
 
   pixVal *= currentLightningIntensity;
+  pixVal *= groundChannelStage(lightningTime, clamp(lightningTexCoord.y, 0.0, 1.0));
 
   // Approximate channel temperatures vary by discharge and by strike; atmospheric
   // filtering and exposure also affect the observed colour.
@@ -462,7 +498,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   float spanKm = spanY * heightKm;
   float branchSeedBase = random2d(vec2(pos.x * 5.13, pos.y * 3.71) + 0.77);
   int branchCount = 1 + int(floor(branchSeedBase * 2.999));
-  float intensityRaw = currentLightningIntensity / 100000.0; // undo the artwork radiance gain
+  float intensityRaw = currentLightningIntensity / 30000.0; // undo the artwork radiance gain
   float branchSum = 0.0;
   for (int bi = 0; bi < 3; bi++) {
     if (bi >= branchCount)
@@ -481,9 +517,12 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
     float forkAngle = mix(0.48, 0.85, br1);
     vec2 bDir = normalize(vec2(sideSign * sin(forkAngle), -cos(forkAngle)));
     float bLen = spanKm * mix(0.12, 0.26, br2);
+    float growth = dischargeBranchGrowth(lightningTime, tb);
+    if (growth <= 0.0) continue;
+    bLen *= growth;
     float coreW = max(0.0021 * lightningHeightScale(), 0.0013);
     vec2 bVal = ccEvalBranch(pKm, anchor, bDir, bLen, sideSign, pos.x * 17.3 + fi * 5.7, coreW, mix(0.50, 0.72, br1), max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)), length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * heightKm);
-    branchSum += bVal.x * 1.05 + bVal.y * 0.30;
+    branchSum += (bVal.x * 1.05 + bVal.y * 0.30) * groundChannelStage(lightningTime, tb);
   }
   outputColor += lightningCol * branchSum * intensityRaw * 1200.0;
 
@@ -550,6 +589,7 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
 
   pixVal = (1.0 - brightnessThreshold) * lightningCoverage(pixVal, brightnessThreshold);
   pixVal *= currentLightningIntensity;
+  pixVal *= cloudChannelStage(lightningTime, clamp(length(flashCoord - vec2(0.5)) * 1.4, 0.0, 1.0));
 
   // Cloud flashes use a cooler apparent channel than ground return strokes.
   vec3 lightningCol = planckBlackbody(18000.0 + 6000.0 * (random2d(vec2(pos.y * 3.9, pos.x * 7.3)) - 0.5));
@@ -574,6 +614,9 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
     vec2 anchor = vec2(cos(ang), sin(ang)) * mix(0.04, 0.16, br2) * icHeightKm;
     vec2 bDir = vec2(cos(ang), sin(ang));
     float bLen = icHeightKm * mix(0.10, 0.24, br1);
+    float growth = dischargeBranchGrowth(lightningTime, 0.18 + 0.16 * fi);
+    if (growth <= 0.0) continue;
+    bLen *= growth;
     float coreW = max(0.0018 * lightningHeightScale(), 0.0011);
     vec2 bVal = ccEvalBranch(icP, anchor, bDir, bLen, br2 < 0.5 ? -1.0 : 1.0, pos.y * 21.7 + fi * 9.3, coreW, mix(0.45, 0.62, br2), max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)), length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * icHeightKm);
     icBranchSum += bVal.x * 1.0 + bVal.y * 0.28;
@@ -629,6 +672,7 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
 
   pixVal = (1.0 - brightnessThreshold) * lightningCoverage(pixVal, brightnessThreshold);
   pixVal *= currentLightningIntensity;
+  pixVal *= cloudChannelStage(lightningTime, clamp(length(flashCoord - vec2(0.5)) * 1.4, 0.0, 1.0));
 
   // Positive IC leaders use a warmer apparent spectrum through the anvil.
   vec3 positiveIcCol = planckBlackbody(11000.0 + 4000.0 * (random2d(vec2(pos.y * 5.9, pos.x * 3.3)) - 0.5));
@@ -653,6 +697,9 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
     vec2 anchor = vec2(cos(ang), sin(ang)) * mix(0.05, 0.18, br2) * picHeightKm;
     vec2 bDir = vec2(cos(ang), sin(ang));
     float bLen = picHeightKm * mix(0.12, 0.26, br1);
+    float growth = dischargeBranchGrowth(lightningTime, 0.18 + 0.16 * fi);
+    if (growth <= 0.0) continue;
+    bLen *= growth;
     float coreW = max(0.0019 * lightningHeightScale(), 0.00115);
     vec2 bVal = ccEvalBranch(picP, anchor, bDir, bLen, br2 < 0.5 ? -1.0 : 1.0, pos.y * 19.3 + fi * 8.1, coreW, mix(0.45, 0.62, br2), max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)), length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * picHeightKm);
     picBranchSum += bVal.x * 1.0 + bVal.y * 0.28;
@@ -772,9 +819,12 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
       sideSign = -sideSign;
     vec2 bDir = ccRotate(arcTan, sideSign * mix(0.52, 0.88, br1));
     float bLen = scaleLen * mix(0.10, 0.21, br2);
+    float growth = dischargeBranchGrowth(lightningTime, bt);
+    if (growth <= 0.0) continue;
+    bLen *= growth;
     float coreW = max(scaleLen * 0.0034, 0.0016);
     vec2 bVal = ccEvalBranch(target, bStart, bDir, bLen, sideSign, groundPos.x * 23.7 + fi * 7.3, coreW, mix(0.48, 0.66, br1), branchPixelT);
-    extBranchGain += bVal.x * 1.15 + bVal.y * 0.34;
+    extBranchGain += (bVal.x * 1.15 + bVal.y * 0.34) * groundChannelStage(lightningTime, bt);
   }
 
   // Conservative projected footprint in artwork texels. The closest-point
@@ -795,6 +845,7 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
 
   pixVal = 0.05 * lightningCoverage(pixVal, brightnessThreshold);
   pixVal *= intensity;
+  pixVal *= groundChannelStage(lightningTime, t);
 
   return max(pixVal * lightningColor + lightningColor * extBranchGain * intensityRaw * 950.0, vec3(0.0));
 }
@@ -889,7 +940,7 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
                  * clamp(coreW * mainInvF, 0.0, 1.0) * edgeFade;
   float mainHalo = exp(-distMain / max(coreW * 3.2, 0.0045 * hScale)) * 0.20 * edgeFade;
   float mainOuter = exp(-distMain / max(coreW * 7.5, 0.011 * hScale)) * 0.018 * edgeFade;
-  float mainSignal = mainCore + mainHalo + mainOuter;
+  float mainSignal = (mainCore + mainHalo + mainOuter) * cloudChannelStage(lightningTime, t);
 
   float branchCore = 0.0;
   float branchSignal = 0.0;
@@ -916,11 +967,14 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
     vec2 bDir = ccRotate(rtan, forkAngle);
     float bLen = span * mix(0.20, 0.42, br1) * (isPositiveCC ? 0.78 : 1.0);
     float bWeight = isPositiveCC ? 0.62 : mix(0.68, 0.88, br2);
+    float growth = dischargeBranchGrowth(lightningTime, tb);
+    if (growth <= 0.0) continue;
+    bLen *= growth;
     vec2 bVal = ccEvalBranch(target, bStart, bDir, bLen, sideSign, seed + float(b) * 1.37, coreW, bWeight, worldPix);
     branchCore = max(branchCore, bVal.x);
     branchSignal = max(branchSignal, bVal.y);
 
-    if (!isPositiveCC && (b == 1 || b == 2)) {
+    if (!isPositiveCC && growth > 0.5 && (b == 1 || b == 2)) {
       float subAlong = 0.44 * bLen;
       float subArch = sideSign * 0.11 * bLen * sin(PI * 0.44);
       float subJagScale = clamp(bLen * 0.095, 0.008 * hScale, 0.028 * hScale);
@@ -1614,9 +1668,15 @@ vec3 drawUpperAtmosphereLightning()
         float streamers = 0.0;
         for (int i = -2; i <= 2; i++) {
           float r1 = random2d(vec2(seedJ2 * 7.7 + float(i) * 3.1, data.x * 11.3 + float(i) * 1.1));
+          float branchRise = clamp((t - 0.04 * (r1 + abs(float(i)))) / 0.55, 0.0, 1.0);
+          float branchTop = baseKm + (41.0 - baseKm) * branchRise;
+          float branchMask = 1.0 - smoothstep(branchTop - 0.5, branchTop + 0.8, altitude);
           float ray = (float(i) + (r1 - 0.5) * 0.9) * rel * tanA * 0.62;
           float wob = 0.14 * sin(altitude * 0.38 + float(i) * 2.4 + seedJ * 6.283);
-          streamers += exp(-pow((dx - ray - wob) / 0.15, 2.0)) * (0.55 + 0.45 * r1);
+          float fork = max(rel - (5.0 + 3.0 * r1), 0.0) * 0.12;
+          float strand = exp(-pow((dx - ray - wob) / 0.15, 2.0));
+          float daughter = exp(-pow((dx - ray - wob - fork * (i < 0 ? -1.0 : 1.0)) / 0.10, 2.0));
+          streamers += (strand + daughter * smoothstep(0.0, 2.0, fork) * 0.4) * branchMask * (0.55 + 0.45 * r1);
         }
         // Central stepped channel: a narrow bolt climbing the cone axis, wide
         // at the root where the starter releases and thinning as it climbs.

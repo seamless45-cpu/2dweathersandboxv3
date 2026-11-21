@@ -7136,8 +7136,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.62'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.62')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.63'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.63')
   ]);
 
   const [
@@ -8090,7 +8090,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.62');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.63');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8668,6 +8668,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     try {
 
+    let motionBlurSimulationSteps = 0;
     let artificialAttemptedThisFrame = false;
     const hasSuperLightningRods = lightningRods.some(rod => rod.isSuper);
     let camPanSpeed = guiControls.camSpeed;
@@ -8848,6 +8849,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           if (airplaneMode)
             numIterations = 1;
           for (var i = 0; i < numIterations; i++) { // Simulation loop
+            motionBlurSimulationSteps++;
             // calc and apply velocity
             gl.useProgram(velocityProgram);
             gl.activeTexture(gl.TEXTURE0);
@@ -9592,8 +9594,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.activeTexture(gl.TEXTURE3);
       gl.bindTexture(gl.TEXTURE_2D, baseTexture_1); // fluid state: scene velocity for motion blur
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'velocityTex'), 3);
+      gl.activeTexture(gl.TEXTURE4);
+      gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'motionBlurWallTex'), 4);
       gl.uniform2f(getUniformLoc(postProcessingProgram, 'motionBlurResolution'), sim_res_x, sim_res_y);
-      gl.uniform1f(getUniformLoc(postProcessingProgram, 'motionBlurIterPerFrame'), Math.max(1, Math.min(50, guiControls.IterPerFrame)));
+      gl.uniform1f(getUniformLoc(postProcessingProgram, 'motionBlurIterPerFrame'), motionBlurSimulationSteps);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'motionBlurWrap'), guiControls.wrapHorizontally);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'bloomEnabled'), guiControls.bloomEnabled);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'toneMappingEnabled'), guiControls.filmicToneMapping);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'fxaaEnabled'), guiControls.fxaaEnabled);
@@ -10318,7 +10324,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.62');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.63');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
