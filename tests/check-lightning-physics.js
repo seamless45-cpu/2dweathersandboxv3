@@ -168,8 +168,8 @@ check('fallSpeed is now a 0.4-2.0 multiplier GUI slider feeding the drag model (
 
 check('motion blur gathers the scene velocity field, not only the camera',
   /uniform sampler2D velocityTex;/.test(post) &&
-  /vec2 velocity = texture\(velocityTex, simUV\)\.xy;/.test(post) &&
-  /flow -= sceneFlow;/.test(post) &&
+  /velocity = texture\(velocityTex, sampleUV\)\.xy;/.test(post) &&
+  /previousWorld = worldUV - velocity \* motionBlurIterPerFrame/.test(post) &&
   /gl\.uniform1i\(getUniformLoc\(postProcessingProgram, 'velocityTex'\), 3\);/.test(app));
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

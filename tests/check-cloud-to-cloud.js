@@ -111,7 +111,7 @@ check('reworked CC renders procedural fractal-displaced cubic spline with slope-
       /inversesqrt\(1\.0 \+ clamp\(spineSlope \* spineSlope, 0\.0, 6\.25\)\)/.test(ccBody) &&
       !/texture\w*\(\s*lightningTex/.test(ccBody) &&
       /branchMax = isPositiveCC \? \(1\.0 \+ floor\(branchBudget \* 2\.0\)\)/.test(ccBody) &&
-      /!isPositiveCC && \(b == 1 \|\| b == 2\)/.test(ccBody) &&
+      /!isPositiveCC && growth > 0\.5 && \(b == 1 \|\| b == 2\)/.test(ccBody) &&
       /ccMidDist/.test(displayShader);
   })(),
   'CC must draw a procedural slope-corrected tortuous channel with 2-level -CC forks, sparse +CC forks, and 3-lobe cloud lighting');

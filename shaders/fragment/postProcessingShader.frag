@@ -31,8 +31,10 @@ uniform vec3 motionBlurView;        // current render view (x, y, zoom) includin
 uniform vec3 motionBlurPrevView;    // view the history texture was rendered with
 uniform vec2 motionBlurAspects;     // (sim aspect, canvas aspect)
 uniform sampler2D velocityTex;      // fluid state: xy = velocity in cells per iteration
+uniform isampler2D motionBlurWallTex; // solid terrain stays fixed in world space
 uniform vec2 motionBlurResolution;  // simulation grid in cells
-uniform float motionBlurIterPerFrame; // simulation iterations per rendered frame
+uniform float motionBlurIterPerFrame; // actual simulation steps since the previous rendered frame
+uniform bool motionBlurWrap;
 out vec4 fragmentColor;
 
 
@@ -137,62 +139,39 @@ void main()
   }
 
   if (motionBlurEnabled && motionBlurHistoryValid) {
-    // Reworked shutter integral, two motion paths gathered on one axis:
-    //
-    // 1. Camera motion - reproject this pixel through the current and previous
-    //    render view (position and zoom, shake included), as before. The display
-    //    mesh slides under a fixed uv window, so a world point travels a
-    //    screen-space path between frames; radial zoom blurs for free.
-    //
-    // 2. Scene motion - the fluid advects the clouds, and the history holds
-    //    last frame's render of them. The velocity field (cells per iteration)
-    //    is sampled at this pixel's simulation coordinate, converted to uv per
-    //    rendered frame, then mapped into canvas uv through the same derivative
-    //    of the view transform. A stationary camera with a moving storm finally
-    //    blurs along the wind. The gather axis is the SUM of both paths, so a
-    //    panning camera over a storm streaks along the true trajectory.
-    //
-    // Sixteen taps with a raised-cosine weighting approximate the shutter
-    // integral. The gather span scales with the strength slider, so 100 % is a
-    // soft two-frame veil and 350 % a genuinely long exposure instead of a
-    // one-frame smear at the same mix opacity. History taps are clamped to the
-    // five-tap neighborhood of this pixel, which keeps the recursive feedback
-    // from dragging ghosts across the frame. Taps that fall outside the frame
-    // lose their weight; the blend is scaled by the covered fraction so edges
-    // are softened, never smeared.
+    // Reproject a material point, not the difference of two world-space
+    // coordinates. Invert the current display vertex transform, backtrace
+    // actual fluid advection, then project through the previous view. Both
+    // camera pan and zoom therefore produce a displacement in screen UV.
     vec2 ndc = texCoord * 2.0 - 1.0;
     float sa = motionBlurAspects.x;
     float ca = motionBlurAspects.y;
-    float zoom = motionBlurView.z;
-    vec2 flow = vec2(0.0);
-    flow.x = (ndc.x / motionBlurPrevView.z - motionBlurPrevView.x) * 0.5 + 0.5
-           - ((ndc.x / zoom - motionBlurView.x) * 0.5 + 0.5);
-    flow.y = ((ndc.y * sa / (motionBlurPrevView.z * ca) - motionBlurPrevView.y * sa) * 0.5 + 0.5)
-           - ((ndc.y * sa / (zoom * ca) - motionBlurView.y * sa) * 0.5 + 0.5);
-    // The world tiles horizontally every 2.0 of view.x, which is exactly 1.0 uv.
-    // A camera crossing the seam shifts every sample by one full uv between
-    // frames; folding back into [-0.5, 0.5) keeps the wrap from reading as a
-    // one-frame smear across the whole frame.
-    flow.x = mod(flow.x + 0.5, 1.0) - 0.5;
-
-    // Scene path: simulation coordinate of this canvas pixel (same inverse view
-    // transform the camera path uses), then velocity -> uv -> canvas uv.
-    vec2 simUV = vec2((ndc.x / zoom - motionBlurView.x) * 0.5 + 0.5,
-                      (ndc.y * sa / (zoom * ca) - motionBlurView.y * sa) * 0.5 + 0.5);
-    simUV.x = fract(simUV.x);              // the world mesh repeats horizontally
-    simUV.y = clamp(simUV.y, 0.0, 1.0);
-    vec2 velocity = texture(velocityTex, simUV).xy; // cells per iteration
-    vec2 uvPerFrame = velocity * motionBlurIterPerFrame / max(motionBlurResolution, vec2(1.0));
-    vec2 sceneFlow = 0.5 * zoom * vec2(uvPerFrame.x, uvPerFrame.y * ca / sa);
-    flow -= sceneFlow;                       // material came *from* upwind, not downwind
+    float zoom = max(motionBlurView.z, 0.0001);
+    vec2 worldUV = vec2((ndc.x / zoom - motionBlurView.x) * 0.5 + 0.5,
+                        (ndc.y * sa / (zoom * ca) - motionBlurView.y * sa) * 0.5 + 0.5);
+    vec2 sampleUV = worldUV;
+    if (motionBlurWrap)
+      sampleUV.x = fract(sampleUV.x);
+    bool inWorld = sampleUV.x >= 0.0 && sampleUV.x <= 1.0 &&
+                   sampleUV.y >= 0.0 && sampleUV.y <= 1.0;
+    vec2 velocity = vec2(0.0);
+    if (inWorld && motionBlurIterPerFrame > 0.0) {
+      ivec2 cell = clamp(ivec2(sampleUV * motionBlurResolution), ivec2(0), ivec2(motionBlurResolution) - 1);
+      if (texelFetch(motionBlurWallTex, cell, 0).y != 0)
+        velocity = texture(velocityTex, sampleUV).xy;
+    }
+    vec2 previousWorld = worldUV - velocity * motionBlurIterPerFrame / max(motionBlurResolution, vec2(1.0));
+    // Choose the closest periodic camera image only for wrapped worlds.
+    if (motionBlurWrap) {
+      float viewDelta = motionBlurPrevView.x - motionBlurView.x;
+      previousWorld.x -= floor(viewDelta * 0.5 + 0.5);
+    }
+    vec2 previousNdc = vec2((previousWorld.x * 2.0 - 1.0 + motionBlurPrevView.x) * motionBlurPrevView.z,
+                            (previousWorld.y * 2.0 - 1.0 + motionBlurPrevView.y * sa) * motionBlurPrevView.z * ca / sa);
+    vec2 flow = (previousNdc - ndc) * 0.5;
 
     float flowLength = length(flow);
-    // The fold above keeps the horizontal seam inside [-0.5, 0.5) uv, so a real
-    // reprojection never lands here with a huge vector; this only catches an
-    // absurd view jump between frames (a zoom explosion, a broken upload), for
-    // which the history cannot be reprojected at all - skip rather than smear.
-    // A truly static frame produces a zero vector and is left untouched (the
-    // flow gate below flattens the blend to 0).
+    // Reject discontinuous camera jumps; static pixels naturally blend zero.
     if (flowLength <= 1.5) {
       float strength = clamp(motionBlurStrength / 350.0, 0.0, 1.0);
       // The shutter stays open longer as the slider rises: one frame of motion
@@ -215,11 +194,11 @@ void main()
         vec2 tapUV = clamp(rawUV, vec2(0.0), vec2(1.0));
         vec3 currentTap = safeSample(mappedColor(tapUV).rgb);
         vec3 historyTap = clamp(safeSample(texture(historyTex, tapUV).rgb), neighborhoodMin, neighborhoodMax);
-        acc += w * mix(currentTap, historyTap, 0.5);
+        acc += inBounds ? w * mix(currentTap, historyTap, 0.5) : vec3(0.0);
         weightSum += w;
         coveredWeight += inBounds ? w : 0.0;
       }
-      vec3 blurred = acc / weightSum;
+      vec3 blurred = acc / max(coveredWeight, 0.0001);
       float coverage = weightSum > 0.0 ? coveredWeight / weightSum : 0.0;
       float blend = strength * flowGate * coverage * coverage;
       outputCol = mix(outputCol, blurred, blend);

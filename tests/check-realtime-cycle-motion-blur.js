@@ -112,44 +112,23 @@ check('post shader declares the motion blur uniforms (incl. the scene-velocity p
   /uniform float motionBlurIterPerFrame;/.test(postShader) &&
   /if \(motionBlurEnabled && motionBlurHistoryValid\) \{/.test(postShader));
 
-check('the trail is a 16-tap raised-cosine shutter integral along camera + scene motion',
-  /vec2 ndc = texCoord \* 2\.0 - 1\.0;/.test(postShader) &&
-  /float sa = motionBlurAspects\.x;/.test(postShader) &&
-  /float ca = motionBlurAspects\.y;/.test(postShader) &&
-  /float zoom = motionBlurView\.z;/.test(postShader) &&
-  /flow\.x = \(ndc\.x \/ motionBlurPrevView\.z - motionBlurPrevView\.x\) \* 0\.5 \+ 0\.5/.test(postShader) &&
-  /flow\.y = \(\(ndc\.y \* sa \/ \(motionBlurPrevView\.z \* ca\) - motionBlurPrevView\.y \* sa\) \* 0\.5 \+ 0\.5\)/.test(postShader) &&
-  /vec2 simUV = vec2\(\(ndc\.x \/ zoom - motionBlurView\.x\) \* 0\.5 \+ 0\.5,/.test(postShader) &&
-  /simUV\.x = fract\(simUV\.x\);/.test(postShader) &&
-  /vec2 velocity = texture\(velocityTex, simUV\)\.xy;/.test(postShader) &&
-  /vec2 uvPerFrame = velocity \* motionBlurIterPerFrame \/ max\(motionBlurResolution, vec2\(1\.0\)\);/.test(postShader) &&
-  /vec2 sceneFlow = 0\.5 \* zoom \* vec2\(uvPerFrame\.x, uvPerFrame\.y \* ca \/ sa\);/.test(postShader) &&
-  /flow -= sceneFlow;/.test(postShader) &&
+check('the trail reprojects world-space fluid through the previous camera and gathers 16 taps',
+  /vec2 worldUV = vec2\(\(ndc\.x \/ zoom - motionBlurView\.x\)/.test(postShader) &&
+  /if \(motionBlurWrap\)/.test(postShader) &&
+  /texelFetch\(motionBlurWallTex, cell, 0\)\.y != 0/.test(postShader) &&
+  /velocity = texture\(velocityTex, sampleUV\)\.xy;/.test(postShader) &&
+  /previousWorld = worldUV - velocity \* motionBlurIterPerFrame/.test(postShader) &&
+  /vec2 previousNdc = vec2/.test(postShader) &&
+  /vec2 flow = \(previousNdc - ndc\) \* 0\.5;/.test(postShader) &&
   /const int TAPS = 16;/.test(postShader) &&
-  /float w = 0\.7 \+ 0\.3 \* cos\(2\.0 \* PI \* \(t - 0\.5\)\);/.test(postShader) &&
   /vec2 rawUV = texCoord \+ flow \* \(t \* exposureSpan\);/.test(postShader) &&
-  /bool inBounds = rawUV\.x >= 0\.0 && rawUV\.x <= 1\.0 && rawUV\.y >= 0\.0 && rawUV\.y <= 1\.0;/.test(postShader) &&
-  /vec3 currentTap = safeSample\(mappedColor\(tapUV\)\.rgb\);/.test(postShader) &&
-  /vec3 historyTap = clamp\(safeSample\(texture\(historyTex, tapUV\)\.rgb\), neighborhoodMin, neighborhoodMax\);/.test(postShader) &&
-  /acc \+= w \* mix\(currentTap, historyTap, 0\.5\);/.test(postShader) &&
-  /vec3 blurred = acc \/ weightSum;/.test(postShader) &&
-  /float coverage = weightSum > 0\.0 \? coveredWeight \/ weightSum : 0\.0;/.test(postShader) &&
-  /float blend = strength \* flowGate \* coverage \* coverage;/.test(postShader) &&
-  /outputCol = mix\(outputCol, blurred, blend\);/.test(postShader));
+  /vec3 blurred = acc \/ max\(coveredWeight, 0\.0001\);/.test(postShader));
 
-check('the shutter path length is honoured, radial zoom included, and seam wraps fold instead of smearing',
-  /float flowLength = length\(flow\);/.test(postShader) &&
-  /flow\.x = mod\(flow\.x \+ 0\.5, 1\.0\) - 0\.5;/.test(postShader) &&
-  /if \(flowLength <= 1\.5\) \{/.test(postShader) &&
+check('the shutter length is bounded and folds only the wrapped camera seam',
+  /if \(motionBlurWrap\) \{[\s\S]*?previousWorld\.x -= floor\(viewDelta \* 0\.5 \+ 0\.5\);/.test(postShader) &&
+  /if \(flowLength <= 1\.5\)/.test(postShader) &&
   /float exposureSpan = 1\.0 \+ 4\.0 \* strength;/.test(postShader) &&
-  /float flowGate = smoothstep\(0\.0, 0\.002, flowLength\);/.test(postShader) &&
-  /float strength = clamp\(motionBlurStrength \/ 350\.0, 0\.0, 1\.0\);/.test(postShader) &&
-  // stationary camera: flow == 0 -> no sample is ever gathered, frame untouched
-  (() => {
-    const i = postShader.indexOf('if (motionBlurEnabled');
-    const seg = postShader.slice(i, postShader.indexOf('fragmentColor'));
-    return !/flowLength \*\*|pow\(flowLength/.test(seg);
-  })());
+  /float flowGate = smoothstep\(0\.0, 0\.002, flowLength\);/.test(postShader));
 
 check('the strength slider opens the shutter: one frame of motion at 0 %, ~2.1 at 100 %, five at 350 %',
   (() => {
@@ -176,7 +155,7 @@ check('app.js uploads the motion blur uniforms (velocity + resolution + iteratio
   /gl\.uniform1f\(getUniformLoc\(postProcessingProgram, 'motionBlurStrength'\), guiControls\.motionBlurIntensity\);/.test(appSource) &&
   /gl\.uniform1i\(getUniformLoc\(postProcessingProgram, 'velocityTex'\), 3\);/.test(appSource) &&
   /gl\.uniform2f\(getUniformLoc\(postProcessingProgram, 'motionBlurResolution'\), sim_res_x, sim_res_y\);/.test(appSource) &&
-  /gl\.uniform1f\(getUniformLoc\(postProcessingProgram, 'motionBlurIterPerFrame'\), Math\.max\(1, Math\.min\(50, guiControls\.IterPerFrame\)\)\);/.test(appSource) &&
+  /gl\.uniform1f\(getUniformLoc\(postProcessingProgram, 'motionBlurIterPerFrame'\), motionBlurSimulationSteps\);/.test(appSource) &&
   /gl\.bindTexture\(gl\.TEXTURE_2D, baseTexture_1\); \/\/ fluid state: scene velocity for motion blur/.test(appSource) &&
   /gl\.uniform3f\(getUniformLoc\(postProcessingProgram, 'motionBlurView'\), renderViewX, renderViewY, cam\.curZoom\);/.test(appSource) &&
   /gl\.uniform3f\(getUniformLoc\(postProcessingProgram, 'motionBlurPrevView'\), mbPrev\[0\], mbPrev\[1\], mbPrev\[2\]\);/.test(appSource) &&

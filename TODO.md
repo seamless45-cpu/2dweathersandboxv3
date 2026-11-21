@@ -113,6 +113,8 @@
 
 - [x] Preserve lightning hue before non-filmic RGB clipping, render upper-atmospheric transients inside tall domains as well as above them, retain saved and queued artificial-variant choices, and animate descending sprite tendrils. Real-GPU visual validation remains necessary.
 
+- [x] Reproject motion blur through the previous camera, backtrace actual simulated fluid steps, and keep terrain and off-world pixels stationary in world space. Animate stepped ground leaders with upward return fronts, growing branches on CG/IC/CC channels, and independently growing blue-jet streamers. Real-GPU visual and performance validation remains necessary.
+
 # In Progress
 
 
