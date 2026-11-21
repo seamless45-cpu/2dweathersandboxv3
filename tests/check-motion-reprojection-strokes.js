@@ -40,11 +40,27 @@ const clamp=x=>Math.max(0,Math.min(1,x));
 const smooth=(a,b,x)=>{let t=clamp((x-a)/(b-a));return t*t*(3-2*t)};
 const leader=t=>{let p=clamp(t/.45)*12;return Math.min((Math.floor(p)+smooth(0,.42,p-Math.floor(p)))/12,1)};
 const branch=(t,root)=>clamp((leader(t)-root)*4.5);
-const stage=(t,x)=>{let visible=1-smooth(leader(t),leader(t)+.035,x);let front=clamp((t-.45)/.20);let returned=smooth(1-front-.04,1-front+.04,x);return visible*(.000003+.999997*returned)};
+// Read the multipliers from the shader so the numerical checks exercise the
+// actual emission used by the renderer, not a disconnected test constant.
+const groundMatch = display.match(/return visible \* mix\(([\d.]+), 1\.0, returned\)/);
+const cloudMatch = display.match(/return visible \* \(([\d.]+) \+ ([\d.]+) \* smoothstep\(0\.40, 0\.55, time\)/);
+assert(groundMatch && cloudMatch, 'leader emission equations missing');
+const groundLeader = Number(groundMatch[1]);
+const cloudLeader = Number(cloudMatch[1]);
+const cloudRise = Number(cloudMatch[2]);
+assert(groundLeader >= .003 && groundLeader < .02);
+assert(cloudLeader >= .006 && cloudLeader < .03);
+close(cloudLeader + cloudRise, 1);
+const stage=(t,x)=>{let visible=1-smooth(leader(t),leader(t)+.035,x);let front=clamp((t-.45)/.20);let returned=smooth(1-front-.04,1-front+.04,x);return visible*(groundLeader+(1-groundLeader)*returned)};
 assert(branch(.1,.8)===0 && branch(.5,.8)>0);
 assert(stage(.2,.15)>stage(.2,.8));
 assert(stage(.5,.9)>stage(.5,.1));
 assert(stage(.65,.1)>.9);
+close(stage(.2,.15), groundLeader);
+assert(stage(.65,.1) > 100 * stage(.2,.15));
+// Cloud leaders remain luminous before their later reillumination.
+close(cloudLeader + cloudRise * smooth(.40,.55,.2), cloudLeader);
+assert(cloudLeader + cloudRise * smooth(.40,.55,.55) > 100 * cloudLeader);
 for (const f of ['displayLightning','displayExternalLightning']) {
  const start=display.indexOf('vec3 '+f+'('), end=display.indexOf('\n}',start);
  assert(display.slice(start,end).includes('groundChannelStage(lightningTime'));

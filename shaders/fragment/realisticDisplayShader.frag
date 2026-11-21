@@ -172,7 +172,9 @@ float groundChannelStage(float time, float fromCloud)
   float visible = 1.0 - smoothstep(leader, leader + 0.035, fromCloud);
   float returnFront = clamp((time - 0.45) / 0.20, 0.0, 1.0);
   float returned = smoothstep(1.0 - returnFront - 0.04, 1.0 - returnFront + 0.04, fromCloud);
-  return visible * mix(0.000003, 1.0, returned);
+  // Keep the growing leader visibly luminous before the return front arrives.
+  // It is still far dimmer than the return, but supplies real HDR bloom.
+  return visible * mix(0.003, 1.0, returned);
 }
 
 // IC/CC channels do not have a ground return stroke. Their leaders extend
@@ -183,7 +185,7 @@ float cloudChannelStage(float time, float fromSource)
   float leader = dischargeLeader(time);
   float visible = 1.0 - smoothstep(leader, leader + 0.035, fromSource);
   float pulse = exp(-pow((fromSource - clamp((time - 0.45) / 0.24, 0.0, 1.0)) / 0.12, 2.0)) * smoothstep(0.43, 0.48, time);
-  return visible * (0.0003 + 0.9997 * smoothstep(0.40, 0.55, time) + pulse * 0.6);
+  return visible * (0.006 + 0.994 * smoothstep(0.40, 0.55, time) + pulse * 0.6);
 }
 
 float findCapturedRodTipY(float strikeX)

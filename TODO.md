@@ -134,3 +134,4 @@
 - [ ] Add forces to simulate coriolis effect and pressure systems to make weather more dynamic
 - [ ] Add sounds
 - [ ] Add weather balloons
+- [x] Raise pre-return CG and pre-illumination IC/CC leader emission at the stage source, rather than changing global bloom or exposure. SwiftShader buffer captures show increased leader bloom; real-GPU visual validation is still needed.
