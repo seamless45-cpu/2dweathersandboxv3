@@ -15,8 +15,8 @@ check('external bolt mip level and procedural lines use actual screen footprint,
   /textureLod\(lightningTex, vec2\(u, v\), lod\)/.test(shader) && /float pixelWorld = max\(length\(pixelX\), length\(pixelY\)\)/.test(shader) &&
   /float mainF2 = coreW \* coreW \+ 0\.5625 \* mainAA \* mainAA/.test(shader) &&
   !/1400\.0 \* max\(view\[2\]/.test(shader));
-check('mipmapped R8 bolt allocation is initialized safely before upload',
-  /gl\.texImage2D\(gl\.TEXTURE_2D, 0, gl\.R8, 1, 1, 0, gl\.RED, gl\.UNSIGNED_BYTE, emptyLightningTexturePixel\);\s*gl\.texParameteri\(gl\.TEXTURE_2D, gl\.TEXTURE_MIN_FILTER, gl\.LINEAR\)/.test(app) &&
+check('mipmapped RG8 bolt allocation is initialized safely before upload',
+  /gl\.texImage2D\(gl\.TEXTURE_2D, 0, gl\.RG8, 1, 1, 0, gl\.RG, gl\.UNSIGNED_BYTE, emptyLightningTexturePixel\);\s*gl\.texParameteri\(gl\.TEXTURE_2D, gl\.TEXTURE_MIN_FILTER, gl\.LINEAR\)/.test(app) &&
   /gl\.generateMipmap\(gl\.TEXTURE_2D\);\s*gl\.texParameteri\(gl\.TEXTURE_2D, gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR\)/.test(app));
 // Model mip averaging of a nine-texel-wide channel. At 1x/2x/4x/8x
 // minification across a range of subpixel phases the filtered signal must
@@ -37,6 +37,6 @@ check('filtered channel coverage survives minification and subpixel phase', cont
   contrasted(9 / 32) > 0 && Math.abs(0.05 * contrasted(1) - 0.05) < 1e-12);
 check('partial coverage is contrast-shaped to reduce washed-out halos without losing full-white peak',
   /return pow\(coverage, 1\.2\)/.test(shader) &&
-  (shader.match(/lightningCoverage\(pixVal, brightnessThreshold\)/g) || []).length === 4 &&
+  (shader.match(/lightningCoverage\(artwork\.r,/g) || []).length === 4 &&
   contrasted(0.25) > 0.25 * 0.5 && contrasted(0.5) < 0.5 && contrasted(1) === 1);
 if (failed) process.exitCode = 1;

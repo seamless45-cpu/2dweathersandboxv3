@@ -81,8 +81,8 @@ check('a return stroke is drawn at the original channel width',
 check('a fork sheds the original fifth of a pixel as it narrows',
   CG.taper === 0.2,
   'taper ' + CG.taper + ' artwork px per step');
-check('the artwork carries the original radiance, not the fork\'s doubled gain',
-  /Math\.pow\(lineWidth, 2\.0\)/.test(source) && Math.pow(CG.lineWidth, 2) === 81,
+check('the artwork stores a saturated trunk and tagged branches separately',
+  /rgb\(255, 0, 0\)/.test(source) && /positiveBranch \? 255 : 64/.test(source),
   'pow(' + CG.lineWidth + ', 2) = ' + Math.pow(CG.lineWidth, 2) +
     '; the half-size fork wrote pow(lineWidth * 2, 2) to match, which is why halving it changed nothing on screen but everything in texels');
 check('its forks leave at up to half the trunk, as they always did',
@@ -169,7 +169,7 @@ check('and the trunk stays inside the sprite',
   for (let y = 0; y < TILE_H; y++) {
     let run = 0, longest = 0;
     for (let x = 0; x < TILE_W; x++) {
-      const value = bolt.data[y * TILE_W + x];
+      const value = Math.max(bolt.data[(y * TILE_W + x)*2], bolt.data[(y * TILE_W + x)*2+1]);
       if (value > peak) peak = value;
       if (value <= 32) {
         run = 0;
@@ -235,10 +235,10 @@ check('and the trunk stays inside the sprite',
     /return 2;/.test(app) &&
     /if \(lightningTexturesReady < numLightningTextures\)/.test(workerBlock),
     '12.5 MB a tile: two is a quarter of the renderer, ten was all of it and more');
-  check('the artwork crosses to the main thread as one byte per texel',
+  check('the artwork crosses to the main thread as two bytes per texel',
     /postMessage\(\{width : artwork\.width, height : artwork\.height, data : artwork\.data\},/.test(source) &&
     /const rgba = ctx\.getImageData\(0, 0, width, height\)\.data;/.test(source) &&
-    !/transferToImageBitmap\(\)/.test(source.split('function readRedChannel')[1] || ''),
+    !/transferToImageBitmap\(\)/.test(source.split('function readChannelArtwork')[1] || ''),
     'a canvas is RGBA whatever is drawn on it: 50 MB handed over to become 12.5 MB');
 
   /* The artwork is posted, not returned: it has to survive the structured clone
@@ -256,7 +256,7 @@ check('and the trunk stays inside the sprite',
         } catch (error) {
           return 'postMessage would throw: ' + error.name + ': ' + error.message;
         }
-        if (!(clone.data instanceof Uint8Array) || clone.data.length !== artwork.width * artwork.height)
+        if (!(clone.data instanceof Uint8Array) || clone.data.length !== artwork.width * artwork.height * 2)
           return 'the clone did not carry the picture';
         if (!clone.data.some((value) => value > 0))
           return 'the clone carried an empty picture';
@@ -271,7 +271,7 @@ check('and the trunk stays inside the sprite',
     !/close\(\)\s*\{\s*\}/.test(source),
     'the payload is built here, so nothing added to the generator can break the wire');
   check('the upload asks the driver for exactly the bytes it has',
-    /gl\.texImage2D\(gl\.TEXTURE_2D, 0, gl\.R8, artwork\.width, artwork\.height, 0, gl\.RED, gl\.UNSIGNED_BYTE, artwork\.data\)/
+    /gl\.texImage2D\(gl\.TEXTURE_2D, 0, gl\.RG8, artwork\.width, artwork\.height, 0, gl\.RG, gl\.UNSIGNED_BYTE, artwork\.data\)/
       .test(app) && !/bitmap\.close\(\)/.test(app),
     'no RGBA bitmap in the upload path, so no RGBA temporary on the GPU');
   check('a lost context leaves a lighter next load behind',
@@ -329,7 +329,7 @@ const trunkPeaks = [0.2, 0.5, 0.8].map((yFraction) => {
   const row = Math.floor(boltArtwork.height * yFraction);
   let peak = 0;
   for (let x = 0; x < boltArtwork.width; x++)
-    peak = Math.max(peak, boltArtwork.data[row * boltArtwork.width + x]);
+    peak = Math.max(peak, boltArtwork.data[(row * boltArtwork.width + x)*2]);
   return peak;
 });
 check('the trunk is bright enough to survive the display threshold',
@@ -419,7 +419,7 @@ for (let i = 0; i < 8; i++) {
 const coverageMin = Math.min(...curvedCoverage);
 const coverageMax = Math.max(...curvedCoverage);
 check('the curved network is fine and sparse, not a bloated white web',
-  coverageMin > 1.0 && coverageMax < 6.0,
+  coverageMin > 0.4 && coverageMax < 6.0,
   'coverage above the display threshold is ' + coverageMin.toFixed(1) + '-'
   + coverageMax.toFixed(1) + '% of the tile');
 

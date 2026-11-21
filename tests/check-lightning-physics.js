@@ -9,7 +9,7 @@
 //  - lifetimes: lightningRepeatPeriod + lightningLifetimeScale shared between
 //    the slot manager and the display pass (time-warped, not merely gated)
 //  - per-variant branch budgets: CG 1-3, external+CG 1-2 / 2-3 / 3-4 by class,
-//    IC / +IC 0-2 seeded side leaders, -CC 3-4 vs +CC 1-2, GC 3-5
+//    IC / +IC 0-2 seeded side leaders, -CC 3-4 vs +CC 0-1, GC 3-5
 //  - TLE rework: NT 1P red sprite with 5-8 seeded tendrils + NT+ cap, climbing
 //    V-shaped blue jet with starter flash, expanding elve with 1/r dimming
 //  - precipitation: Clift-Gauvin drag sphere, exponential atmosphere,
@@ -85,13 +85,12 @@ check('CG strokes fork 1-3 seeded side leaders rooted on the drawn channel',
   /int branchCount = 1 \+ int\(floor\(branchSeedBase \* 2\.999\)\);/.test(display) &&
   /ccEvalBranch\(pKm, anchor, bDir, bLen/.test(display));
 
-check('external positives fork per class budget: ordinary family 1, superbolt 2, hyperbolt 3 (count = family or family + 1)',
-  /isHyperbolt \? 3\.0 : \(isSuperbolt \? 2\.0 : 1\.0\)\);/.test(display) &&
-  /int extBranchCount = int\(branchFamily\) \+ \(extBranchSeed < 0\.5 \? 0 : 1\);/.test(display));
+check('external positives fork per class budget: all families use zero or one fork',
+  /int extBranchCount = extBranchSeed < 0\.35 \? 1 : 0;/.test(display));
 
 
-check('CC fork budget is strike-seeded: -CC 3-4, +CC 1-2',
-  /float branchMax = isPositiveCC \? \(1\.0 \+ floor\(branchBudget \* 2\.0\)\)/.test(display) &&
+check('CC fork budget is strike-seeded: -CC 3-4, +CC 0-1',
+  /float branchMax = isPositiveCC \? \(branchBudget < 0\.5 \? 1\.0 : 0\.0\)/.test(display) &&
   /: \(3\.0 \+ floor\(branchBudget \* 2\.0\)\);/.test(display));
 
 

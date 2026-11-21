@@ -11,13 +11,19 @@ in vec2 texCoordX0Yp; // up
 uniform sampler2D hdrTex;
 out vec3 fragmentColor;
 
-// The light the bloom pyramid is made of: two percent of the frame, as this pass
-// has always taken. Nothing is singled out here - a lightning channel and a sunlit
-// cloud go through the same multiply - so the halo around a bolt is the blurred
-// remainder of the frame, exactly as it was before any of this was touched.
+// Build the bloom pyramid from HDR radiance. The baseline remains subtle,
+// while high-energy highlights receive a stronger, hue-preserving contribution.
 void main()
 {
-  vec3 outputCol = texture(hdrTex, texCoord).rgb;
+  // Integrate the destination footprint rather than taking one point sample.
+  // At reduced bloom quality a narrow bolt can otherwise fall between samples
+  // and contribute no glow at all.
+  vec2 dx = dFdx(texCoord) * 0.25;
+  vec2 dy = dFdy(texCoord) * 0.25;
+  vec3 outputCol = (texture(hdrTex, texCoord - dx - dy).rgb +
+                    texture(hdrTex, texCoord + dx - dy).rgb +
+                    texture(hdrTex, texCoord - dx + dy).rgb +
+                    texture(hdrTex, texCoord + dx + dy).rgb) * 0.25;
 
   // A backstop, not the mechanism: the scene is written through softHdrClamp()
   // (common.glsl), so it arrives finite. If a sample were ever NaN, every term
@@ -25,7 +31,10 @@ void main()
   if (isnan(outputCol.r) || isnan(outputCol.g) || isnan(outputCol.b))
     outputCol = vec3(0.0);
 
-  outputCol *= 0.02;
+  // Reserve the stronger contribution for HDR highlights, leaving ordinary
+  // sky and clouds at the existing bloom level. Preserve the hue ratios.
+  float peak = max(outputCol.r, max(outputCol.g, outputCol.b));
+  outputCol *= mix(0.02, 0.12, smoothstep(4.0, 40.0, peak));
 
   fragmentColor = vec3(outputCol);
 }

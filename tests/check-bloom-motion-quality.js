@@ -6,13 +6,13 @@ const root = path.join(__dirname, '..');
 const shader = fs.readFileSync(path.join(root, 'shaders/fragment/realisticDisplayShader.frag'), 'utf8');
 const post = fs.readFileSync(path.join(root, 'shaders/fragment/postProcessingShader.frag'), 'utf8');
 const bright = fs.readFileSync(path.join(root, 'shaders/fragment/isolateBrightPartsShader.frag'), 'utf8');
-assert.match(shader, /peak \/ 12000\.0/);
-assert.match(shader, /vec3 c = max\(radiance, vec3\(0\.0\)\) \* 12\.0;/);
-assert.match(bright, /outputCol \*= 0\.02;/);
+assert.match(shader, /peak \/ 24000\.0/);
+assert.match(shader, /vec3 c = max\(radiance, vec3\(0\.0\)\) \* 18\.0;/);
+assert.match(bright, /mix\(0\.02, 0\.12, smoothstep\(4\.0, 40\.0, peak\)\)/);
 assert.match(post, /color \/= max\(1\.0, peak\)/);
 assert.match(post, /color \*= mappedPeak \/ max\(peak, 1e-6\)/);
 assert(post.indexOf('texture(bloomTex, uv)') < post.indexOf('float peak ='));
-const emit = c => c.map(v => v * 12 / (1 + Math.max(...c) * 12 / 12000));
+const emit = c => c.map(v => v * 18 / (1 + Math.max(...c) * 18 / 24000));
 const previous = c => c.map(v => v * 6 / (1 + Math.max(...c) * 6 / 4000));
 for (const brightness of [0.1, 1, 10, 100, 1000, 100000]) {
   const c = [brightness * .4, brightness * .7, brightness];
