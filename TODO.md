@@ -135,3 +135,5 @@
 - [ ] Add sounds
 - [ ] Add weather balloons
 - [x] Raise pre-return CG and pre-illumination IC/CC leader emission at the stage source, rather than changing global bloom or exposure. SwiftShader buffer captures show increased leader bloom; real-GPU visual validation is still needed.
+
+- [x] Avoid uniformly blue lightning channels by applying a stable per-strike apparent-colour variation before HDR bloom; leave upper-atmosphere emission colours separate. Validate the appearance on a real GPU.

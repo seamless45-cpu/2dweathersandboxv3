@@ -38,4 +38,24 @@ const display = c => { const peak = Math.max(...c); return c.map(v => v / Math.m
 const a = display(map([620, 800, 1000])), b = display(map([850, 900, 1000]));
 assert(a[0] < b[0] && a[2] === b[2]);
 assert(Math.max(...map([620,800,1000])) * 0.02 > 1.0);
+// Apparent strike tint is seeded once from position and start iteration, not
+// fragment position or animation time. Check both the dispatch and the actual
+// coefficients used by the helper, including the resulting display hues.
+const tintHelper = shader.match(/vec3 apparentChannelColor\([\s\S]*?\n}/)[0];
+assert.match(tintHelper, /mod\(startIteration, 4096\.0\)/);
+assert.doesNotMatch(tintHelper, /texCoord|lightningTime/);
+assert.match(tintHelper, /mix\(radiance, vec3\(peak\), 0\.55\)/);
+assert.match(tintHelper, /mix\(vec3\(1\.0, 0\.93, 0\.65\), vec3\(1\.0\), seed\)/);
+assert.match(shader, /apparentChannelColor\(strikeChannel, lightningPos, lightningStartIterNum\)/);
+assert.match(shader, /apparentChannelColor\(crawler, lightningData\.xy, lightningStartIterNum\)/);
+const apparent = (c, seed) => {
+  const p = Math.max(...c);
+  return c.map((v, i) => (v*.45 + p*.55) * ([1,.93,.65][i]*(1-seed)+seed));
+};
+const apparentDisplay = (c,seed) => display(apparent(c,seed)).map(v => Math.pow(v,1/2.2));
+const warmStrike = apparentDisplay([.5,.7,1],0), coolStrike = apparentDisplay([.5,.7,1],1);
+assert(warmStrike[0] > warmStrike[2]);
+assert(coolStrike[2] > coolStrike[0]);
+assert(warmStrike[2] < coolStrike[2] - .05);
+assert.deepStrictEqual(apparent([0,0,0],.5),[0,0,0]);
 console.log('Lightning hue, effect-domain and variant persistence checks passed');

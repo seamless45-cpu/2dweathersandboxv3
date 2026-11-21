@@ -330,7 +330,7 @@ check('the slot count agrees between app.js, common.glsl and this test',
   // the wiring: the call site passes exactly what the shipped shader took, and the
   // gain is the curve, not an envelope built out of it
   check('the slot loop hands the channel its position, time and curve',
-    /lightningBoltLight \+= isFlash \? displayFlash\(lightningPos, /.test(displayShader) &&
+    /strikeChannel \+= isFlash \? displayFlash\(lightningPos, /.test(displayShader) &&
     !/displayLightning\([^)]*mainBoltBrightness/.test(displayShader) &&
     !/strikeLight/.test(displayShader),
     'the shipped arguments, and one expression: a flash is a second channel, not a filter over the stroke');
