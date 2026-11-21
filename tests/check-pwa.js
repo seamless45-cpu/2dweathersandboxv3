@@ -141,11 +141,12 @@ check(
 
 for (const icon of icons) {
   const label = 'icon ' + icon.src;
-  check(label + ' exists', typeof icon.src === 'string' && exists(icon.src), icon.src);
+  const iconPath = typeof icon.src === 'string' ? icon.src.split('?')[0] : '';
+  check(label + ' exists', !!iconPath && exists(iconPath), icon.src);
   check(label + ' type', icon.type === 'image/png', icon.type);
 
-  if (typeof icon.src !== 'string' || !exists(icon.src)) continue;
-  const size = pngSize(icon.src);
+  if (!iconPath || !exists(iconPath)) continue;
+  const size = pngSize(iconPath);
   check(label + ' is a PNG', size !== null, icon.src);
   if (!size) continue;
   check(
@@ -173,13 +174,14 @@ check(
 );
 check(
   'index.html has an apple-touch-icon',
-  /<link[^>]+rel="apple-touch-icon"[^>]+href="(resources\/icons\/app\/[^"]+\.png)"/.test(html)
+  /<link[^>]+rel="apple-touch-icon"[^>]+href="(resources\/icons\/app\/[^"]+\.png)(?:\?[^"]*)?"/.test(html)
 );
 
 const touchMatch = html.match(/<link[^>]+rel="apple-touch-icon"[^>]+href="([^"]+)"/);
 if (touchMatch) {
-  check('apple-touch-icon exists', exists(touchMatch[1]), touchMatch[1]);
-  const size = pngSize(touchMatch[1]);
+  const touchPath = touchMatch[1].split('?')[0];
+  check('apple-touch-icon exists', exists(touchPath), touchMatch[1]);
+  const size = pngSize(touchPath);
   check('apple-touch-icon is square', size !== null && size.width === size.height, JSON.stringify(size));
 }
 
