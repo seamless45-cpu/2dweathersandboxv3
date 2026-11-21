@@ -13,8 +13,8 @@ assert.strictEqual(high.strokeCount,low.strokeCount);
 assert.strictEqual(high.segmentCount,low.segmentCount);
 let error=0, energy=0;
 for (let y=0;y<256;y++) for (let x=0;x<512;x++) {
-  const avg = (high.data[2*y*1024+2*x]+high.data[2*y*1024+2*x+1]+high.data[(2*y+1)*1024+2*x]+high.data[(2*y+1)*1024+2*x+1])/4;
-  error += Math.abs(avg-low.data[y*512+x]); energy += low.data[y*512+x];
+  const avg = (high.data[(2*y*1024+2*x)*2]+high.data[(2*y*1024+2*x+1)*2]+high.data[((2*y+1)*1024+2*x)*2]+high.data[((2*y+1)*1024+2*x+1)*2])/4;
+  error += Math.abs(avg-low.data[(y*512+x)*2]); energy += low.data[(y*512+x)*2];
 }
 assert(energy > 0 && error/energy < .35, `scaled network geometry drifted: ${error/energy}`);
 const shader=fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','utf8');

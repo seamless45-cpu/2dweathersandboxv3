@@ -37,7 +37,7 @@ class StubContext {
     this.canvas = canvas;
     this.width = canvas.width;
     this.height = canvas.height;
-    this.buffer = new Float64Array(this.width * this.height); // 0 .. 1 luminance
+    this.buffer = new Float64Array(this.width * this.height * 2); // red trunk and green fork
     this.lineWidth = 1;
     this._scale = 1;
     this.lineCap = 'butt';
@@ -64,9 +64,11 @@ class StubContext {
     const data = new Uint8ClampedArray(w * h * 4);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        const v = Math.round(clamp(this.buffer[(y0 + y) * this.width + (x0 + x)], 0, 1) * 255);
+        const i = ((y0 + y) * this.width + x0 + x) * 2;
         const o = (y * w + x) * 4;
-        data[o] = v; data[o + 1] = v; data[o + 2] = v; data[o + 3] = 255;
+        data[o] = Math.round(clamp(this.buffer[i], 0, 1) * 255);
+        data[o + 1] = Math.round(clamp(this.buffer[i + 1], 0, 1) * 255);
+        data[o + 3] = 255;
       }
     }
     return { width : w, height : h, data : data };
@@ -86,12 +88,12 @@ class StubContext {
     const style = String(this.strokeStyle).trim();
     const rgb = style.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i);
     if (rgb)
-      return clamp(Number(rgb[1]) / 255, 0, 1);
+      return [clamp(Number(rgb[1]) / 255, 0, 1), clamp(Number(rgb[2]) / 255, 0, 1)];
     const hex = style.match(/^#([0-9a-f]{6})$/i);
     if (hex)
-      return parseInt(hex[1].slice(0, 2), 16) / 255;
-    if (style === 'white') return 1;
-    if (style === 'black') return 0;
+      return [parseInt(hex[1].slice(0, 2), 16) / 255, parseInt(hex[1].slice(2, 4), 16) / 255];
+    if (style === 'white') return [1, 1];
+    if (style === 'black') return [0, 0];
     throw new Error('unsupported strokeStyle: ' + style);
   }
 
@@ -132,12 +134,12 @@ class StubContext {
           const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
           const coverage = clamp(radius + 0.5 - d, 0, 1) * alpha;
           if (coverage <= 0) continue;
-          const index = y * this.width + x;
-          const source = tone * coverage;
-          if (mode === 'lighten')
-            this.buffer[index] = Math.max(this.buffer[index], source);
-          else
-            this.buffer[index] = source + this.buffer[index] * (1 - coverage);
+          const index = (y * this.width + x) * 2;
+          for (let c = 0; c < 2; c++) {
+            const source = tone[c] * coverage;
+            if (mode === 'lighten') this.buffer[index + c] = Math.max(this.buffer[index + c], source);
+            else this.buffer[index + c] = source + this.buffer[index + c] * (1 - coverage);
+          }
         }
       }
     }
@@ -157,12 +159,12 @@ class StubContext {
         const d = distanceToSegment(x + 0.5, y + 0.5, x0, y0, x1, y1);
         const coverage = clamp(halfWidth + 0.5 - d, 0, 1) * alpha;
         if (coverage <= 0) continue;
-        const index = y * this.width + x;
-        const source = tone * coverage;
-        if (mode === 'lighten')
-          this.buffer[index] = Math.max(this.buffer[index], source);
-        else
-          this.buffer[index] = source + this.buffer[index] * (1 - coverage);
+        const index = (y * this.width + x) * 2;
+        for (let c = 0; c < 2; c++) {
+          const source = tone[c] * coverage;
+          if (mode === 'lighten') this.buffer[index + c] = Math.max(this.buffer[index + c], source);
+          else this.buffer[index + c] = source + this.buffer[index + c] * (1 - coverage);
+        }
       }
     }
   }

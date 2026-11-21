@@ -78,7 +78,7 @@ check('a flash is not masked to the cloud it was born in',
   /emittedLight \+= displayLightningRadiance\(lightningBoltLight \/ \(1\. \+ cloudDensity \* 100\.0\)\);/.test(displayShader),
   'a channel that leaves one deck and crosses to the next is cloud-to-cloud lightning; the cloud filters the light, it does not cut the channel');
 check('a flash reads its own artwork, mip-filtered, over a slab of the sky at true aspect ratio',
-  /float pixVal = textureGrad\(lightningNetworkTex, flashCoord, gradX, gradY\)\.r;/.test(displayShader) &&
+  /vec2 artwork = textureGrad\(lightningNetworkTex, flashCoord, gradX, gradY\)\.rg;/.test(displayShader) &&
   /const float networkTexAspect = networkTexRes\.x \/ networkTexRes\.y;/.test(displayShader) &&
   /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader) &&
   /texCoord\.x - pos\.x\) \/ flashSpan\.x/.test(displayShader) &&
@@ -262,8 +262,8 @@ const softHdrClamp = (value) => {
   const brightParts = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'isolateBrightPartsShader.frag'), 'utf8');
   const post = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'postProcessingShader.frag'), 'utf8');
 
-  check('the bright pass takes the two percent the app always took',
-    /outputCol \*= 0\.02;/.test(brightParts) && /fragmentColor = vec3\(outputCol\);/.test(brightParts),
+  check('the bright pass preserves ambient bloom and boosts HDR highlights',
+    /mix\(0\.02, 0\.12, smoothstep\(4\.0, 40\.0, peak\)\)/.test(brightParts) && /fragmentColor = vec3\(outputCol\);/.test(brightParts),
     'one multiply, the shipped one');
   check('nothing in the bright pass singles the channel out',
     !/brightKnee/.test(brightParts) && !/brightCeiling/.test(brightParts) &&

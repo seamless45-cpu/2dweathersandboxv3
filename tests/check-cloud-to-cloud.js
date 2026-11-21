@@ -110,7 +110,7 @@ check('reworked CC renders procedural fractal-displaced cubic spline with slope-
       /vec2 ccEvalBranch\(/.test(displayShader) &&
       /inversesqrt\(1\.0 \+ clamp\(spineSlope \* spineSlope, 0\.0, 6\.25\)\)/.test(ccBody) &&
       !/texture\w*\(\s*lightningTex/.test(ccBody) &&
-      /branchMax = isPositiveCC \? \(1\.0 \+ floor\(branchBudget \* 2\.0\)\)/.test(ccBody) &&
+      /branchMax = isPositiveCC \? \(branchBudget < 0\.5 \? 1\.0 : 0\.0\)/.test(ccBody) &&
       /!isPositiveCC && growth > 0\.5 && \(b == 1 \|\| b == 2\)/.test(ccBody) &&
       /ccMidDist/.test(displayShader);
   })(),

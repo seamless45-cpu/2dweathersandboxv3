@@ -166,6 +166,13 @@ float dischargeBranchGrowth(float time, float root)
   return clamp((dischargeLeader(time) - root) * 4.5, 0.0, 1.0);
 }
 
+// Forks are leader channels, not persistent return-stroke filaments. Fade
+// them after the first re-illumination; restrikes follow the established trunk.
+float dischargeBranchFade(float time)
+{
+  return 1.0 - smoothstep(0.68, 1.10, time);
+}
+
 float groundChannelStage(float time, float fromCloud)
 {
   float leader = dischargeLeader(time);
@@ -284,14 +291,14 @@ vec3 planckBlackbody(float kelvin)
 // restrained artistic tints, not measured emission spectra.
 vec3 lightningVariantTint(int kind)
 {
-  if (kind == 0) return vec3(1.00, 0.90, 0.77); // CG: warm white
-  if (kind == 1) return vec3(0.87, 0.94, 1.00); // IC: cool white
-  if (kind == 2) return vec3(1.00, 0.86, 0.93); // +IC: rose white
-  if (kind == 3) return vec3(0.87, 0.83, 1.00); // -CC: pale violet
-  if (kind == 4) return vec3(1.00, 0.80, 0.69); // +CC: peach
-  if (kind == 5) return vec3(1.00, 0.94, 0.67); // +CG: ivory
-  if (kind == 6) return vec3(0.96, 0.98, 1.00); // superbolt: near white
-  return vec3(0.80, 1.00, 0.95);                // hyperbolt: pale cyan
+  if (kind == 0) return vec3(1.00, 0.76, 0.54); // CG: warm white
+  if (kind == 1) return vec3(0.65, 0.82, 1.00); // IC: cool white
+  if (kind == 2) return vec3(1.00, 0.67, 0.78); // +IC: rose white
+  if (kind == 3) return vec3(0.70, 0.62, 1.00); // -CC: pale violet
+  if (kind == 4) return vec3(1.00, 0.64, 0.46); // +CC: peach
+  if (kind == 5) return vec3(1.00, 0.84, 0.45); // +CG: ivory
+  if (kind == 6) return vec3(0.97, 0.98, 1.00); // superbolt: near white
+  return vec3(0.57, 1.00, 0.86);                // hyperbolt: pale cyan
 }
 
 // Stable per-strike filtering, shared by its channel and cloud illumination.
@@ -317,9 +324,9 @@ vec3 apparentChannelColor(vec3 radiance, vec3 tint)
 // their chromaticity and leaving HDR headroom for the glow pass.
 vec3 displayLightningRadiance(vec3 radiance)
 {
-  vec3 c = max(radiance, vec3(0.0)) * 12.0;
+  vec3 c = max(radiance, vec3(0.0)) * 18.0;
   float peak = max(c.r, max(c.g, c.b));
-  return c / (1.0 + peak / 12000.0);
+  return c / (1.0 + peak / 24000.0);
 }
 
 // Preserve saturated channel radiance while suppressing low-coverage haze.
@@ -328,6 +335,15 @@ float lightningCoverage(float sampleValue, float threshold)
 {
   float coverage = clamp((sampleValue - threshold) / (1.0 - threshold), 0.0, 1.0);
   return pow(coverage, 1.2);
+}
+
+// Artwork stores trunks in red and forks in green. Forks tagged with a low
+// green value are omitted for positive discharges; this is selected per fork
+// at generation time, not per fragment or animation frame.
+float artworkBranchCoverage(float sampleValue, bool positive)
+{
+  float threshold = positive ? 0.36 : 0.004;
+  return lightningCoverage(sampleValue, threshold);
 }
 
 vec2 evalCcCubic(float t, vec2 p0, vec2 p1, vec2 p2, vec2 p3)
@@ -487,7 +503,10 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
                     - shear * screenTexDx.y * scaleMult + boltJagDerivU * (-screenTexDx.y * scaleMult), -screenTexDx.y * scaleMult);
   vec2 gradY = vec2(screenTexDy.x * scaleMult * aspectRatios[0] / lightningTexAspect
                     - shear * screenTexDy.y * scaleMult + boltJagDerivU * (-screenTexDy.y * scaleMult), -screenTexDy.y * scaleMult);
-  float pixVal = textureGrad(lightningTex, lightningTexCoord, gradX, gradY).r;
+  vec2 artwork = textureGrad(lightningTex, lightningTexCoord, gradX, gradY).rg;
+  float branchFade = dischargeBranchFade(lightningTime);
+  float pixVal = lightningCoverage(artwork.r, 0.004) +
+                 artworkBranchCoverage(artwork.g, false) * branchFade;
 
   const float mainBoltBrightness = 30000.;
 
@@ -496,7 +515,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   const float brightnessThreshold = 0.004;
   currentLightningIntensity *= mainBoltBrightness;
 
-  pixVal = 0.05 * lightningCoverage(pixVal, brightnessThreshold);
+  pixVal *= 0.05;
 
   pixVal *= currentLightningIntensity;
   pixVal *= groundChannelStage(lightningTime, clamp(lightningTexCoord.y, 0.0, 1.0));
@@ -521,7 +540,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   float intensityRaw = currentLightningIntensity / 30000.0; // undo the artwork radiance gain
   float branchSum = 0.0;
   for (int bi = 0; bi < 3; bi++) {
-    if (bi >= branchCount)
+    if (bi >= branchCount || branchFade <= 0.0)
       break;
     float fi = float(bi);
     float br1 = random2d(vec2(pos.x * 9.1 + fi * 3.7, pos.y * 4.3 + fi * 1.9));
@@ -544,7 +563,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
     vec2 bVal = ccEvalBranch(pKm, anchor, bDir, bLen, sideSign, pos.x * 17.3 + fi * 5.7, coreW, mix(0.50, 0.72, br1), max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)), length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * heightKm);
     branchSum += (bVal.x * 1.05 + bVal.y * 0.30) * groundChannelStage(lightningTime, tb);
   }
-  outputColor += lightningCol * branchSum * intensityRaw * 1200.0;
+  outputColor += lightningCol * branchSum * intensityRaw * 1200.0 * branchFade;
 
   return outputColor;
 }
@@ -598,12 +617,14 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
                     flashFlip * screenTexDx.y / flashSpan.y);
   vec2 gradY = vec2(flashDir * screenTexDy.x / flashSpan.x,
                     flashFlip * screenTexDy.y / flashSpan.y);
-  float pixVal = textureGrad(lightningNetworkTex, flashCoord, gradX, gradY).r;
+  vec2 artwork = textureGrad(lightningNetworkTex, flashCoord, gradX, gradY).rg;
+  float pixVal = lightningCoverage(artwork.r, flashThreshold) +
+                 artworkBranchCoverage(artwork.g, false) * dischargeBranchFade(lightningTime);
 
   const float brightnessThreshold = flashThreshold;
   currentLightningIntensity *= mainBoltBrightness;
 
-  pixVal = (1.0 - brightnessThreshold) * lightningCoverage(pixVal, brightnessThreshold);
+  pixVal *= (1.0 - brightnessThreshold);
   pixVal *= currentLightningIntensity;
   pixVal *= cloudChannelStage(lightningTime, clamp(length(flashCoord - vec2(0.5)) * 1.4, 0.0, 1.0));
 
@@ -650,12 +671,14 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
                     flashFlip * screenTexDx.y / flashSpan.y);
   vec2 gradY = vec2(flashDir * screenTexDy.x / flashSpan.x,
                     flashFlip * screenTexDy.y / flashSpan.y);
-  float pixVal = textureGrad(lightningNetworkTex, flashCoord, gradX, gradY).r;
+  vec2 artwork = textureGrad(lightningNetworkTex, flashCoord, gradX, gradY).rg;
+  float pixVal = lightningCoverage(artwork.r, flashThreshold) +
+                 artworkBranchCoverage(artwork.g, true) * dischargeBranchFade(lightningTime);
 
   const float brightnessThreshold = flashThreshold;
   currentLightningIntensity *= mainBoltBrightness;
 
-  pixVal = (1.0 - brightnessThreshold) * lightningCoverage(pixVal, brightnessThreshold);
+  pixVal *= (1.0 - brightnessThreshold);
   pixVal *= currentLightningIntensity;
   pixVal *= cloudChannelStage(lightningTime, clamp(length(flashCoord - vec2(0.5)) * 1.4, 0.0, 1.0));
 
@@ -688,7 +711,7 @@ vec2 evalExtArcDeriv(float t, float Hw, float V)
 // External positive CG ("bolt from the blue"): emerges from the upper storm
 // cloud at originX, arches laterally out into clear air far from the storm core,
 // and plunges down to groundPos.x (or squarely onto a capturing rod's tip).
-vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime, float currentLightningIntensity, vec3 lightningColor, float branchFamily)
+vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime, float currentLightningIntensity, vec3 lightningColor, float branchTime)
 {
   if (!inLightningWorldTile())
     return vec3(0.0);
@@ -757,10 +780,11 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
                          length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y)));
   float intensityRaw = currentLightningIntensity; // un-scaled by the artwork gain
   float extBranchSeed = random2d(vec2(groundPos.y * 8.3, originX * 6.1));
-  int extBranchCount = int(branchFamily) + (extBranchSeed < 0.5 ? 0 : 1);
+  float branchFade = dischargeBranchFade(branchTime);
+  int extBranchCount = extBranchSeed < 0.35 ? 1 : 0;
   float extBranchGain = 0.0;
   for (int bi = 0; bi < 4; bi++) {
-    if (bi >= extBranchCount)
+    if (bi >= extBranchCount || branchFade <= 0.0)
       break;
     float fi = float(bi);
     float br1 = random2d(vec2(groundPos.x * 7.7 + fi * 3.1, originX * 4.9 + fi * 2.7));
@@ -797,18 +821,20 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   float footprint = pixelWorld * max(actualLightningTexRes.x / (scaleLen * lightningTexAspect),
                                      actualLightningTexRes.y / max(length(vec2(Hw, V)), 0.25 * hScale));
   float lod = clamp(log2(max(footprint, 1.0)), 0.0, 12.0);
-  float pixVal = textureLod(lightningTex, vec2(u, v), lod).r;
+  vec2 artwork = textureLod(lightningTex, vec2(u, v), lod).rg;
+  float pixVal = lightningCoverage(artwork.r, 0.004) +
+                 artworkBranchCoverage(artwork.g, true) * branchFade;
 
   // Preserve the full-white peak and existing positive-CG fade and color.
   const float extBoltBrightness = 60000.;
   const float brightnessThreshold = 0.004;
   float intensity = currentLightningIntensity * extBoltBrightness;
 
-  pixVal = 0.05 * lightningCoverage(pixVal, brightnessThreshold);
+  pixVal *= 0.05;
   pixVal *= intensity;
   pixVal *= groundChannelStage(lightningTime, t);
 
-  return max(pixVal * lightningColor + lightningColor * extBranchGain * intensityRaw * 950.0, vec3(0.0));
+  return max(pixVal * lightningColor + lightningColor * extBranchGain * intensityRaw * 950.0 * branchFade, vec3(0.0));
 }
 
 // Reworked procedural cloud-to-cloud (CC) channel: draws a genuine tortuous,
@@ -906,11 +932,12 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
   float branchCore = 0.0;
   float branchSignal = 0.0;
   float branchBudget = random2d(vec2(seed * 3.7, targetPos.y * 9.1) + 0.57);
-  float branchMax = isPositiveCC ? (1.0 + floor(branchBudget * 2.0))   // +CC: 1-2, rarely forked
-                                 : (3.0 + floor(branchBudget * 2.0));  // -CC: 3-4, rich bridges
+  float branchFade = dischargeBranchFade(lightningTime);
+  float branchMax = isPositiveCC ? (branchBudget < 0.5 ? 1.0 : 0.0) // +CC: 0-1
+                                 : (3.0 + floor(branchBudget * 2.0)); // -CC: 3-4
   for (int b = 0; b < 4; b++) {
-    if (float(b) >= branchMax)
-      continue;
+    if (float(b) >= branchMax || branchFade <= 0.0)
+      break;
     float br1 = random2d(vec2(seed * 13.7 + float(b) * 5.3, originPos.y * 43.1));
     float br2 = random2d(vec2(targetPos.x * 29.9 + float(b) * 7.9, seed * 17.3));
     float tb = clamp(0.22 + float(b) * 0.18 + (br1 - 0.5) * 0.05, 0.14, 0.86);
@@ -950,6 +977,8 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
     }
   }
 
+  branchCore *= branchFade;
+  branchSignal *= branchFade;
   float totalSignal = max(mainSignal, branchSignal) + 0.18 * min(mainSignal, branchSignal);
 
   const float ccBaseBrightness = 900.;
@@ -1152,7 +1181,7 @@ vec4 computeAirColor(vec2 bndFragCoord)
     if (isExternalPositive) {
       strikeChannel += displayExternalLightning(lightningPos, lightningMeta.x, effectiveLightningTime, extCurve,
                                                      isHyperbolt ? hyperboltColor : (isSuperbolt ? superboltColor : positiveLightningCol),
-                                                     isHyperbolt ? 3.0 : (isSuperbolt ? 2.0 : 1.0));
+                                                     lightningTime);
       if (isSuperbolt)
         strikeChannel *= strokeBrightnessMult;
     } else if (isCloudToCloud) {

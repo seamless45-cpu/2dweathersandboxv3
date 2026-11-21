@@ -38,39 +38,20 @@ onmessage = (event) => {
 };
 
 
-/*
- * The artwork leaves as one byte per texel, not as an ImageBitmap.
- *
- * A canvas is RGBA whatever is drawn on it, so handing a bitmap to texImage2D asks
- * the driver to take a 50 MB four-channel picture and make a 12.5 MB single-channel
- * texture out of it. On a machine that is already short of graphics memory that
- * temporary is the difference between a texture and a lost context. Reading the red
- * channel out here costs one pass over the pixels, in the worker, and then exactly
- * the 12.5 MB the texture needs crosses to the main thread. Every channel of the
- * artwork holds the same value, so the red channel is the picture.
- *
- * The counters are the stub canvas's (see tests/ic-canvas-stub.js), which is how
- * the harness counts segments; in a browser they are simply undefined.
- *
- * This object is *not* what the worker posts - see the protocol above. It carries
- * the counters, and a method used to live here too, which is exactly what cannot be
- * sent through postMessage.
- */
-function readRedChannel(ctx, width, height)
+// Red stores established trunks, green stores forks. Two independently
+// mipmapped channels let the renderer extinguish branches without cutting
+// holes in the trunk or relying on screen-space brightness thresholds.
+function readChannelArtwork(ctx, width, height)
 {
   const rgba = ctx.getImageData(0, 0, width, height).data;
-  const data = new Uint8Array(width * height);
-  for (let i = 0, j = 0; i < data.length; i++, j += 4)
-    data[i] = rgba[j];
-
-  return {
-    width : width,
-    height : height,
-    data : data,
-    strokeCount : ctx.strokeCount,
-    segmentCount : ctx.segmentCount,
-    fillCount : ctx.fillCount
-  };
+  const data = new Uint8Array(width * height * 2);
+  for (let i = 0, j = 0; i < data.length; i += 2, j += 4) {
+    const alpha = rgba[j + 3] / 255;
+    data[i] = Math.round(rgba[j] * alpha);
+    data[i + 1] = Math.round(rgba[j + 1] * alpha);
+  }
+  return {width, height, data, strokeCount: ctx.strokeCount,
+          segmentCount: ctx.segmentCount, fillCount: ctx.fillCount};
 }
 
 
@@ -139,14 +120,15 @@ function generateLightningBolt(width, height, logicalScale = 1)
 
   ctx.clearRect(0, 0, pixelWidth, pixelHeight);
   if (logicalScale !== 1) ctx.scale(logicalScale, logicalScale);
+  ctx.globalCompositeOperation = 'lighten';
 
-  function genLightningColor(lineWidth)
+  function genLightningColor(lineWidth, branch, positiveBranch)
   {
-    const colR = 12;
-    const colG = 12;
-    const colB = 12;
-    const brightness = Math.pow(lineWidth, 2.0);
-    return `rgb(${colR * brightness}, ${colG * brightness}, ${colB * brightness})`;
+    if (!branch) return 'rgb(255, 0, 0)';
+    // A stable per-fork tag lets positive discharges retain only a sparse
+    // subset; both classes share the same artwork and path geometry.
+    const green = positiveBranch ? 255 : 64;
+    return `rgb(0, ${green}, 0)`;
   }
 
 
@@ -179,7 +161,7 @@ function generateLightningBolt(width, height, logicalScale = 1)
     if (Math.random() < 0.015 * (1. - nextY / height)) { // branch
       ctx.strokeStyle = genLightningColor(lineWidth);
       ctx.stroke();
-      drawBranch(nextX, nextY, targetAngle + (Math.random() - 0.5) * 2.5, lineWidth * CG_SHAPE.branchWidthRatio * Math.random());
+      drawBranch(nextX, nextY, targetAngle + (Math.random() - 0.5) * 2.5, lineWidth * CG_SHAPE.branchWidthRatio * Math.random(), Math.random() < 0.25);
       ctx.beginPath();
       ctx.moveTo(nextX, nextY); // move back to last position after drawing branch
       ctx.lineWidth = lineWidth;
@@ -189,10 +171,10 @@ function generateLightningBolt(width, height, logicalScale = 1)
   ctx.stroke();
 
 
-  return readRedChannel(ctx, pixelWidth, pixelHeight);
+  return readChannelArtwork(ctx, pixelWidth, pixelHeight);
 
 
-  function drawBranch(startX, startY, targetAngle, line_width)
+  function drawBranch(startX, startY, targetAngle, line_width, positiveBranch)
   {
     let angle = targetAngle;
 
@@ -216,7 +198,7 @@ function generateLightningBolt(width, height, logicalScale = 1)
 
       if (Math.random() < 0.018) { // reduce width
 
-        ctx.strokeStyle = genLightningColor(line_width);
+        ctx.strokeStyle = genLightningColor(line_width, true, positiveBranch);
         ctx.stroke();
         line_width -= CG_SHAPE.taper;
 
@@ -225,7 +207,7 @@ function generateLightningBolt(width, height, logicalScale = 1)
 
         if (Math.random() < 0.1) { // branch 0.005
 
-          drawBranch(nextX, nextY, targetAngle + (Math.random() - 0.5) * 1.5, line_width);
+          drawBranch(nextX, nextY, targetAngle + (Math.random() - 0.5) * 1.5, line_width, positiveBranch && Math.random() < 0.5);
         }
 
         ctx.beginPath();
@@ -233,7 +215,7 @@ function generateLightningBolt(width, height, logicalScale = 1)
         ctx.lineWidth = line_width;
       }
     }
-    ctx.strokeStyle = genLightningColor(line_width);
+    ctx.strokeStyle = genLightningColor(line_width, true, positiveBranch);
     ctx.stroke();
   }
 }
@@ -378,10 +360,11 @@ function generateLightningNetwork(width, height)
 
   const clamp = (v, lo, hi) => (v < lo ? lo : (v > hi ? hi : v));
 
-  function genNetworkColor(level)
+  function genNetworkColor(level, isBranch, positiveBranch)
   {
     const v = Math.round(255 * IC_LEVELS[Math.min(level, IC_LEVELS.length - 1)]);
-    return `rgb(${v}, ${v}, ${v})`;
+    if (!isBranch) return `rgb(${v}, 0, 0)`;
+    return `rgb(0, ${positiveBranch ? 255 : 64}, 0)`;
   }
 
   const startX = width * 0.5;
@@ -392,14 +375,14 @@ function generateLightningNetwork(width, height)
    * One curved strand: opens cleanly along its outward axis, sweeps along a broad
    * C-arc or S-bend with electrical crackle, and forks into finer curved tendrils.
    */
-  function drawStrand(sx, sy, axis, curveSign, steps, lineWidth, level)
+  function drawStrand(sx, sy, axis, curveSign, steps, lineWidth, level, isBranch, positiveBranch)
   {
     let x = sx, y = sy;
     const strand = makeIcStrand(axis, curveSign, steps, Math.random);
 
     ctx.beginPath();
     ctx.moveTo(x, y);
-    ctx.strokeStyle = genNetworkColor(level);
+    ctx.strokeStyle = genNetworkColor(level, isBranch, positiveBranch);
     ctx.lineWidth = lineWidth;
 
     for (let i = 0; i < steps; i++) {
@@ -424,11 +407,12 @@ function generateLightningNetwork(width, height)
         const forkAxis = strand.angle + side * (0.45 + Math.random() * 0.45);
         drawStrand(x, y, forkAxis, side,
                    Math.max(16, Math.round(steps * (0.42 + Math.random() * 0.35))),
-                   Math.max(IC_SHAPE.minWidth, lineWidth * IC_SHAPE.branchRatio), level + 1);
+                   Math.max(IC_SHAPE.minWidth, lineWidth * IC_SHAPE.branchRatio), level + 1, true,
+                   (!isBranch || positiveBranch) && Math.random() < 0.25);
 
         ctx.beginPath();
         ctx.moveTo(x, y);
-        ctx.strokeStyle = genNetworkColor(level);
+        ctx.strokeStyle = genNetworkColor(level, isBranch, positiveBranch);
         ctx.lineWidth = lineWidth;
       }
     }
@@ -446,10 +430,10 @@ function generateLightningNetwork(width, height)
     const steps = Math.round(reach / IC_SHAPE.stepLength);
     const lineWidth = i === 0 ? IC_SHAPE.trunkWidth : IC_SHAPE.trunkWidth * IC_SHAPE.trunkRatio;
 
-    drawStrand(startX, startY, axis, curveSign, steps, lineWidth, i === 0 ? 0 : 1);
+    drawStrand(startX, startY, axis, curveSign, steps, lineWidth, i === 0 ? 0 : 1, false, false);
   }
 
-  return readRedChannel(ctx, pixelWidth, pixelHeight);
+  return readChannelArtwork(ctx, pixelWidth, pixelHeight);
 }
 
 
