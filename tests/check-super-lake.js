@@ -1,7 +1,7 @@
 // Verification harness for the super lake.
 //
-// Spec (2026-11-18): a brush tool AND a deeper water color; 5x more sensitive
-// to evaporation than an ordinary lake; 5x more sensitive to heat, so it
+// Spec (2026-11-18): a brush tool AND a deeper water color; 10x more sensitive
+// to evaporation than an ordinary lake; 10x more sensitive to heat, so it
 // produces storms faster than anything else in the simulation.
 //
 // The super lake is a new wall type (WALLTYPE_SUPER_LAKE = 7) that behaves
@@ -65,24 +65,24 @@ check('advectionShader turns inputType 24 into WALLTYPE_SUPER_LAKE and anchors i
 check('soil moisture brush refuses to paint onto a super lake either',
   /case 20:[\s\S]{0,300}wall\[TYPE\] != WALLTYPE_SUPER_LAKE/.test(advection));
 
-/* ------------------------------------------- 5x evaporation, 5x heat (air) */
+/* ------------------------------------------- 10x evaporation, 10x heat (air) */
 
-check('air above a super lake exchanges heat and water at 5x the lake rate',
-  /case WALLTYPE_SUPER_LAKE: \/\/ super lake: fall through with 5x the exchange rates/.test(boundary) &&
-  /float waterMult = wall\[TYPE\] == WALLTYPE_SUPER_LAKE \? 5\.0 : 1\.0;/.test(boundary) &&
+check('air above a super lake exchanges heat and water at 10x the lake rate',
+  /case WALLTYPE_SUPER_LAKE: \/\/ super lake: fall through with 10x the exchange rates/.test(boundary) &&
+  /float waterMult = wall\[TYPE\] == WALLTYPE_SUPER_LAKE \? 10\.0 : 1\.0;/.test(boundary) &&
   /waterHeatExchangeRate \* waterMult/.test(boundary) &&
   /waterEvaporation \* waterMult \/ influenceDevider/.test(boundary));
 
-check('the 5x factor is exactly five, applied to evaporation and heat exchange, not to the water temperature copy',
+check('the 10x factor is exactly ten, applied to evaporation and heat exchange, not to the water temperature copy',
   (() => {
     const match = boundary.match(/float waterMult = wall\[TYPE\] == WALLTYPE_SUPER_LAKE \? ([0-9.]+) : 1\.0;/);
-    return match && Number(match[1]) === 5.0;
+    return match && Number(match[1]) === 10.0;
   })());
 
-/* ------------------------------------------- 5x evaporation, 5x heat (body) */
+/* ------------------------------------------- 10x evaporation, 10x heat (body) */
 
-check('the super lake body runs its entire heat budget at 5x (air exchange, evaporative cooling, sun, IR)',
-  /float waterMult = wall\[TYPE\] == WALLTYPE_SUPER_LAKE \? 5\.0 : 1\.0;/.test(boundary) &&
+check('the super lake body runs its entire heat budget at 10x (air exchange, evaporative cooling, sun, IR)',
+  /float waterMult = wall\[TYPE\] == WALLTYPE_SUPER_LAKE \? 10\.0 : 1\.0;/.test(boundary) &&
   /waterHeatExchangeRate \* waterMult/.test(boundary) &&
   /waterEvaporation \* waterMult/.test(boundary) &&
   /netWaterHeating \+= lightPower \* waterMult; \/\/ sun heating water/.test(boundary) &&

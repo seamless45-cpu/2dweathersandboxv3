@@ -46,7 +46,7 @@ assert(fallback); palette.push([9,...fallback.slice(1).map(Number)]);
 assert.match(shader, /isHyperbolt \? 9 : isSuperbolt \? 6/);
 assert.match(shader, /isExternalPositive \? 5 : isCloudToCloud \? \(isPositiveCC \? 4 : 3\)/);
 assert.match(shader, /isFlash \? \(isPositiveIC \? 2 : 1\) : 0/);
-assert.match(shader, /apparentChannelColor\(strikeChannel, lightningIlluminationTint\)/);
+assert.match(shader, /apparentChannelColor\(strikeChannel, lightningIlluminationTint, coreReference\)/);
 assert.match(shader, /onLight \+= lightningIlluminationTint \* \(lightningOnLightBrightness \* 1\.4/);
 const tintHelper = shader.match(/vec3 apparentLightningTint\([\s\S]*?\n}/)[0];
 assert.match(tintHelper, /mod\(startIteration, 4096\.0\)/);
