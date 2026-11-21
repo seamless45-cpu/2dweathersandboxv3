@@ -306,7 +306,7 @@ check(
 check('archive not cached', PRECACHE.every((entry) => !/\.zip$/i.test(entry)));
 check(
   'large textures are deferred, not blocking',
-  ['resources/img/surfaceTextureMap.png', 'resources/img/background.png', 'resources/img/noise_texture.jpg'].every(
+  ['resources/img/surfaceTextureMap-2048.png', 'resources/img/background.png', 'resources/img/noise_texture.jpg'].every(
     (file) => deferred.has(file)
   )
 );

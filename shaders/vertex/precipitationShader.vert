@@ -2,9 +2,9 @@
 precision highp float;
 
 
-in vec2 dropPosition;
-in vec2 mass; //[0] water   [1] ice
-in float density;
+layout(location = 0) in vec2 dropPosition;
+layout(location = 1) in vec2 mass; //[0] water   [1] ice
+layout(location = 2) in float density;
 
 // transform feedback varyings:
 out vec2 position_out;
@@ -31,6 +31,8 @@ uniform float dryLapse;
 uniform float iterNum;          // used as seed for random function
 uniform float legacyLightningGate; // 1.0 = legacy random lightning on, 0.0 = storm physics engine owns lightning
 uniform float numDroplets;      // total number of droplets
+uniform bool compactFeedback; // half-float fallback uses a count rather than summed iteration numbers
+uniform float precipPointSize; // limited by the GPU point-size range
 uniform float inactiveDroplets; // used to maintain constant spawnrate
 
 uniform float evapHeat;
@@ -197,7 +199,7 @@ void main()
             isActive = false;
             gl_PointSize = 1.0;
             feedback.xy = texCoord;
-            feedback[START_ITERNUM] = iterNum;
+            feedback[START_ITERNUM] = compactFeedback ? 1.0 : iterNum;
             feedback[INTENSITY] = clamp(cloudPlusPrecipDensity / 10.0 + (random2d(texCoord) - 0.15), 0.75, 4.5);
             gl_Position = vec4(vec2(-1. + texelSize.x * 3., -1. + texelSize.y), 0.0, 1.0); // render to bottem left corner (1, 0)
           }
@@ -221,7 +223,8 @@ void main()
       isActive = false;
       gl_PointSize = 1.0;
       feedback[MASS] = 1.0;                                                     // count 1 inactive droplet
-      gl_Position = vec4(vec2(-1. + texelSize.x, -1. + texelSize.y), 0.0, 1.0); // render to bottem left corner (0, 0) to count inactive droplets
+      gl_Position = compactFeedback ? vec4(2.0, 2.0, 0.0, 1.0) :
+                    vec4(vec2(-1. + texelSize.x, -1. + texelSize.y), 0.0, 1.0); // CPU counts compact-mode inactive droplets
                                                                                 // return;
     }
   }
@@ -361,8 +364,8 @@ void main()
 
     }               // update
 
-#define pntSize 12. // 16.
-    const float pntSurface = pntSize * pntSize;
+    float pntSize = max(precipPointSize, 1.0);
+    float pntSurface = pntSize * pntSize;
     // devide by suface area to keep total amount constant
     feedback[MASS] /= pntSurface;
     feedback[HEAT] /= pntSurface;

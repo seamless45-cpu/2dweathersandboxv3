@@ -252,7 +252,7 @@ const PRECACHE = (() => {
   check(
     'activate warms the deferred art',
     shellCache.store.has(ORIGIN + '/resources/img/background.png') &&
-      shellCache.store.has(ORIGIN + '/resources/img/surfaceTextureMap.png') &&
+      shellCache.store.has(ORIGIN + '/resources/img/surfaceTextureMap-2048.png') &&
       shellCache.store.has(ORIGIN + '/resources/img/noise_texture.jpg')
   );
 

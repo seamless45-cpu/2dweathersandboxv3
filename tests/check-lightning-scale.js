@@ -61,7 +61,7 @@ check('external positive CG jag bounds are expressed at the 12 km reference and 
 
 check('external positive CG artwork floor and lod scale with hScale',
   /float scaleLen = max\(V, 0\.25 \* hScale\);/.test(displayShader) &&
-  /lightningTexRes\.y \/ max\(length\(vec2\(Hw, V\)\), 0\.25 \* hScale\)\);/.test(displayShader));
+  /actualLightningTexRes\.y \/ max\(length\(vec2\(Hw, V\)\), 0\.25 \* hScale\)\);/.test(displayShader));
 
 // ------------------------------------------------------------ CC branches
 check('cloud-to-cloud fractal displacement floor is expressed at the 12 km reference',

@@ -793,8 +793,9 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   vec2 pixelX = vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y);
   vec2 pixelY = vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y);
   float pixelWorld = max(length(pixelX), length(pixelY));
-  float footprint = pixelWorld * max(lightningTexRes.x / (scaleLen * lightningTexAspect),
-                                     lightningTexRes.y / max(length(vec2(Hw, V)), 0.25 * hScale));
+  vec2 actualLightningTexRes = vec2(textureSize(lightningTex, 0));
+  float footprint = pixelWorld * max(actualLightningTexRes.x / (scaleLen * lightningTexAspect),
+                                     actualLightningTexRes.y / max(length(vec2(Hw, V)), 0.25 * hScale));
   float lod = clamp(log2(max(footprint, 1.0)), 0.0, 12.0);
   float pixVal = textureLod(lightningTex, vec2(u, v), lod).r;
 

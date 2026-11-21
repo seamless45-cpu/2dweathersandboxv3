@@ -65,10 +65,11 @@ function makeChainable() {
 function makeFakeGL(spies, options) {
   options = options || {};
   let incompleteFBOs = options.incompleteFBOs || 0;
+  let framebufferChecks = 0;
   const base = {
     canvas: null,
     getParameter: () => 16384,
-    getExtension: () => ({}),
+    getExtension: (name) => options.noFloatBlend && name === 'EXT_float_blend' ? null : ({}),
     getSupportedExtensions: () => [],
     getError: () => 0,
     getShaderParameter: () => true,
@@ -89,7 +90,7 @@ function makeFakeGL(spies, options) {
     createTransformFeedback: () => ({}),
     createSampler: () => ({}),
     FRAMEBUFFER_COMPLETE: 36053, // the stub's CAPS-to-1 rule would make this 1 otherwise
-    checkFramebufferStatus: () => (incompleteFBOs-- > 0 ? 1 : 36053), // FRAMEBUFFER_INCOMPLETE_ATTACHMENT=1, FRAMEBUFFER_COMPLETE=36053
+    checkFramebufferStatus: () => (options.incompletePrecipitation || (++framebufferChecks > 1 && incompleteFBOs-- > 0) ? 1 : 36053), // FRAMEBUFFER_INCOMPLETE_ATTACHMENT=1, FRAMEBUFFER_COMPLETE=36053
     isContextLost: () => false
   };
   return new Proxy(base, {
@@ -458,7 +459,7 @@ function assertStartupCompleted(name, result) {
         new Set(shadersAndCommon).size === 32,
         'got ' + new Set(shadersAndCommon).size);
   check('happy path: no file needed a retry', [...A.spy.fetchAttempts.values()].every((n) => n === 1));
-  for (const image of ['resources/img/noise_texture.jpg', 'resources/img/surfaceTextureMap.png',
+  for (const image of ['resources/img/noise_texture.jpg', 'resources/img/surfaceTextureMap-2048.png',
                        'resources/img/ColorScales.png', 'resources/img/A380.png']) {
     check('happy path: image requested: ' + image, A.spy.imageLoads.includes(image));
   }
@@ -497,6 +498,11 @@ function assertStartupCompleted(name, result) {
   // ---------------------------------------------------------
   const E = await runStartup({ incompleteFBOs: 2 });
   assertStartupCompleted('oversized HDR demotes instead of blacking out', E);
+
+  const F = await runStartup({ noFloatBlend: true });
+  assertStartupCompleted('no float-blend extension', F);
+  const G = await runStartup({ incompletePrecipitation: true });
+  check('unsupported precipitation framebuffer gives a useful error', G.settled && G.spy.alertCalls.some(message => message.includes('Precipitation framebuffer')));
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
   process.exit(fail ? 1 : 0);
