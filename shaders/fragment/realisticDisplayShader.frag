@@ -287,19 +287,20 @@ vec3 planckBlackbody(float kelvin)
     rgb.b = 255.0;
   }
   rgb = clamp(rgb, 0.0, 255.0) / 255.0;
+  // Helland returns display-encoded RGB; decode before HDR compositing so
+  // the final gamma conversion does not wash out the temperature differences.
+  rgb = pow(rgb, vec3(2.2));
   return rgb / max(rgb.b, 0.35); // blue stays unit gain for HDR tinting
 }
 
-// The canvas clips RGB independently to [0,1] when filmic tone mapping is
-// disabled (the default). Lightning radiance can exceed 1000, turning every
-// temperature and even blue/red transients into identical white pixels.
-// Compress just emitted lightning by its maximum component, not each channel,
-// so hue survives. Scene exposure, bloom and surrounding sky still apply.
+// Keep enough HDR energy for the bloom pyramid while preserving chromaticity.
+// The display pass maps bright pixels by a common scale after bloom is made;
+// clipping emission to display white here would starve the bloom pass.
 vec3 displayLightningRadiance(vec3 radiance)
 {
   vec3 c = max(radiance, vec3(0.0));
   float peak = max(c.r, max(c.g, c.b));
-  return c / (1.0 + peak / 0.65);
+  return c / (1.0 + peak / 80.0);
 }
 
 // Preserve saturated channel radiance while suppressing low-coverage haze.
@@ -992,9 +993,9 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
   float totalSignal = max(mainSignal, branchSignal) + 0.18 * min(mainSignal, branchSignal);
 
   const float ccBaseBrightness = 900.;
-  vec3 coreTint = vec3(1.0, 0.98, 1.0);
   vec3 auraTint = planckBlackbody((isPositiveCC ? 12000.0 : 22000.0) +
                                   4000.0 * (random2d(vec2(targetPos.x * 3.1, originPos.y * 5.7)) - 0.5));
+  vec3 coreTint = mix(auraTint, vec3(1.0), 0.22);
   vec3 ccCol = mix(auraTint, coreTint, clamp(mainCore * 0.85 + branchCore * 0.55, 0.0, 1.0));
   return max(totalSignal * ccCurve * ccBaseBrightness * ccCol, vec3(0.0));
 }

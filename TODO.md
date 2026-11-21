@@ -115,6 +115,8 @@
 
 - [x] Reproject motion blur through the previous camera, backtrace actual simulated fluid steps, and keep terrain and off-world pixels stationary in world space. Animate stepped ground leaders with upward return fronts, growing branches on CG/IC/CC channels, and independently growing blue-jet streamers. Real-GPU visual and performance validation remains necessary.
 
+- [x] Restore lightning HDR energy before bloom, retain channel tint in the post-process highlight mapping, and rework motion-blur sampling with 24 midpoint taps and per-tap history bounds. Validate the artistic result on a real GPU; the post-process highlight mapping also changes other bright scene highlights.
+
 # In Progress
 
 

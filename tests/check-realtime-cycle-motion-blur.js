@@ -112,7 +112,7 @@ check('post shader declares the motion blur uniforms (incl. the scene-velocity p
   /uniform float motionBlurIterPerFrame;/.test(postShader) &&
   /if \(motionBlurEnabled && motionBlurHistoryValid\) \{/.test(postShader));
 
-check('the trail reprojects world-space fluid through the previous camera and gathers 16 taps',
+check('the trail reprojects world-space fluid through the previous camera and gathers 24 taps',
   /vec2 worldUV = vec2\(\(ndc\.x \/ zoom - motionBlurView\.x\)/.test(postShader) &&
   /if \(motionBlurWrap\)/.test(postShader) &&
   /texelFetch\(motionBlurWallTex, cell, 0\)\.y != 0/.test(postShader) &&
@@ -120,8 +120,8 @@ check('the trail reprojects world-space fluid through the previous camera and ga
   /previousWorld = worldUV - velocity \* motionBlurIterPerFrame/.test(postShader) &&
   /vec2 previousNdc = vec2/.test(postShader) &&
   /vec2 flow = \(previousNdc - ndc\) \* 0\.5;/.test(postShader) &&
-  /const int TAPS = 16;/.test(postShader) &&
-  /vec2 rawUV = texCoord \+ flow \* \(t \* exposureSpan\);/.test(postShader) &&
+  /const int TAPS = 24;/.test(postShader) &&
+  /vec2 currentUV = texCoord - flow \* \(t \* exposureSpan\);/.test(postShader) &&
   /vec3 blurred = acc \/ max\(coveredWeight, 0\.0001\);/.test(postShader));
 
 check('the shutter length is bounded and folds only the wrapped camera seam',
@@ -138,12 +138,13 @@ check('the strength slider opens the shutter: one frame of motion at 0 %, ~2.1 a
            Math.abs(spanAt(350) - 5.0) < 1e-9;
   })() &&
   /float exposureSpan = 1\.0 \+ 4\.0 \* strength;/.test(postShader) &&
-  /vec2 rawUV = texCoord \+ flow \* \(t \* exposureSpan\);/.test(postShader));
+  /vec2 currentUV = texCoord - flow \* \(t \* exposureSpan\);/.test(postShader));
 
-check('history clamping for the motion blur is the same five-tap neighbourhood TAA uses',
-  /const int TAPS = 16;/.test(postShader) &&
+check('TAA keeps five-tap clamping while blur bounds feedback per sample',
+  /const int TAPS = 24;/.test(postShader) &&
   /neighborhoodMin = min\(neighborhoodMin, mappedColor\(texCoord - vec2\(outputTexelSize\.x, 0\.0\)\)\);/.test(postShader) &&
-  /needsNeighborhood/.test(postShader));
+  /bool needsNeighborhood = temporalAAEnabled && temporalHistoryValid;/.test(postShader) &&
+  /historyTap = clamp\(historyTap, max\(currentTap - vec3\(0\.35\)/.test(postShader));
 
 check('motion blur applies to the final image, after both TAA and FXAA',
   postShader.indexOf('if (fxaaEnabled) {') < postShader.indexOf('if (motionBlurEnabled') &&
