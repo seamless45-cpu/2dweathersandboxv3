@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://seamless45-cpu.github.io/2dweathersandboxv3/sitemap.xml

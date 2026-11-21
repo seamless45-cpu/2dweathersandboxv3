@@ -478,3 +478,9 @@ For `zaioiemeerkat-commits/2dweathersimoptimized`, push this project to that rep
 https://zaioiemeerkat-commits.github.io/2dweathersimoptimized/
 
 The site name and simulation performance defaults are unchanged. GitHub Pages only hosts the files; it does not change the browser, GPU, or simulation workload.
+
+### Search discovery
+
+The GitHub Pages site has a canonical URL, indexable descriptive content and a sitemap at `https://seamless45-cpu.github.io/2dweathersandboxv3/sitemap.xml`. Search engines decide whether and when to index the site; the sitemap can be submitted in Google Search Console or Bing Webmaster Tools after verifying the site.
+
+`robots.txt` is included for deployments at a domain root. On GitHub Pages project sites, crawlers look for `https://seamless45-cpu.github.io/robots.txt`, not the copy under `/2dweathersandboxv3/`. To advertise this sitemap via robots on GitHub Pages, the owner must place its `Sitemap:` line in the host-root robots file (typically published by the `seamless45-cpu.github.io` site); this project cannot publish that file at the host root. Submitting the sitemap directly does not require that change.
