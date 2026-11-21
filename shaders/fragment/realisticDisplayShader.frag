@@ -293,14 +293,15 @@ vec3 planckBlackbody(float kelvin)
   return rgb / max(rgb.b, 0.35); // blue stays unit gain for HDR tinting
 }
 
-// Keep enough HDR energy for the bloom pyramid while preserving chromaticity.
-// The display pass maps bright pixels by a common scale after bloom is made;
-// clipping emission to display white here would starve the bloom pass.
+// Increase lightning-only emission before the bloom pyramid. This boosts weak
+// optical transients too, rather than only lifting the brightest bolt cores.
+// The common RGB shoulder bounds extreme overlapping strikes while preserving
+// their chromaticity and leaving HDR headroom for the glow pass.
 vec3 displayLightningRadiance(vec3 radiance)
 {
-  vec3 c = max(radiance, vec3(0.0));
+  vec3 c = max(radiance, vec3(0.0)) * 6.0;
   float peak = max(c.r, max(c.g, c.b));
-  return c / (1.0 + peak / 80.0);
+  return c / (1.0 + peak / 4000.0);
 }
 
 // Preserve saturated channel radiance while suppressing low-coverage haze.

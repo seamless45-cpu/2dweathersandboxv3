@@ -117,6 +117,8 @@
 
 - [x] Restore lightning HDR energy before bloom, retain channel tint in the post-process highlight mapping, and rework motion-blur sampling with 24 midpoint taps and per-tap history bounds. Validate the artistic result on a real GPU; the post-process highlight mapping also changes other bright scene highlights.
 
+- [x] Increase lightning-only emission before the bloom pyramid, including faint optical variants, without changing bloom or exposure settings. The stronger glow still needs real-GPU visual validation.
+
 # In Progress
 
 
