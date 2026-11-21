@@ -119,13 +119,13 @@ check('only external positive CG can receive the 7.2% superbolt flag',
   /vec4\(originX, 0\.0, 0\.0, 0\.0\)/.test(locationShader) &&
   !/isSuperboltCG/.test(locationShader));
 
-check('superbolts are blue 52000 K external strikes, 12x brighter and 0.1s shorter',
+check('superbolts retain their intrinsic temperature but use their own apparent tint, 12x brightness and shortened lifetime',
   /bool isSuperbolt = isExternalPositive && lightningMeta\.w >= 0\.5;/.test(displayShader) &&
   /const float superboltBrightnessMult = 12\.0;/.test(displayShader) &&
   /const float superboltDurationShorten = 0\.1;/.test(displayShader) &&
   /const vec3 superboltColor = vec3\(0\.332, 0\.469, 1\.0\);/.test(displayShader) &&
   /isSuperbolt \? superboltColor : positiveLightningCol/.test(displayShader) &&
-  /vec3 lightningIlluminationTint = isHyperbolt \? hyperboltColor : \(isSuperbolt \? superboltColor : vec3\(1\.0\)\)/.test(displayShader) &&
+  /vec3 lightningIlluminationTint = apparentLightningTint\(lightningKind, lightningPos, lightningStartIterNum\)/.test(displayShader) &&
   /lightningTime >= repeatPeriod \* lightningFlickers\(lightningData\) \+ \(2\.924 - strokeDurationShorten\)/.test(displayShader) &&
   /if \(isSuperbolt\)\s*\n\s*lightningOnLight \*= strokeBrightnessMult;/.test(displayShader));
 
