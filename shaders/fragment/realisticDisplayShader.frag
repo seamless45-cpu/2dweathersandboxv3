@@ -295,6 +295,20 @@ vec3 planckBlackbody(float kelvin)
   return rgb / max(rgb.b, 0.35); // blue stays unit gain for HDR tinting
 }
 
+// Apparent channel colour includes unresolved white-hot cores and variable
+// atmospheric filtering, not just the intrinsic arc temperature. Keep one
+// stable tint for the whole strike (and its branches), rather than animating
+// random colour per pixel or frame. This is an artistic approximation.
+vec3 apparentChannelColor(vec3 radiance, vec2 strikePos, float startIteration)
+{
+  float seed = random2d(strikePos * vec2(19.7, 31.1) +
+                        vec2(mod(startIteration, 4096.0) * 0.013, 7.37));
+  float peak = max(radiance.r, max(radiance.g, radiance.b));
+  vec3 softened = mix(radiance, vec3(peak), 0.55);
+  vec3 atmosphereTint = mix(vec3(1.0, 0.93, 0.65), vec3(1.0), seed);
+  return softened * atmosphereTint;
+}
+
 // Increase lightning-only emission before the bloom pyramid. This boosts weak
 // optical transients too, rather than only lifting the brightest bolt cores.
 // The common RGB shoulder bounds extreme overlapping strikes while preserving
@@ -1828,7 +1842,7 @@ vec4 computeAirColor(vec2 bndFragCoord)
       float parentIntensity = lightningIntensityOverTime(parentLightningTime, lightningData.xy,
                                                          lightningData[INTENSITY]);
       vec3 crawler = drawAnvilCrawler(vec2(lightningMeta.x, lightningData.y), metaRawZ, opticalTime, parentIntensity);
-      lightningBoltLight += crawler;
+      lightningBoltLight += apparentChannelColor(crawler, lightningData.xy, lightningStartIterNum);
       onLight += crawler * 0.0001;
     }
     // The parent channel retains its own animation even if an optical effect
@@ -1901,27 +1915,29 @@ vec4 computeAirColor(vec2 bndFragCoord)
     float extBaseIntensity = clamp(mix(1.8, 3.4, (lightningData[INTENSITY] - 4.6) / 0.8), 1.8, 3.4);
     float extIntensityGain = pow(extBaseIntensity / max(lightningData[INTENSITY], 1.0), 2.0);
     float extCurve = currentLightningIntensity * extIntensityGain * extTailFade;
+    vec3 strikeChannel = vec3(0.0);
     if (isGroundToCloud) {
-      lightningBoltLight += displayGroundToCloud(lightningPos, metaRawZ, lightningTime, currentLightningIntensity);
+      strikeChannel += displayGroundToCloud(lightningPos, metaRawZ, lightningTime, currentLightningIntensity);
     } else if (isExternalPositive) {
-      vec3 prevBoltLight = lightningBoltLight;
-      lightningBoltLight += displayExternalLightning(lightningPos, lightningMeta.x, effectiveLightningTime, extCurve,
+      strikeChannel += displayExternalLightning(lightningPos, lightningMeta.x, effectiveLightningTime, extCurve,
                                                      isHyperbolt ? hyperboltColor : (isSuperbolt ? superboltColor : positiveLightningCol),
                                                      isHyperbolt ? 3.0 : (isSuperbolt ? 2.0 : 1.0));
       if (isSuperbolt)
-        lightningBoltLight = prevBoltLight + (lightningBoltLight - prevBoltLight) * strokeBrightnessMult;
+        strikeChannel *= strokeBrightnessMult;
     } else if (isCloudToCloud) {
-      lightningBoltLight += displayCloudToCloudLightning(vec2(lightningPos.x, metaRawZ),
+      strikeChannel += displayCloudToCloudLightning(vec2(lightningPos.x, metaRawZ),
                                                          vec2(lightningMeta.x, lightningPos.y),
                                                          isPositiveCC,
                                                          lightningTime,
                                                          currentLightningIntensity * ccIntensityGain * ccTailFade);
     } else if (isPositiveIC) {
-      lightningBoltLight += displayPositiveFlash(lightningPos, lightningTime, currentLightningIntensity);
+      strikeChannel += displayPositiveFlash(lightningPos, lightningTime, currentLightningIntensity);
     } else {
-      lightningBoltLight += isFlash ? displayFlash(lightningPos, lightningTime, currentLightningIntensity)
+      strikeChannel += isFlash ? displayFlash(lightningPos, lightningTime, currentLightningIntensity)
                                     : displayLightning(lightningPos, lightningTime, currentLightningIntensity);
     }
+
+    lightningBoltLight += apparentChannelColor(strikeChannel, lightningPos, lightningStartIterNum);
 
     // The light a strike throws on the clouds around it.
     float lightningOnLight;
