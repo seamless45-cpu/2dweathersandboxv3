@@ -133,6 +133,16 @@ float calcLightningTime(float startIterNum)
   return lightningTime / 5.0; // zero-latency flash timeline from trigger iteration
 }
 
+// The intensity curve used to peak at t=0 while the channel was still a
+// dim leader, leaving the first return far weaker than later restrikes. Hold
+// its peak through attachment and the return front, then rejoin the original
+// curve before even the shortest IC restrike period. Do not extend the slot.
+float firstReturnIntensity(float time, float intensity, float holdEnd, float fadeEnd)
+{
+  return (1.0 / 0.05 - 0.005) * intensity * intensity *
+         (1.0 - smoothstep(holdEnd, fadeEnd, time));
+}
+
 float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
 {
   // The whole strike timeline is stretched or compressed by lifetimeScale so
@@ -148,7 +158,8 @@ float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
 
   float T = max(mod(T0, repeatPeriod), minT);
 
-  return max((1. / (0.05 + pow(T * 2.0, 3.))) - 0.005, 0.) * pow(intensity, 2.0); // fading out curve
+  float curve = max((1. / (0.05 + pow(T * 2.0, 3.))) - 0.005, 0.) * pow(intensity, 2.0);
+  return max(curve, firstReturnIntensity(Tin, intensity, 0.65, 0.78));
 }
 
 // Visual timeline in the existing strike clock. A stepped leader grows from
@@ -307,7 +318,11 @@ vec3 apparentLightningTint(int kind, vec2 strikePos, float startIteration)
 {
   float seed = random2d(strikePos * vec2(19.7, 31.1) +
                         vec2(mod(startIteration, 4096.0) * 0.013, 7.37));
-  return lightningVariantTint(kind) * mix(vec3(1.0, 0.97, 0.93), vec3(0.96, 0.99, 1.0), seed);
+  vec3 tint = lightningVariantTint(kind) * mix(vec3(1.0, 0.97, 0.93), vec3(0.96, 0.99, 1.0), seed);
+  // Increase chroma in linear light, not brightness or a fixed blue overlay.
+  // Keep the strongest component unchanged and preserve each class's hue.
+  float peak = max(tint.r, max(tint.g, tint.b));
+  return peak * pow(tint / peak, vec3(1.65));
 }
 
 vec3 apparentChannelColor(vec3 radiance, vec3 tint)
@@ -1177,6 +1192,11 @@ vec4 computeAirColor(vec2 bndFragCoord)
     float extBaseIntensity = clamp(mix(1.8, 3.4, (lightningData[INTENSITY] - 4.6) / 0.8), 1.8, 3.4);
     float extIntensityGain = pow(extBaseIntensity / max(lightningData[INTENSITY], 1.0), 2.0);
     float extCurve = currentLightningIntensity * extIntensityGain * extTailFade;
+    // Hyperbolts compress the geometry and tail clock to fit a 0.3-unit
+    // lifetime. Keep the initial return bright on the real clock instead of
+    // letting that accelerated tail extinguish it before attachment.
+    if (isHyperbolt)
+      extCurve = max(extCurve, firstReturnIntensity(lightningTime, lightningData[INTENSITY], 0.10, 0.26) * extIntensityGain);
     vec3 strikeChannel = vec3(0.0);
     if (isExternalPositive) {
       strikeChannel += displayExternalLightning(lightningPos, lightningMeta.x, effectiveLightningTime, extCurve,
@@ -1227,9 +1247,7 @@ vec4 computeAirColor(vec2 bndFragCoord)
       dist.x *= aspectRatios[0];
       lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03 * lightningHeightScale());
     }
-    if (isExternalPositive)
-      lightningOnLight *= extIntensityGain * extTailFade;
-    lightningOnLight *= currentLightningIntensity;
+    lightningOnLight *= isExternalPositive ? extCurve : currentLightningIntensity;
     if (isSuperbolt)
       lightningOnLight *= strokeBrightnessMult;
     onLight += lightningIlluminationTint * lightningOnLight;
@@ -1654,9 +1672,13 @@ void main()
         float rodRepeatPeriod = map_range(random2d(strikeData.xy), 0., 1., 1.5, 3.0);
         if (rodStrikeT >= rodRepeatPeriod * lightningFlickers(strikeData) + rodEndWindow)
           slotGlow = 0.0;
-        else
+        else {
           slotGlow = lightningIntensityOverTime(rodStrikeT > 0.0 ? rodStrikeT + rodDurationShorten * smoothstep(0.0, 0.35, rodStrikeT) : 0.0,
-                                                strikeData.xy, strikeData[INTENSITY]) * rodBrightnessMult;
+                                                strikeData.xy, strikeData[INTENSITY]);
+          if (rodStrikeIsHyperbolt)
+            slotGlow = max(slotGlow, firstReturnIntensity(rodStrikeT, strikeData[INTENSITY], 0.10, 0.26));
+          slotGlow *= rodBrightnessMult;
+        }
       }
       strikeGlow = max(strikeGlow, slotGlow);
     }

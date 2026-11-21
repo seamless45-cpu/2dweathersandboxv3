@@ -69,7 +69,8 @@ vec3 mappedColor(vec2 uv)
   vec3 color = safeSample(texture(hdrTex, uv).rgb);
   if (bloomEnabled)
     color += safeSample(texture(bloomTex, uv).rgb) * 0.990;
-  color = min(color, vec3(hdrReadCeiling));
+  float hdrPeak = max(color.r, max(color.g, color.b));
+  color *= min(1.0, hdrReadCeiling / max(hdrPeak, 1e-6));
 
   color *= exposure;
   // A scalar highlight shoulder avoids independent RGB clipping, preserving
