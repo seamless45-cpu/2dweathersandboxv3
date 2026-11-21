@@ -295,18 +295,39 @@ vec3 planckBlackbody(float kelvin)
   return rgb / max(rgb.b, 0.35); // blue stays unit gain for HDR tinting
 }
 
-// Apparent channel colour includes unresolved white-hot cores and variable
-// atmospheric filtering, not just the intrinsic arc temperature. Keep one
-// stable tint for the whole strike (and its branches), rather than animating
-// random colour per pixel or frame. This is an artistic approximation.
-vec3 apparentChannelColor(vec3 radiance, vec2 strikePos, float startIteration)
+// Linear-RGB apparent colours for the discharge classes: ordinary CG, IC,
+// +IC, -CC, +CC, +CG, superbolt, GC, crawler and hyperbolt. These are
+// restrained artistic tints, not measured emission spectra. Sprite, jet and
+// elve keep their own optical colours in drawUpperAtmosphereLightning().
+vec3 lightningVariantTint(int kind)
+{
+  if (kind == 0) return vec3(1.00, 0.90, 0.77); // CG: warm white
+  if (kind == 1) return vec3(0.87, 0.94, 1.00); // IC: cool white
+  if (kind == 2) return vec3(1.00, 0.86, 0.93); // +IC: rose white
+  if (kind == 3) return vec3(0.87, 0.83, 1.00); // -CC: pale violet
+  if (kind == 4) return vec3(1.00, 0.80, 0.69); // +CC: peach
+  if (kind == 5) return vec3(1.00, 0.94, 0.67); // +CG: ivory
+  if (kind == 6) return vec3(0.96, 0.98, 1.00); // superbolt: near white
+  if (kind == 7) return vec3(1.00, 0.81, 0.82); // GC: warm rose
+  if (kind == 8) return vec3(0.89, 1.00, 0.84); // crawler: pale green-white
+  return vec3(0.80, 1.00, 0.95);                // hyperbolt: pale cyan
+}
+
+// Stable per-strike filtering, shared by its channel and cloud illumination.
+// No screen-position or frame-time randomness: branches do not flicker hue.
+vec3 apparentLightningTint(int kind, vec2 strikePos, float startIteration)
 {
   float seed = random2d(strikePos * vec2(19.7, 31.1) +
                         vec2(mod(startIteration, 4096.0) * 0.013, 7.37));
+  return lightningVariantTint(kind) * mix(vec3(1.0, 0.97, 0.93), vec3(0.96, 0.99, 1.0), seed);
+}
+
+vec3 apparentChannelColor(vec3 radiance, vec3 tint)
+{
   float peak = max(radiance.r, max(radiance.g, radiance.b));
-  vec3 softened = mix(radiance, vec3(peak), 0.55);
-  vec3 atmosphereTint = mix(vec3(1.0, 0.93, 0.65), vec3(1.0), seed);
-  return softened * atmosphereTint;
+  // Retain some intrinsic temperature/core variation, without letting the
+  // common blue-biased blackbody approximation dominate every variant.
+  return mix(vec3(peak), radiance, 0.12) * tint;
 }
 
 // Increase lightning-only emission before the bloom pyramid. This boosts weak
@@ -315,9 +336,9 @@ vec3 apparentChannelColor(vec3 radiance, vec2 strikePos, float startIteration)
 // their chromaticity and leaving HDR headroom for the glow pass.
 vec3 displayLightningRadiance(vec3 radiance)
 {
-  vec3 c = max(radiance, vec3(0.0)) * 6.0;
+  vec3 c = max(radiance, vec3(0.0)) * 12.0;
   float peak = max(c.r, max(c.g, c.b));
-  return c / (1.0 + peak / 4000.0);
+  return c / (1.0 + peak / 12000.0);
 }
 
 // Preserve saturated channel radiance while suppressing low-coverage haze.
@@ -1630,6 +1651,11 @@ vec3 drawUpperAtmosphereLightning()
     float t = (iterNum - data[START_ITERNUM]) / 40.0;
     if (t > 2.5)
       continue;
+    // Slight event-to-event filtering without changing the identity of the
+    // red sprite, blue jet, or red-orange elve emission bands.
+    float opticalSeed = random2d(data.xy * vec2(19.7, 31.1) +
+                                 vec2(mod(data[START_ITERNUM], 4096.0) * 0.013, 7.37));
+    vec3 opticalTint = mix(vec3(1.0, 0.94, 0.90), vec3(0.94, 0.99, 1.0), opticalSeed);
     float dx = (texCoord.x - data.x) * aspectRatios.x * heightKm;
     if (hasOpticalEffect(meta.w, 2.0) && altitude >= 45.0 && altitude <= 90.0 && abs(dx) < 14.0) {
       // Red sprite, reworked to the physical picture: a seeded cluster of
@@ -1655,7 +1681,7 @@ vec3 drawUpperAtmosphereLightning()
         spriteLight += spriteBody(dx - sOffset, altitude, fract(sSeed * 13.7 + 0.19), fract(sSeedT * 29.3 + 0.53),
                                   t - (0.04 + 0.05 * sSeed), 0.48 + 0.30 * sSeed);
       }
-      light += spriteLight;
+      light += spriteLight * opticalTint;
     }
     if (hasOpticalEffect(meta.w, 4.0)) {
       // Blue jet, reworked to the physical picture: it climbs in a V from the
@@ -1711,12 +1737,12 @@ vec3 drawUpperAtmosphereLightning()
         // Afterglow: once the front tops out, the ionised column lingers and
         // dies exponentially instead of snapping off.
         float afterglow = exp(-max(t - 0.80, 0.0) / 0.40);
-        light += vec3(0.30, 0.38, 1.0) * ((fan * 0.22 + fanInner * 0.28 + (edgeL + edgeR) * 0.35 + streamers * 0.8 +
+        light += opticalTint * vec3(0.30, 0.38, 1.0) * ((fan * 0.22 + fanInner * 0.28 + (edgeL + edgeR) * 0.35 + streamers * 0.8 +
                                             channelCore * 0.8) * frontMask) * fade;
-        light += vec3(0.74, 0.82, 1.0) * channelCore * frontMask * fade * 0.35;
-        light += vec3(0.55, 0.70, 1.0) * front * fan * 0.3 * fade * (frontKm > altitude - 3.0 ? 1.0 : 0.0);
-        light += vec3(0.36, 0.42, 0.92) * fan * frontMask * afterglow * 0.12;
-        light += vec3(0.62, 0.74, 1.0) * starter * 0.8;          // blue starter flash at the root
+        light += opticalTint * vec3(0.74, 0.82, 1.0) * channelCore * frontMask * fade * 0.35;
+        light += opticalTint * vec3(0.55, 0.70, 1.0) * front * fan * 0.3 * fade * (frontKm > altitude - 3.0 ? 1.0 : 0.0);
+        light += opticalTint * vec3(0.36, 0.42, 0.92) * fan * frontMask * afterglow * 0.12;
+        light += opticalTint * vec3(0.62, 0.74, 1.0) * starter * 0.8;          // blue starter flash at the root
       }
     }
     if (hasOpticalEffect(meta.w, 8.0) && altitude >= 82.0 && altitude <= 98.0) {
@@ -1737,8 +1763,8 @@ vec3 drawUpperAtmosphereLightning()
                    exp(-pow((altitude - altitudeCenter) / 1.5, 2.0)) * 0.36;
       float onset = smoothstep(0.0, 0.045, t);
       float fade = onset * (1.0 - smoothstep(0.62, 1.42, t));
-      light += vec3(1.0, 0.13, 0.08) * (shell + disk) * fade * amplitude * 2.0;
-      light += vec3(0.40, 0.44, 1.0) * shell * fade * amplitude * (0.3 + 0.4 * (1.0 - smoothstep(0.08, 0.34, t))) * (1.0 - smoothstep(0.18, 0.55, t)); // NT+ rim on the rising edge
+      light += opticalTint * vec3(1.0, 0.13, 0.08) * (shell + disk) * fade * amplitude * 2.0;
+      light += opticalTint * vec3(0.40, 0.44, 1.0) * shell * fade * amplitude * (0.3 + 0.4 * (1.0 - smoothstep(0.08, 0.34, t))) * (1.0 - smoothstep(0.18, 0.55, t)); // NT+ rim on the rising edge
     }
   }
   return light;
@@ -1842,8 +1868,10 @@ vec4 computeAirColor(vec2 bndFragCoord)
       float parentIntensity = lightningIntensityOverTime(parentLightningTime, lightningData.xy,
                                                          lightningData[INTENSITY]);
       vec3 crawler = drawAnvilCrawler(vec2(lightningMeta.x, lightningData.y), metaRawZ, opticalTime, parentIntensity);
-      lightningBoltLight += apparentChannelColor(crawler, lightningData.xy, lightningStartIterNum);
-      onLight += crawler * 0.0001;
+      vec3 crawlerTint = apparentLightningTint(8, lightningData.xy, lightningStartIterNum);
+      vec3 crawlerLight = apparentChannelColor(crawler, crawlerTint);
+      lightningBoltLight += crawlerLight;
+      onLight += crawlerLight * 0.0001;
     }
     // The parent channel retains its own animation even if an optical effect
     // keeps the slot alive longer for visibility at high iteration rates.
@@ -1880,6 +1908,10 @@ vec4 computeAirColor(vec2 bndFragCoord)
     bool isPositiveCC = isCloudToCloud && lightningMeta.y >= 2.5;
     bool isSuperbolt = isExternalPositive && lightningMeta.w >= 0.5;
     bool isHyperbolt = isExternalPositive && lightningMeta.w >= 1.5;
+    int lightningKind = isGroundToCloud ? 7 : isHyperbolt ? 9 : isSuperbolt ? 6 :
+                        isExternalPositive ? 5 : isCloudToCloud ? (isPositiveCC ? 4 : 3) :
+                        isFlash ? (isPositiveIC ? 2 : 1) : 0;
+    vec3 lightningIlluminationTint = apparentLightningTint(lightningKind, lightningPos, lightningStartIterNum);
     const float superboltBrightnessMult = 12.0;
     const float superboltDurationShorten = 0.1;
     const float hyperboltBrightnessMult = 30.0; // 2.5x a superbolt
@@ -1894,8 +1926,8 @@ vec4 computeAirColor(vec2 bndFragCoord)
     const vec3 hyperboltColor = vec3(0.25, 0.38, 1.0);
     float strokeBrightnessMult = isHyperbolt ? hyperboltBrightnessMult : superboltBrightnessMult;
     float strokeDurationShorten = isHyperbolt ? hyperboltDurationShorten : superboltDurationShorten;
-    // Ordinary positive CG has its own apparent colour; extreme variants keep
-    // their pinned fictional hues.
+    // These intrinsic temperatures feed the channel; the apparent variant tint
+    // below also accounts for unresolved cores and atmospheric filtering.
     vec3 positiveLightningCol = planckBlackbody(14000.0 + 4000.0 * (random2d(vec2(lightningPos.y * 4.7, lightningMeta.x * 9.1)) - 0.5));
     float repeatPeriod = map_range(random2d(lightningPos), 0., 1., 1.5, 3.0);
     if (isSuperbolt && lightningTime >= repeatPeriod * lightningFlickers(lightningData) + (2.924 - strokeDurationShorten))
@@ -1937,7 +1969,7 @@ vec4 computeAirColor(vec2 bndFragCoord)
                                     : displayLightning(lightningPos, lightningTime, currentLightningIntensity);
     }
 
-    lightningBoltLight += apparentChannelColor(strikeChannel, lightningPos, lightningStartIterNum);
+    lightningBoltLight += apparentChannelColor(strikeChannel, lightningIlluminationTint);
 
     // The light a strike throws on the clouds around it.
     float lightningOnLight;
@@ -1962,8 +1994,8 @@ vec4 computeAirColor(vec2 bndFragCoord)
       vec2 ccOriginDist = vec2(ccOriginDx * aspectRatios[0], texCoord.y - lightningPos.y);
       float ccMidDx = 0.5 * (lightningPos.x + lightningMeta.x) - texCoord.x;
       vec2 ccMidDist = vec2(ccMidDx * aspectRatios[0], texCoord.y - 0.5 * (lightningPos.y + metaRawZ));
-      onLight += vec3(lightningOnLightBrightness * 1.4 / (pow(length(ccOriginDist) * 0.5, 2.) + 0.03 * lightningHeightScale()) * ccIntensityGain * ccTailFade * currentLightningIntensity);
-      onLight += vec3(lightningOnLightBrightness * 0.9 / (pow(length(ccMidDist) * 0.55, 2.) + 0.035 * lightningHeightScale()) * ccIntensityGain * ccTailFade * currentLightningIntensity);
+      onLight += lightningIlluminationTint * (lightningOnLightBrightness * 1.4 / (pow(length(ccOriginDist) * 0.5, 2.) + 0.03 * lightningHeightScale()) * ccIntensityGain * ccTailFade * currentLightningIntensity);
+      onLight += lightningIlluminationTint * (lightningOnLightBrightness * 0.9 / (pow(length(ccMidDist) * 0.55, 2.) + 0.035 * lightningHeightScale()) * ccIntensityGain * ccTailFade * currentLightningIntensity);
     } else {
       // The ground lobe remains in the same world tile as the strike.
       float cgDx = lightningPos.x - texCoord.x;
@@ -1976,7 +2008,6 @@ vec4 computeAirColor(vec2 bndFragCoord)
     lightningOnLight *= currentLightningIntensity;
     if (isSuperbolt)
       lightningOnLight *= strokeBrightnessMult;
-    vec3 lightningIlluminationTint = isHyperbolt ? hyperboltColor : (isSuperbolt ? superboltColor : vec3(1.0));
     onLight += lightningIlluminationTint * lightningOnLight;
     if (isExternalPositive) {
       onLight += lightningIlluminationTint * lightningOnLight;
