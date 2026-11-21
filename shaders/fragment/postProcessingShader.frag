@@ -72,8 +72,15 @@ vec3 mappedColor(vec2 uv)
   color = min(color, vec3(hdrReadCeiling));
 
   color *= exposure;
+  // A scalar highlight shoulder avoids independent RGB clipping, preserving
+  // hot-channel hue. Bloom is extracted from HDR *before* this operation.
+  float peak = max(color.r, max(color.g, color.b));
   if (toneMappingEnabled) {
-    color = clamp((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
+    float mappedPeak = clamp((peak * (2.51 * peak + 0.03)) /
+                             (peak * (2.43 * peak + 0.59) + 0.14), 0.0, 1.0);
+    color *= mappedPeak / max(peak, 1e-6);
+  } else {
+    color /= max(1.0, peak);
   }
   return pow(max(color, vec3(0.0)), ONE_OVER_GAMMA);
 }
@@ -85,7 +92,7 @@ void main()
   // The five mappedColor taps that clamp history are shared by temporal AA and
   // the motion blur below (history there is clamped to the same box), so they
   // are only fetched when at least one of the two feedback effects needs them.
-  bool needsNeighborhood = (temporalAAEnabled && temporalHistoryValid) || (motionBlurEnabled && motionBlurHistoryValid);
+  bool needsNeighborhood = temporalAAEnabled && temporalHistoryValid;
   vec3 neighborhoodMin = outputCol;
   vec3 neighborhoodMax = outputCol;
   if (needsNeighborhood) {
@@ -180,27 +187,35 @@ void main()
       float exposureSpan = 1.0 + 4.0 * strength;
       // The effect fades in with the motion instead of smearing a static image.
       float flowGate = smoothstep(0.0, 0.002, flowLength);
-      const int TAPS = 16;
+      const int TAPS = 24;
       float weightSum = 0.0;
       float coveredWeight = 0.0;
       vec3 acc = vec3(0.0);
       for (int i = 0; i < TAPS; i++) {
-        float t = float(i) / float(TAPS - 1);
-        // Raised-cosine: a uniform shutter box would be ideal, this just
-        // suppresses the banding a box leaves on hard edges.
+        // Midpoint samples avoid over-weighting the sharp endpoints. Current
+        // and history follow opposite directions to the same exposure time:
+        // flow points from the current pixel to its previous position.
+        float t = (float(i) + 0.5) / float(TAPS);
         float w = 0.7 + 0.3 * cos(2.0 * PI * (t - 0.5));
-        vec2 rawUV = texCoord + flow * (t * exposureSpan);
-        bool inBounds = rawUV.x >= 0.0 && rawUV.x <= 1.0 && rawUV.y >= 0.0 && rawUV.y <= 1.0;
-        vec2 tapUV = clamp(rawUV, vec2(0.0), vec2(1.0));
-        vec3 currentTap = safeSample(mappedColor(tapUV).rgb);
-        vec3 historyTap = clamp(safeSample(texture(historyTex, tapUV).rgb), neighborhoodMin, neighborhoodMax);
-        acc += inBounds ? w * mix(currentTap, historyTap, 0.5) : vec3(0.0);
+        vec2 currentUV = texCoord - flow * (t * exposureSpan);
+        vec2 historyUV = texCoord + flow * ((1.0 - t) * exposureSpan);
+        bool currentInside = all(greaterThanEqual(currentUV, vec2(0.0))) && all(lessThanEqual(currentUV, vec2(1.0)));
+        bool historyInside = all(greaterThanEqual(historyUV, vec2(0.0))) && all(lessThanEqual(historyUV, vec2(1.0)));
+        vec3 currentTap = safeSample(mappedColor(clamp(currentUV, vec2(0.0), vec2(1.0))));
+        vec3 historyTap = safeSample(texture(historyTex, clamp(historyUV, vec2(0.0), vec2(1.0))).rgb);
+        // History contains last frame's postprocessed image, not a clean
+        // velocity buffer. Limit feedback per tap without clamping the entire
+        // moving trail to the destination pixel's static 5-tap neighbourhood.
+        historyTap = clamp(historyTap, max(currentTap - vec3(0.35), vec3(0.0)), min(currentTap + vec3(0.35), vec3(1.0)));
+        float currentWeight = currentInside ? w * (1.0 - t) : 0.0;
+        float historyWeight = historyInside ? w * t : 0.0;
+        acc += currentTap * currentWeight + historyTap * historyWeight;
         weightSum += w;
-        coveredWeight += inBounds ? w : 0.0;
+        coveredWeight += currentWeight + historyWeight;
       }
       vec3 blurred = acc / max(coveredWeight, 0.0001);
       float coverage = weightSum > 0.0 ? coveredWeight / weightSum : 0.0;
-      float blend = strength * flowGate * coverage * coverage;
+      float blend = 0.8 * strength * flowGate * coverage * coverage;
       outputCol = mix(outputCol, blurred, blend);
     }
   }
