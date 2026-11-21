@@ -131,6 +131,18 @@ void main()
     // // precipitation visualization
     water[PRECIPITATION] = bilerpWall(waterTex, wallTex, fragCoord - velAtP + vec2(0, 0.05))[PRECIPITATION]; // precipitation visualization advected with flow, and downward
 
+    // Backtraces entering from above sample clear ambient air, not a repeated
+    // copy of the top row. Outgoing parcels use the interior sample unchanged.
+    // Blend over one cell so sub-cell inflow remains continuous.
+    float outsideTop = clamp((fragCoord.y - velAtP.y) - (resolution.y - 0.5), 0.0, 1.0);
+    if (outsideTop > 0.0) {
+      float ambientTemperature = getInitialT(int(resolution.y) - 1);
+      float ambientWater = maxWater(potentialToRealT(ambientTemperature, 1.0) - 20.0);
+      base[PRESSURE] = mix(base[PRESSURE], 0.0, outsideTop);
+      base[TEMPERATURE] = mix(base[TEMPERATURE], ambientTemperature, outsideTop);
+      water = mix(water, vec4(ambientWater, 0.0, 0.0, 0.0), outsideTop);
+    }
+
     // vec2 backTracedPos = fragCoord - velAtP; // advect / flow
 
     // vec2 backTracedPos = texCoord; // no flow
@@ -360,7 +372,7 @@ void main()
           setWall = true;
           break;
         case 24:
-          wall[TYPE] = WALLTYPE_SUPER_LAKE; // super lake: lake physics, 5x evaporation and 5x heat exchange
+          wall[TYPE] = WALLTYPE_SUPER_LAKE; // super lake: lake physics, 10x evaporation and 10x heat exchange
           setWall = true;
           break;
         case 13:                                                                                                     // set fire

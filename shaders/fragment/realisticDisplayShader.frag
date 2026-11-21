@@ -325,12 +325,16 @@ vec3 apparentLightningTint(int kind, vec2 strikePos, float startIteration)
   return peak * pow(tint / peak, vec3(1.65));
 }
 
-vec3 apparentChannelColor(vec3 radiance, vec3 tint)
+vec3 apparentChannelColor(vec3 radiance, vec3 tint, float coreReference)
 {
   float peak = max(radiance.r, max(radiance.g, radiance.b));
-  // Retain some intrinsic temperature/core variation, without letting the
-  // common blue-biased blackbody approximation dominate every variant.
-  return mix(vec3(peak), radiance, 0.12) * tint;
+  vec3 colored = mix(vec3(peak), radiance, 0.12) * tint;
+  // Whiten only the well-covered center of a channel. A normalized signal,
+  // rather than absolute brightness, keeps low-intensity variants and
+  // restrikes consistent while dim edges retain their coloured bloom.
+  float coverage = peak / max(coreReference, 1e-6);
+  float whiteCore = 0.86 * smoothstep(0.08, 0.55, coverage);
+  return mix(colored, vec3(peak), whiteCore);
 }
 
 // Increase lightning-only emission before the bloom pyramid. This boosts weak
@@ -1217,7 +1221,18 @@ vec4 computeAirColor(vec2 bndFragCoord)
                                     : displayLightning(lightningPos, lightningTime, currentLightningIntensity);
     }
 
-    lightningBoltLight += apparentChannelColor(strikeChannel, lightningIlluminationTint);
+    // Peak signal for a fully covered channel in each renderer, before the
+    // shared colour treatment. Filtering reduces the coverage proportionally.
+    float coreReference;
+    if (isExternalPositive)
+      coreReference = 3000.0 * extCurve * (isSuperbolt ? strokeBrightnessMult : 1.0);
+    else if (isCloudToCloud)
+      coreReference = 900.0 * currentLightningIntensity * ccIntensityGain * ccTailFade;
+    else if (isFlash)
+      coreReference = (isPositiveIC ? 3600.0 : 2400.0) * currentLightningIntensity;
+    else
+      coreReference = 1500.0 * currentLightningIntensity;
+    lightningBoltLight += apparentChannelColor(strikeChannel, lightningIlluminationTint, coreReference);
 
     // The light a strike throws on the clouds around it.
     float lightningOnLight;

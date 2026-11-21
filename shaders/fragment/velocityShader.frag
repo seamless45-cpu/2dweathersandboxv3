@@ -58,7 +58,16 @@ void main()
       base[VX] *= 1. - dragMultiplier * 0.0002;        // linear drag
     }
 
-    base[VY] += base[PRESSURE] - baseX0Yp[PRESSURE];
+    // Radiation boundary at the upper face: match the outgoing acoustic
+    // characteristic to an unperturbed exterior. A fixed zero-pressure ghost
+    // alone reflects pressure waves; matching velocity to pressure lets them
+    // leave while permitting either sign of flow. 0.45 is the pressure-step
+    // coefficient and sqrt(0.45) is this solver's wave speed in grid units.
+    bool topFace = fragCoord.y >= float(textureSize(baseTex, 0).y) - 0.5;
+    if (topFace)
+      base[VY] = base[PRESSURE] / sqrt(0.45);
+    else
+      base[VY] += base[PRESSURE] - baseX0Yp[PRESSURE];
     base[VY] *= 1. - dragMultiplier * 0.0002;
     // quadratic drag
     // base[VX] -= base[VX] * base[VX] * base[VX] * base[VX] * base[VX] *

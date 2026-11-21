@@ -376,10 +376,10 @@ void main()
           }
         }
         break;
-      case WALLTYPE_SUPER_LAKE: // super lake: fall through with 5x the exchange rates
+      case WALLTYPE_SUPER_LAKE: // super lake: fall through with 10x the exchange rates
       case WALLTYPE_WATER:
       {
-        float waterMult = wall[TYPE] == WALLTYPE_SUPER_LAKE ? 5.0 : 1.0; // 5x heat exchange, 5x evaporation
+        float waterMult = wall[TYPE] == WALLTYPE_SUPER_LAKE ? 10.0 : 1.0; // 10x heat exchange, 10x evaporation
         if (wall[VERT_DISTANCE] <= wallVerticalInfluence) {
           float LocalWaterTemperature = texture(baseTex, texCoordX0Ym)[TEMPERATURE];                                       // water temperature
           base[TEMPERATURE] += (LocalWaterTemperature - realTemp - 1.0) / influenceDevider * waterHeatExchangeRate * waterMult;        // air heated or cooled by water
@@ -493,10 +493,10 @@ void main()
           //}
         }
         break;
-      case WALLTYPE_SUPER_LAKE: // super lake: same body, 5x heat sensitivity
+      case WALLTYPE_SUPER_LAKE: // super lake: same body, 10x heat sensitivity
       case WALLTYPE_WATER:
       {
-        float waterMult = wall[TYPE] == WALLTYPE_SUPER_LAKE ? 5.0 : 1.0; // 5x evaporation, 5x heat exchange
+        float waterMult = wall[TYPE] == WALLTYPE_SUPER_LAKE ? 10.0 : 1.0; // 10x evaporation, 10x heat exchange
 
         const float waterTempUpdateInterval = 20.0; // Update less often but with bigger value to reduce rounding error
 

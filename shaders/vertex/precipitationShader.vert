@@ -360,7 +360,15 @@ void main()
 
       newPos.x = mod(newPos.x + 1., 2.) - 1.; // wrap horizontal position around map edges
 
-      feedback[MASS] = totalMass;
+      // Particles leaving the open top join the exterior reservoir rather than
+      // sampling a clamped top row indefinitely or depositing on the ground.
+      if (newPos.y >= 1.0) {
+        disableDroplet();
+        feedback = vec4(0.0);
+        newPos.y = 2.0;
+      } else {
+        feedback[MASS] = totalMass;
+      }
 
     }               // update
 
