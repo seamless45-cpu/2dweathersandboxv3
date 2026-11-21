@@ -383,6 +383,11 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   lightningTexCoord.x *= scaleMult * aspectRatios[0] / lightningTexAspect;
   lightningTexCoord.y *= -scaleMult;
 
+  // Y is unaffected by lateral distortion. Reject off-channel pixels before
+  // evaluating the fractal displacement and its derivative.
+  if (lightningTexCoord.y < 0.01 || lightningTexCoord.y > 1.01)
+    return vec3(0.0);
+
   float uShift = rodHit ? (lightningBottomU - 0.5) * pow(clamp(lightningTexCoord.y, 0.0, 1.0), 1.25) : 0.0;
   lightningTexCoord.x += 0.5 + uShift;                                                                                    // center lightning bolt
 
@@ -417,7 +422,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
                     - shear * screenTexDy.y * scaleMult + boltJagDerivU * (-screenTexDy.y * scaleMult), -screenTexDy.y * scaleMult);
   float pixVal = textureGrad(lightningTex, lightningTexCoord, gradX, gradY).r;
 
-  const float mainBoltBrightness = 100000.; // 100000.
+  const float mainBoltBrightness = 30000.;
 
   // A high cutoff erased averaged subpixel channels. Keep full-white peak
   // radiance unchanged while allowing filtered partial coverage to survive.
@@ -428,9 +433,9 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
 
   pixVal *= currentLightningIntensity;
 
-  // An ordinary return stroke runs near 30,000 K; each strike draws its own
-  // temperature inside a corridor so no two strokes share a hue exactly.
-  vec3 lightningCol = planckBlackbody(30000.0 + 5000.0 * (random2d(pos * 7.7 + 1.31) - 0.5));
+  // Approximate channel temperatures vary by discharge and by strike; atmospheric
+  // filtering and exposure also affect the observed colour.
+  vec3 lightningCol = planckBlackbody(30000.0 + 10000.0 * (random2d(pos * 7.7 + 1.31) - 0.5));
 
   vec3 outputColor = max(pixVal * lightningCol, vec3(0));
 
@@ -500,13 +505,17 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
   vec2 flashSpan = vec2(flashHeight * networkTexAspect / aspectRatios[0], flashHeight);
   const float flashThreshold = 0.02;             // preserve thin mip-filtered curved branches and forks
 
-  const float mainBoltBrightness = 7000.;
+  const float mainBoltBrightness = 2400.;
 
   float flashDir = random2d(vec2(pos.y * 3.77, 1.23)) < 0.5 ? -1. : 1.;
   float flashFlip = random2d(vec2(pos.x * 5.11, 7.77)) < 0.5 ? -1. : 1.;
 
   vec2 flashCoord = vec2(0.5 + flashDir * (texCoord.x - pos.x) / flashSpan.x,
                          0.5 + flashFlip * (texCoord.y - pos.y) / flashSpan.y);
+
+  // The vertical artwork coordinate is unchanged by lateral distortion.
+  if (flashCoord.y < 0.004 || flashCoord.y > 0.996)
+    return vec3(0.0);
 
   // Same CC-tortuosity treatment, weaker and applied to the artwork sampling:
   // the tendrils wander through a bounded fractal instead of following the
@@ -530,9 +539,8 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
   pixVal = (1.0 - brightnessThreshold) * lightningCoverage(pixVal, brightnessThreshold);
   pixVal *= currentLightningIntensity;
 
-  // Every ordinary arc in the discharge runs near 30,000 K; each strike draws its
-  // own temperature inside a corridor so no two strokes share a hue exactly.
-  vec3 lightningCol = planckBlackbody(30000.0 + 5000.0 * (random2d(vec2(pos.y * 3.9, pos.x * 7.3)) - 0.5));
+  // Cloud flashes use a cooler apparent channel than ground return strokes.
+  vec3 lightningCol = planckBlackbody(18000.0 + 6000.0 * (random2d(vec2(pos.y * 3.9, pos.x * 7.3)) - 0.5));
 
   vec3 outputColor = max(pixVal * lightningCol, vec3(0));
 
@@ -542,7 +550,7 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
   float icHeightKm = cellHeight * float(resolution.y) * 0.001;
   vec2 icP = vec2((texCoord.x - pos.x) * aspectRatios.x * icHeightKm,
                   (texCoord.y - pos.y) * icHeightKm);
-  float icIntensityRaw = currentLightningIntensity / 7000.0; // undo the artwork gain
+  float icIntensityRaw = currentLightningIntensity / 2400.0; // undo the artwork gain
   float icBranchSum = 0.0;
   for (int bi = 0; bi < 2; bi++) {
     if (float(bi) >= icExtra)
@@ -576,13 +584,17 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
   vec2 flashSpan = vec2(flashHeight * networkTexAspect / aspectRatios[0], flashHeight);
   const float flashThreshold = 0.01;
 
-  const float mainBoltBrightness = 10500.;
+  const float mainBoltBrightness = 3600.;
 
   float flashDir = random2d(vec2(pos.y * 4.91, 2.37)) < 0.5 ? -1. : 1.;
   float flashFlip = random2d(vec2(pos.x * 6.73, 8.91)) < 0.5 ? -1. : 1.;
 
   vec2 flashCoord = vec2(0.5 + flashDir * (texCoord.x - pos.x) / flashSpan.x,
                          0.5 + flashFlip * (texCoord.y - pos.y) / flashSpan.y);
+
+  // The vertical artwork coordinate is unchanged by lateral distortion.
+  if (flashCoord.y < 0.004 || flashCoord.y > 0.996)
+    return vec3(0.0);
 
   // Same CC-tortuosity treatment, weaker and applied to the artwork sampling:
   // the tendrils wander through a bounded fractal instead of following the
@@ -606,9 +618,8 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
   pixVal = (1.0 - brightnessThreshold) * lightningCoverage(pixVal, brightnessThreshold);
   pixVal *= currentLightningIntensity;
 
-  // Positive anvil leaders carry more charge density, but still discharge through the
-  // same ~30,000 K channel physics.
-  vec3 positiveIcCol = planckBlackbody(30000.0 + 5000.0 * (random2d(vec2(pos.y * 5.9, pos.x * 3.3)) - 0.5));
+  // Positive IC leaders use a warmer apparent spectrum through the anvil.
+  vec3 positiveIcCol = planckBlackbody(11000.0 + 4000.0 * (random2d(vec2(pos.y * 5.9, pos.x * 3.3)) - 0.5));
 
   vec3 positiveIcOut = max(pixVal * positiveIcCol, vec3(0));
 
@@ -618,7 +629,7 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
   float picHeightKm = cellHeight * float(resolution.y) * 0.001;
   vec2 picP = vec2((texCoord.x - pos.x) * aspectRatios.x * picHeightKm,
                    (texCoord.y - pos.y) * picHeightKm);
-  float picIntensityRaw = currentLightningIntensity / 10500.0; // undo the artwork gain
+  float picIntensityRaw = currentLightningIntensity / 3600.0; // undo the artwork gain
   float picBranchSum = 0.0;
   for (int bi = 0; bi < 2; bi++) {
     if (float(bi) >= picExtra)
@@ -766,7 +777,7 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   float pixVal = textureLod(lightningTex, vec2(u, v), lod).r;
 
   // Preserve the full-white peak and existing positive-CG fade and color.
-  const float extBoltBrightness = 200000.;
+  const float extBoltBrightness = 60000.;
   const float brightnessThreshold = 0.004;
   float intensity = currentLightningIntensity * extBoltBrightness;
 
@@ -914,10 +925,10 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
 
   float totalSignal = max(mainSignal, branchSignal) + 0.18 * min(mainSignal, branchSignal);
 
-  const float ccBaseBrightness = 2600.;
+  const float ccBaseBrightness = 900.;
   vec3 coreTint = vec3(1.0, 0.98, 1.0);
-  vec3 auraTint = planckBlackbody(30000.0 +
-                                  5000.0 * (random2d(vec2(targetPos.x * 3.1, originPos.y * 5.7)) - 0.5));
+  vec3 auraTint = planckBlackbody((isPositiveCC ? 12000.0 : 22000.0) +
+                                  4000.0 * (random2d(vec2(targetPos.x * 3.1, originPos.y * 5.7)) - 0.5));
   vec3 ccCol = mix(auraTint, coreTint, clamp(mainCore * 0.85 + branchCore * 0.55, 0.0, 1.0));
   return max(totalSignal * ccCurve * ccBaseBrightness * ccCol, vec3(0.0));
 }
@@ -1084,9 +1095,9 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
   float tipActive = 1.0 - smoothstep(0.64, 0.75, time);
   vec2 tip = gcSpinePoint(headT, span, lean, phase);
   float tipDistance = length(p - tip);
-  float tipFlare = exp(-tipDistance / max(0.055 + (1.0 - headT) * 0.34, 0.055)) *
+  float tipFlare = exp(-tipDistance / max(0.035 + (1.0 - headT) * 0.12, 0.035)) *
                    tipActive * (0.82 + 0.18 * sin(time * 24.0 + seed * 6.283));
-  float tipCorona = exp(-tipDistance / 0.32) * tipActive * 0.22;
+  float tipCorona = exp(-tipDistance / 0.15) * tipActive * 0.12;
 
   // Streamer fan: a cold leader drags a fan of faint streamers in front of the
   // advancing tip - the visible glow ahead of the true plasma front. Six
@@ -1182,28 +1193,18 @@ vec3 displayGroundToCloud(vec2 pos, float tipY, float time, float intensity)
     }
   }
 
-  // Shock ring: the moment the return stroke dumps its charge into the rod, a
-  // radial ground-level streak tears outward along the surface in both
-  // directions. It lasts a fraction of a second and reads as a horizontal arc.
-  float shockClock = clamp((time - 0.88) / 0.34, 0.0, 1.0);
-  float shockRing = 0.0;
-  if (shockClock > 0.0 && p.y > -0.55 && p.y < 1.35) {
-    float shockRadius = 0.30 + shockClock * 4.8;
-    float shockBand = exp(-pow((abs(p.x) - shockRadius) / 0.40, 2.0)) *
-                      exp(-pow(p.y / 0.48, 2.0));
-    shockRing = shockBand * (1.0 - smoothstep(0.45, 1.0, shockClock)) * 2.35;
-  }
+  // A brief localized attachment glow, not an expanding ground-level ring.
+  float attachmentGlow = exp(-length(p) / 0.16) * strokeShock * 0.35;
 
   float totalSignal = mainCore + 0.28 * mainHalo + 0.055 * mainSheath + tipFlare * 1.35 +
-                      tipCorona + streamerFan + shockRing + branchCore + 0.42 * branchSignal;
+                      tipCorona + streamerFan + attachmentGlow + branchCore + 0.42 * branchSignal;
   float pulse = 0.84 + 0.16 * sin(time * 17.0 + seed * 6.283);
   float strikeSurge = strokeShock * 1.45 + returnClock * 0.42;
   float coreHeat = clamp(tipFlare * 0.62 + strikeSurge + branchCore * 0.48, 0.0, 1.0);
-  // Positive upward leaders run cold near 23,000 K and snap to ~30,000 K at the
-  // hot return stroke, like every other ordinary arc.
-  vec3 gcCol = mix(planckBlackbody(23000.0), planckBlackbody(30000.0), coreHeat);
+  // Cooler upward leader, hotter return stroke.
+  vec3 gcCol = mix(planckBlackbody(12000.0), planckBlackbody(26000.0), coreHeat);
   float fade = 1.0 - smoothstep(1.60, 2.34, time);
-  return max(totalSignal * min(intensity, 26.0) * 238.0 * pulse * fade * gcCol,
+  return max(totalSignal * min(intensity, 26.0) * 85.0 * pulse * fade * gcCol,
              vec3(0.0));
 }
 
@@ -1307,6 +1308,11 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time, float parentIntensity)
     float rank = mod(f, 2.0);
     float laneSeed = seed * 31.0 + float(lane) * 5.17;
     float lengthKm = (rank < 0.5 ? 13.2 : 8.4) + random2d(vec2(laneSeed, 1.1)) * 4.2;
+    // The whole lane, including its side branches, is confined to this
+    // conservative horizontal interval. Avoid 11 cloud fetches and the branch
+    // tree for pixels on the other side of the anvil.
+    if (p.x * side < -6.0 || p.x * side > lengthKm + 7.0)
+      continue;
     float lift = rank < 0.5 ? -0.46 - random2d(vec2(laneSeed, 2.3)) * 0.34
                               : 0.62 + random2d(vec2(laneSeed, 2.3)) * 0.48;
     vec2 root = anvilEntry;
@@ -1337,23 +1343,22 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time, float parentIntensity)
       float k = float(i);
       float along = k / nodeCount;
       vec2 next = crawlerLeaderPoint(root, side, lengthKm, along, drift, phaseShift, droop, lift);
+      float growth = clamp((headStep - (k - 1.0) / nodeCount) * nodeCount, 0.0, 1.0);
+      // Nodes are ordered from root to tip; no later node has grown yet.
+      if (growth <= 0.0)
+        break;
       vec2 nextUV = vec2(origin.x + next.x / (aspectRatios.x * heightKm),
                          top + next.y / heightKm);
       float nextCloud = texture(waterTex, clamp(nextUV, vec2(0.0), vec2(1.0)))[CLOUD];
       leaderLive = min(leaderLive, smoothstep(0.015, 0.085, nextCloud));
-      float growth = clamp((headStep - (k - 1.0) / nodeCount) * nodeCount, 0.0, 1.0);
-      if (growth <= 0.0) {
-        previous = next;
-        continue;
-      }
       vec2 end = mix(previous, next, growth);
       float width = max(max(0.0032, pixelKm * 1.12) * mix(1.42, 0.76, along), 0.0016);
       float leaderGain = laneGain * (0.72 + 0.28 * (1.0 - along)) * (0.68 + 0.32 * parentPulse) * leaderLive;
       float dartGain = dartLive * exp(-pow((along - dartClock) / 0.055, 2.0)) *
                        (1.0 - smoothstep(0.86, 1.0, dartClock)) * 2.6;
-      glow += channelGlow(p, previous, end, width) * leaderGain;
+      float laneCore = channelGlow(p, previous, end, width);
+      glow += laneCore * (leaderGain + dartGain * leaderLive);
       glow += channelGlow(p, previous, end, width * 4.0) * leaderGain * 0.13;
-      glow += channelGlow(p, previous, end, width) * dartGain * leaderLive;
       glow += channelGlow(p, previous, end, width * 3.2) * dartGain * leaderLive * 0.35;
       hotCore += channelGlow(p, previous, end, width * 1.55) * leaderGain * 0.30;
       hotCore += channelGlow(p, previous, end, width * 1.35) * dartGain * leaderLive * 0.60;
@@ -1440,10 +1445,9 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time, float parentIntensity)
   float fade = 1.0 - smoothstep(1.74, 2.42, time);
   float pulse = 0.84 + 0.16 * sin(time * 14.0 + seed * 6.283);
   float heat = clamp(hotCore + parentPulse * 0.22, 0.0, 1.0);
-  // Anvil crawler leaders: ~23,500 K in the cold deck, snapping to the common
-  // ~30,000 K at the hot parent junction like every other ordinary arc.
-  vec3 crawlerCol = mix(planckBlackbody(23500.0), planckBlackbody(30000.0), heat);
-  return vec3(crawlerCol) * min(glow * confine * parentPulse, 2.35) * fade * pulse * 2450.0;
+  // Warmer cloud-filtered leaders become bluer at the hot junction.
+  vec3 crawlerCol = mix(planckBlackbody(10000.0), planckBlackbody(22000.0), heat);
+  return vec3(crawlerCol) * min(glow * confine * parentPulse, 2.35) * fade * pulse * 750.0;
 }
 
 // Optical approximations of upper-atmospheric transients at physical altitudes.
@@ -1458,6 +1462,9 @@ vec3 drawAnvilCrawler(vec2 origin, float top, float time, float parentIntensity)
 // the NT+ 1N first negative band (391/428 nm) is the blue-violet cap above.
 vec3 spriteBody(float dx, float altitude, float seedB, float seedT, float t, float strength)
 {
+  // The body and its tendrils vanish well before this conservative bound.
+  if (abs(dx) > 9.0)
+    return vec3(0.0);
   float local = t - 0.10 - 0.06 * seedB;            // stepped onset after the parent
   float onset = smoothstep(0.0, 0.09, local);
   float decay = exp(-max(local - 0.16, 0.0) / 0.42);
@@ -1468,9 +1475,9 @@ vec3 spriteBody(float dx, float altitude, float seedB, float seedT, float t, flo
   float fade = onset * decay * strobe * (1.0 - smoothstep(1.7, 2.45, t));
   if (fade <= 0.002)
     return vec3(0.0);
-  float body = exp(-pow(dx / 2.35, 2.0) - pow((altitude - 76.5) / 4.3, 2.0));
-  float lobes = exp(-pow((abs(dx) - 2.6) / 1.7, 2.0) - pow((altitude - 78.5) / 2.6, 2.0)) * 0.55;
-  float halo = exp(-pow(dx / 7.4, 2.0) - pow((altitude - 73.5) / 8.2, 2.0)) * 0.50;
+  float body = exp(-pow(dx / 1.65, 2.0) - pow((altitude - 76.5) / 3.5, 2.0));
+  float lobes = exp(-pow((abs(dx) - 1.8) / 1.1, 2.0) - pow((altitude - 78.5) / 2.2, 2.0)) * 0.40;
+  float halo = exp(-pow(dx / 4.2, 2.0) - pow((altitude - 73.5) / 8.2, 2.0)) * 0.24;
   // Column component: sprites are vertical bars of plasma; a narrow core bar
   // keeps the middle bright even between the lobes.
   float columnCore = exp(-pow(dx / 0.62, 2.0) - pow((altitude - 74.5) / 5.4, 2.0)) * 0.72;
@@ -1488,7 +1495,7 @@ vec3 spriteBody(float dx, float altitude, float seedB, float seedT, float t, flo
     float footAlt = 77.0 - lenKm;
     if (altitude < footAlt - 1.5 || altitude > 79.0)
       continue;
-    float drift = (r3 - 0.5) * 1.15 * sin((altitude - 77.0) * 0.16 + r1 * 5.1); // straighter, calmer curtain
+    float drift = (r3 - 0.5) * 0.9 * sin((altitude - 77.0) * 0.16 + r1 * 5.1) + 0.12 * extTriWave(altitude * 0.4 + r2 * 5.0);
     float strand = exp(-pow((dx - spread - drift) / 0.15, 2.0));
     float topFade = smoothstep(footAlt + 0.8, footAlt + 3.2, altitude);
     float rootFade = 1.0 - smoothstep(76.5, 79.0, altitude);
@@ -1509,8 +1516,8 @@ vec3 spriteBody(float dx, float altitude, float seedB, float seedT, float t, flo
     }
   }
   float cap = exp(-pow(dx / 1.75, 2.0) - pow((altitude - 84.6) / 1.35, 2.0)) * 0.9;   // NT+ 1N 1st negative cap
-  vec3 red = vec3(1.0, 0.05, 0.04) * (body * 6.5 + lobes * 3.0 + halo * 2.3 + filaments * 10.5 + columnCore * 2.6);
-  vec3 blue = vec3(0.33, 0.40, 1.0) * cap;
+  vec3 red = vec3(1.0, 0.055, 0.035) * (body * 1.4 + lobes * 0.65 + halo * 0.35 + filaments * 2.2 + columnCore * 0.65);
+  vec3 blue = vec3(0.24, 0.30, 0.8) * cap * 0.35;
   return (red + blue) * fade * strength;
 }
 
@@ -1608,39 +1615,34 @@ vec3 drawUpperAtmosphereLightning()
         // Afterglow: once the front tops out, the ionised column lingers and
         // dies exponentially instead of snapping off.
         float afterglow = exp(-max(t - 0.80, 0.0) / 0.40);
-        light += vec3(0.30, 0.38, 1.0) * ((fan * 2.0 + fanInner * 1.7 + (edgeL + edgeR) * 1.5 + streamers * 4.2 +
-                                            channelCore * 3.6) * frontMask) * fade;
-        light += vec3(0.74, 0.82, 1.0) * channelCore * frontMask * fade * 2.0;
-        light += vec3(0.55, 0.70, 1.0) * front * 0.85 * fade * (frontKm > altitude - 3.0 ? 1.0 : 0.0);
-        light += vec3(0.36, 0.42, 0.92) * fan * frontMask * afterglow * 1.15;
-        light += vec3(0.62, 0.74, 1.0) * starter * 6.5;          // blue starter flash at the root
+        light += vec3(0.30, 0.38, 1.0) * ((fan * 0.22 + fanInner * 0.28 + (edgeL + edgeR) * 0.35 + streamers * 0.8 +
+                                            channelCore * 0.8) * frontMask) * fade;
+        light += vec3(0.74, 0.82, 1.0) * channelCore * frontMask * fade * 0.35;
+        light += vec3(0.55, 0.70, 1.0) * front * fan * 0.3 * fade * (frontKm > altitude - 3.0 ? 1.0 : 0.0);
+        light += vec3(0.36, 0.42, 0.92) * fan * frontMask * afterglow * 0.12;
+        light += vec3(0.62, 0.74, 1.0) * starter * 0.8;          // blue starter flash at the root
       }
     }
     if (hasOpticalEffect(meta.w, 8.0) && altitude >= 82.0 && altitude <= 98.0) {
       // Elve, reworked to the physical picture: a fast ionisation shell that
       // expands radially from the parent stroke's vertical surge at ~90 km -
-      // a thin expanding rim (a couple of km), a brief inner NT 1P disk, a
-      // thin central EMP shaft at the stroke's line, ~1/r amplitude falloff,
+      // a thin expanding rim (a couple of km), a brief inner NT 1P disk and
+      // ~1/r amplitude falloff,
       // a strong NT+ 428 nm blue rim only on the rising edge, no flicker, over
       // in roughly a millisecond. NT 1P red with the NT+ 1N inner rim.
       float seedE = random2d(vec2(data.x * 37.1, data.y * 51.7));
       float radius = mix(3.0, 165.0, pow(clamp(t / 1.35, 0.0, 1.0), 1.32)); // radius in km, diameter few hundred km
-      float thickness = mix(1.1, 10.5, pow(clamp(t / 1.35, 0.0, 1.0), 1.15));
+      float thickness = mix(0.8, 3.5, pow(clamp(t / 1.35, 0.0, 1.0), 1.15));
       float altitudeCenter = 88.5 + 3.0 * sin(seedE * 6.283);
       float shell = exp(-pow((abs(dx) - radius) / thickness, 2.0) - pow((altitude - altitudeCenter) / 1.9, 2.0));
       float amplitude = 1.0 / (1.0 + radius * 0.065);                     // 1/r dimming as it expands
       // Inner NT 1P disk: the ionised interior flashes briefly inside the rim.
       float disk = (1.0 - smoothstep(radius * 0.30, radius, abs(dx))) *
                    exp(-pow((altitude - altitudeCenter) / 1.5, 2.0)) * 0.36;
-      // Central shaft: the direct EMP surge glows as a thin bright vertical
-      // column at the stroke's line, dying within the first fraction of a second.
-      float column = exp(-pow(dx / 0.9, 2.0) - pow((altitude - (altitudeCenter - 1.0)) / 3.4, 2.0)) *
-                     exp(-t / 0.17);
       float onset = smoothstep(0.0, 0.045, t);
       float fade = onset * (1.0 - smoothstep(0.62, 1.42, t));
-      light += vec3(1.0, 0.13, 0.08) * (shell + disk) * fade * amplitude * 15.0;
-      light += vec3(1.0, 0.30, 0.20) * column * fade * 8.5;
-      light += vec3(0.40, 0.44, 1.0) * shell * fade * amplitude * (2.2 + 2.7 * (1.0 - smoothstep(0.08, 0.34, t))) * (1.0 - smoothstep(0.18, 0.55, t)); // NT+ rim on the rising edge
+      light += vec3(1.0, 0.13, 0.08) * (shell + disk) * fade * amplitude * 2.0;
+      light += vec3(0.40, 0.44, 1.0) * shell * fade * amplitude * (0.3 + 0.4 * (1.0 - smoothstep(0.08, 0.34, t))) * (1.0 - smoothstep(0.18, 0.55, t)); // NT+ rim on the rising edge
     }
   }
   return light;
@@ -1796,10 +1798,9 @@ vec4 computeAirColor(vec2 bndFragCoord)
     const vec3 hyperboltColor = vec3(0.25, 0.38, 1.0);
     float strokeBrightnessMult = isHyperbolt ? hyperboltBrightnessMult : superboltBrightnessMult;
     float strokeDurationShorten = isHyperbolt ? hyperboltDurationShorten : superboltDurationShorten;
-    // Ordinary external positive CG runs near 30,000 K like every other ordinary
-    // arc; superbolt (52,000 K) and hyperbolt (720,000 K nominal) keep their
-    // pinned hues.
-    vec3 positiveLightningCol = planckBlackbody(30000.0 + 5000.0 * (random2d(vec2(lightningPos.y * 4.7, lightningMeta.x * 9.1)) - 0.5));
+    // Ordinary positive CG has its own apparent colour; extreme variants keep
+    // their pinned fictional hues.
+    vec3 positiveLightningCol = planckBlackbody(14000.0 + 4000.0 * (random2d(vec2(lightningPos.y * 4.7, lightningMeta.x * 9.1)) - 0.5));
     float repeatPeriod = map_range(random2d(lightningPos), 0., 1., 1.5, 3.0);
     if (isSuperbolt && lightningTime >= repeatPeriod * lightningFlickers(lightningData) + (2.924 - strokeDurationShorten))
       continue;
@@ -2386,9 +2387,8 @@ void main()
    * The light has to stay inside what the buffer can hold.
    *
    * The scene is rendered into an RGBA16F framebuffer, whose largest finite
-   * value is 65504, and it is alpha blended. A CG return stroke is written at a
-   * hundred thousand HDR units and more (see displayLightning), so on its own it
-   * overflows the buffer to infinity. Both come back out of the
+   * value is 65504, and it is alpha blended. Bright overlapping return strokes
+   * can still exceed that range (see displayLightning) and overflow to infinity. Both come back out of the
    * tonemap divided by itself: NaN, which the bloom, FXAA and temporal AA passes
    * then smear over the frame as dead pixels.
    *

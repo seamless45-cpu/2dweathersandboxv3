@@ -51,9 +51,9 @@ function check(name, condition, detail) {
 
 /* ----------------------------------------------------------- gui defaults */
 
-check('guiControls defaults: realTimeCycle off, motion blur on at 100 strength',
+check('guiControls defaults: realTimeCycle and motion blur off by default, strength 100',
   /realTimeCycle : false, \/\/ sync the sun to the user's wall clock/.test(appSource) &&
-  /motionBlurEnabled : true,/.test(appSource) &&
+  /motionBlurEnabled : false,/.test(appSource) &&
   /motionBlurIntensity : 100, \/\/ 0-350 \(%\);/.test(appSource));
 
 check('old saves load cleanly: booleans normalized, saved motion-blur choice respected, strength clamped to 0..350',

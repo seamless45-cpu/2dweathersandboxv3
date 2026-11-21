@@ -113,8 +113,8 @@ check('anvil crawler leaders use CC triwave octaves, smooth sine removed',
 
 /* ----------------------------------------------- CC path itself intact */
 
-check('the CC reference channel itself is untouched',
-  /const float ccBaseBrightness = 2600\.;/.test(shader) &&
+check('the CC reference channel retains its geometry with lower radiance',
+  /const float ccBaseBrightness = 900\.;/.test(shader) &&
   /float normLen = max\(span, 0\.18 \* hScale\);/.test(shader));
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

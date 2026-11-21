@@ -43,8 +43,8 @@ function check(name, ok, detail) {
 check('shared render-quality map exposes 150% and 200% HDR supersampling',
   /const RENDER_QUALITY_SCALES = \{[^}]*'150%': 1\.5, '200%': 2\.0\}/.test(appSource));
 
-check('fresh default renders HDR at 150%',
-  /\/\/ HDR renders above native resolution by default[\s\S]{0,400}?hdrQuality : '150%',/.test(appSource));
+check('fresh default renders HDR at 100%',
+  /hdrQuality : '100%',/.test(appSource) && /performancePreset : 'Custom',/.test(appSource));
 
 check('Extreme preset renders HDR at 150% out of the box',
   /Extreme: \{\s*\n\s*hdrQuality: '150%',/.test(appSource));

@@ -35,7 +35,7 @@ check('rendering uses wrapped physical coordinates, cloud top, and altitude-spec
   /drawAnvilCrawler\(/.test(display) && /drawUpperAtmosphereLightning\(/.test(display) &&
   /cellHeight \* resolution\.y \* 0\.001/.test(display) && /altitude >= 45\.0 && altitude <= 90\.0/.test(display) &&
   /altitude >= baseKm && altitude <= 43\.0/.test(display) && /altitude >= 82\.0 && altitude <= 98\.0/.test(display) &&
-  /vec3\(1\.0, 0\.05, 0\.04\)/.test(display) && /vec3\(0\.30, 0\.38, 1\.0\)/.test(display) &&
+  /vec3\(1\.0, 0\.055, 0\.035\)/.test(display) && /vec3\(0\.30, 0\.38, 1\.0\)/.test(display) &&
   /int tendrilCount = 5 \+ int\(floor\(seedT \* 3\.999\)\);/.test(display) &&
   /1\.0 \/ \(1\.0 \+ radius \* 0\.065\)/.test(display) &&                       // elve 1/r dimming
   /float rise = clamp\(t \/ 0\.55, 0\.0, 1\.0\);/.test(display));                   // jet climbing front

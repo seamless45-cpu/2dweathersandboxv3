@@ -23,7 +23,7 @@
 
 'use strict';
 
-const VERSION = '2026-11-16.60';
+const VERSION = '2026-11-16.61';
 
 const APP_CACHE_PREFIX = 'weather-sandbox-';
 const SHELL_CACHE_PREFIX = APP_CACHE_PREFIX + 'shell-';

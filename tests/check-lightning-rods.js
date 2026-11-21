@@ -175,8 +175,8 @@ const softHdrClamp = (value) => {
   check('the HDR ceiling is declared and stays inside what a 16-bit float holds',
     Number.isFinite(HDR_CEILING) && HDR_CEILING > 1000 && HDR_CEILING < 65504,
     'ceiling ' + HDR_CEILING + ', 16F limit 65504');
-  check('a cloud-to-ground stroke is still written far past the ceiling',
-    boltBrightness > HDR_CEILING * 1.5,
+  check('a cloud-to-ground stroke retains substantial HDR brightness',
+    boltBrightness >= 30000 && boltBrightness < HDR_CEILING * 1.5,
     'stroke ' + boltBrightness + ', ceiling ' + HDR_CEILING);
   check('the scene fragment is written through that compression, not a clamp',
     /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight \* opacity, 0\.0\)[\s\S]{0,64}?\+ emittedLight \* \(1\.0 - terrainOcclusion\) \+ rodGlow\), opacity\);/
@@ -237,7 +237,7 @@ const softHdrClamp = (value) => {
   // the variant's temperature (ordinary CG ~30,000 K with per-strike jitter),
   // replacing the hand-picked violet-white; the artwork itself is unchanged.
   check('the channel colour follows the stroke Kelvin temperature, not a hand pick',
-    /vec3 lightningCol = planckBlackbody\(30000\.0 \+ 5000\.0 \* \(random2d\(pos \* 7\.7 \+ 1\.31\) - 0\.5\)\);/.test(displayShader) &&
+    /vec3 lightningCol = planckBlackbody\(30000\.0 \+ 10000\.0 \* \(random2d\(pos \* 7\.7 \+ 1\.31\) - 0\.5\)\);/.test(displayShader) &&
     /pixVal \* lightningCol/.test(displayShader),
     'lightningCol is the Planckian stroke tint');
   check('there is no cooling colour any more',
