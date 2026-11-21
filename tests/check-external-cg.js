@@ -262,7 +262,7 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
     'main=' + mainB + ', ext=' + extB);
 
   check('external positive CG illuminates ground and storm origin 2x normal CG using extCurve',
-    /if \(isExternalPositive\)\s*\n\s*lightningOnLight \*= extIntensityGain \* extTailFade;/.test(displayShader) &&
+    /lightningOnLight \*= isExternalPositive \? extCurve : currentLightningIntensity;/.test(displayShader) &&
     /if \(isExternalPositive\) \{\s*\n\s*onLight \+= lightningIlluminationTint \* lightningOnLight;/.test(displayShader) &&
     /onLight \+= lightningIlluminationTint \* \(lightningOnLightBrightness \* 2\.0 \/.*\* extCurve \* \(isSuperbolt \? strokeBrightnessMult : 1\.0\)\);/.test(displayShader),
     'expected 2x ground (1 + 1) and 2x origin cloud onLight driven by extCurve + extTailFade');

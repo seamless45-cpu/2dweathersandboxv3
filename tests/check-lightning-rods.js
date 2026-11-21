@@ -297,7 +297,7 @@ const softHdrClamp = (value) => {
     !/icScreenFlash/.test(displayShader),
     'the screen-wide light of the later rounds is gone with the rest of the look');
   check('the lobe is driven by the strike\'s own curve',
-    /lightningOnLight \*= currentLightningIntensity;/.test(displayShader),
+    /lightningOnLight \*= isExternalPositive \? extCurve : currentLightningIntensity;/.test(displayShader),
     'so a weak flash lights less than a storm core');
 }
 

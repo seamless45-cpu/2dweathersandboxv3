@@ -166,7 +166,13 @@ float softHdrClamp(float value)
 
 vec3 softHdrClamp(vec3 value)
 {
-  return vec3(softHdrClamp(value.r), softHdrClamp(value.g), softHdrClamp(value.b));
+  // A shared scale prevents high radiance from washing saturated RGB toward
+  // white as it enters the half-float scene buffer and the bloom pyramid.
+  if (any(isnan(value))) return vec3(0.0);
+  vec3 positive = max(value, vec3(0.0));
+  float peak = max(positive.r, max(positive.g, positive.b));
+  if (isinf(peak)) return vec3(HDR_CEILING);
+  return positive * (softHdrClamp(peak) / max(peak, 1e-6));
 }
 
 void stabilizeBaseState(inout vec4 state)
