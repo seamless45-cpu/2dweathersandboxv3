@@ -141,3 +141,5 @@
 - [x] Give discharge classes distinct apparent channel and illumination tints with stable strike variation, retaining the separate optical-event colours. Increase lightning-only HDR energy feeding bloom without changing user settings; real-GPU appearance remains unverified.
 
 - [x] Remove upward GC, crawler, sprite, jet and elve generation, selection and rendering; preserve super-rod attraction and safely ignore legacy upward slots. Increase IC artwork resolution, retain fine coverage for remaining channels, and remove detached IC forks and the extra network warp. Correct CC distance slopes and reduce fine jaggedness. Real-GPU visual and performance validation remains needed.
+
+- [x] Add explicit GPU attribute locations and a blendable half-float precipitation fallback when 32-bit float blending is unavailable; preserve particle counting and lightning feedback in the fallback. Reduce startup image and mobile artwork peak allocations. SwiftShader fallback smoke-tested; validate on actual Mali and Apple hardware, including long-running rain-gauge precision and memory limits.

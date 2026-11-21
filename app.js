@@ -5978,6 +5978,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         initRainDrops();
         setupPrecipitationBuffers();
         guiControls.inactiveDroplets = NUM_DROPLETS;
+        gl.useProgram(precipitationProgram);
+        gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'inactiveDroplets'), NUM_DROPLETS);
       })
       .name('Enable Precipitation');
 
@@ -7114,7 +7116,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   await loadingBar.set(9, 'Setting up WebGL');
 
   gl.getExtension('EXT_color_buffer_float');
-  gl.getExtension('EXT_float_blend');
+  const compactPrecipitationFeedback = !gl.getExtension('EXT_float_blend');
+  if (compactPrecipitationFeedback)
+    console.warn('32-bit float blending is unavailable; using half-float precipitation feedback.');
   gl.getExtension('OES_texture_float_linear');
   gl.getExtension('OES_texture_half_float_linear');
 
@@ -7126,8 +7130,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.69'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.69')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.70'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.70')
   ]);
 
   const [
@@ -7387,7 +7391,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     gl.bindBuffer(gl.ARRAY_BUFFER, precipVertexBuffer_0);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(rainDrops), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(positionAttribLocation);
+    gl.enableVertexAttribArray(dropPositionAttribLocation);
     gl.enableVertexAttribArray(massAttribLocation);
     gl.enableVertexAttribArray(densityAttribLocation);
     gl.vertexAttribPointer(
@@ -7429,7 +7433,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     gl.bindBuffer(gl.ARRAY_BUFFER, precipVertexBuffer_1);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(rainDrops), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(positionAttribLocation);
+    gl.enableVertexAttribArray(dropPositionAttribLocation);
     gl.enableVertexAttribArray(massAttribLocation);
     gl.enableVertexAttribArray(densityAttribLocation);
     gl.vertexAttribPointer(
@@ -7669,7 +7673,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     } catch (error) { /* private mode, storage disabled: the default stands */ }
     return 2;
   }
-  const numLightningTextures = readLightningTileBudget();
+  // Mobile browsers share a tight memory budget with the GPU. A scaled tile
+  // keeps the same world-space channel shape while avoiding a 50 MB canvas and
+  // a second resident artwork. User quality settings are left untouched.
+  const mobileArtwork = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '') ||
+                        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const numLightningTextures = mobileArtwork ? 1 : readLightningTileBudget();
   const lightningBoltBottomUs = new Float32Array(numLightningTextures).fill(0.5);
 
 
@@ -7813,17 +7822,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
 
   gl.bindTexture(gl.TEXTURE_2D, precipitationFeedbackTexture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+  gl.texImage2D(gl.TEXTURE_2D, 0, compactPrecipitationFeedback ? gl.RGBA16F : gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, compactPrecipitationFeedback ? gl.HALF_FLOAT : gl.FLOAT, null);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
   gl.bindTexture(gl.TEXTURE_2D, precipitationDepositionTexture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, sim_res_x, sim_res_y, 0, gl.RG, gl.FLOAT, null);
+  gl.texImage2D(gl.TEXTURE_2D, 0, compactPrecipitationFeedback ? gl.RGBA16F : gl.RG32F, sim_res_x, sim_res_y, 0, compactPrecipitationFeedback ? gl.RGBA : gl.RG, compactPrecipitationFeedback ? gl.HALF_FLOAT : gl.FLOAT, null);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
   gl.bindTexture(gl.TEXTURE_2D, rainDepositionAccumulationTexture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, sim_res_x, sim_res_y, 0, gl.RED, gl.FLOAT, null);
+  gl.texImage2D(gl.TEXTURE_2D, 0, compactPrecipitationFeedback ? gl.RGBA16F : gl.R32F, sim_res_x, sim_res_y, 0, compactPrecipitationFeedback ? gl.RGBA : gl.RED, compactPrecipitationFeedback ? gl.HALF_FLOAT : gl.FLOAT, null);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
@@ -7832,6 +7841,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, precipitationDepositionTexture, 0);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, rainDepositionAccumulationTexture, 0);
   gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+    throw new Error('Precipitation framebuffer is not supported at this simulation resolution.');
   gl.clearBufferfv(gl.COLOR, 2, zeroColorClearValue);
 
   for (let i = 0; i < 2; i++) {
@@ -7863,7 +7874,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     'resources/img/A380.png',
     'resources/img/A380_R.png',
     'resources/img/A380_gear.png',
-    'resources/img/surfaceTextureMap.png',
+    'resources/img/surfaceTextureMap-2048.png',
     'resources/img/ColorScales.png'
   ].map(url => loadImage(url)));
 
@@ -7921,6 +7932,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   function uploadSurfaceTextureMap(image)
   {
     const targetWidth = 2048;
+    if (image.width <= targetWidth) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+      return;
+    }
     const scale = Math.min(1, targetWidth / image.width);
     const width = Math.max(1, Math.round(image.width * scale));
     const height = Math.max(1, Math.round(image.height * scale));
@@ -7994,7 +8009,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     // lightningGenerator.js), so the driver is asked for exactly 12.5 MB of R8 and
     // never sees the 50 MB RGBA picture the canvas had.
     gl.bindTexture(gl.TEXTURE_2D, lightningTextures[i]);
+    // Mobile artwork is 1250 bytes wide, not a multiple of the default
+    // four-byte unpack alignment. Restore the shared state after uploading.
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, artwork.width, artwork.height, 0, gl.RED, gl.UNSIGNED_BYTE, artwork.data);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
     // Mips filter thin channels to the actual HDR pixel footprint at each zoom.
     // Cost: about one third of the 12.5 MB R8 base tile per ready bolt.
     gl.generateMipmap(gl.TEXTURE_2D);
@@ -8080,7 +8099,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.69');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.70');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8126,7 +8145,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       // started from halved both and doubled the brightness gain (1250 x 2500 at
       // 4.5 px); that keeps the relative width but loses half the texels, so the
       // channel is softer and breaks up sooner when the camera pulls back.
-      lightningGeneratorWorker.postMessage({width : 2500, height : 5000}); // 10000 5000
+      if (mobileArtwork)
+        lightningGeneratorWorker.postMessage({width : 1250, height : 2500, logicalScale : 0.5});
+      else
+        lightningGeneratorWorker.postMessage({width : 2500, height : 5000}); // desktop artwork
     }
   }
 
@@ -8140,8 +8162,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   }
-  // The intra-cloud network, one tile. Same storage as a bolt tile (R8, mip-mapped
-  // once it is uploaded), a fifth of the size.
+  // The intra-cloud network uses an R8 mipmapped tile, smaller than a CG tile.
   const emptyLightningNetworkPixel = new Uint8Array([0]);
   const lightningNetworkTexture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, lightningNetworkTexture);
@@ -8384,6 +8405,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'cellHeight'), cellHeight);
 
   gl.useProgram(precipitationProgram);
+  gl.uniform1i(gl.getUniformLocation(precipitationProgram, 'compactFeedback'), compactPrecipitationFeedback ? 1 : 0);
+  const pointSizeRange = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE);
+  const maxPrecipPointSize = pointSizeRange && Number.isFinite(pointSizeRange[1]) ? pointSizeRange[1] : 12;
+  gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'precipPointSize'), Math.max(1, Math.min(12, maxPrecipPointSize)));
+  gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'inactiveDroplets'), NUM_DROPLETS);
   gl.uniform1i(gl.getUniformLocation(precipitationProgram, 'baseTex'), 0);
   gl.uniform1i(gl.getUniformLocation(precipitationProgram, 'waterTex'), 1);
   gl.uniform1i(gl.getUniformLocation(precipitationProgram, 'lightningDataTex'), 2);
@@ -8428,6 +8454,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform1i(gl.getUniformLocation(isolateBrightPartsProgram, 'hdrTex'), 0);
 
   gl.useProgram(lightningLocationProgram);
+  gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'compactFeedback'), compactPrecipitationFeedback ? 1 : 0);
   gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'precipFeedbackTex'), 0);
   gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'lightningDataTex'), 1);
   gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'waterTex'), 2);
@@ -8986,17 +9013,29 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
               gl.drawArrays(gl.POINTS, 0, NUM_DROPLETS);
               gl.endTransformFeedback();
+              gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
 
               // sample to count number of inactive droplets
               if (iterNum % 600 == 0) {
-                gl.readBuffer(gl.COLOR_ATTACHMENT0);
-                // console.time('cnt');
-                gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, precipSampleValues);
-                // console.timeEnd('cnt')         // 1 - 100 ms huge variation
-                // console.log(precipSampleValues[0]);  // number of inactive droplets
-                guiControls.inactiveDroplets = precipSampleValues[0];
-                // gl.useProgram(precipitationProgram); // already set
-                gl.uniform1f(getUniformLoc(precipitationProgram, 'inactiveDroplets'), precipSampleValues[0]);
+                let inactiveCount;
+                if (compactPrecipitationFeedback) {
+                  // Half floats cannot count tens of thousands of single increments.
+                  // Read the freshly written transform-feedback buffer only at the
+                  // existing low-frequency sampling interval instead.
+                  const dropletSample = new Float32Array(NUM_DROPLETS * 5);
+                  gl.bindBuffer(gl.COPY_READ_BUFFER, precipitationEven ? precipVertexBuffer_1 : precipVertexBuffer_0);
+                  gl.getBufferSubData(gl.COPY_READ_BUFFER, 0, dropletSample);
+                  gl.bindBuffer(gl.COPY_READ_BUFFER, null);
+                  inactiveCount = 0;
+                  for (let i = 2; i < dropletSample.length; i += 5)
+                    if (dropletSample[i] < 0) inactiveCount++;
+                } else {
+                  gl.readBuffer(gl.COLOR_ATTACHMENT0);
+                  gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, precipSampleValues);
+                  inactiveCount = precipSampleValues[0];
+                }
+                guiControls.inactiveDroplets = inactiveCount;
+                gl.uniform1f(getUniformLoc(precipitationProgram, 'inactiveDroplets'), inactiveCount);
               }
 
               gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
@@ -9946,7 +9985,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         const region = rainRegions[regionIndex];
         const width = region.xEnd - region.xStart + 1;
         const height = region.yEnd - region.yStart + 1;
-        const dataLength = width * height;
+        const rainReadChannels = compactPrecipitationFeedback ? 4 : 1;
+        const dataLength = width * height * rainReadChannels;
         const prefixLength = height * (width + 1);
         let buffers = weatherStationSamplingBuffers.rainRegions[regionIndex];
         if (!buffers || buffers.data.length < dataLength || buffers.prefixes.length < prefixLength) {
@@ -9957,13 +9997,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           weatherStationSamplingBuffers.rainRegions[regionIndex] = buffers;
         }
 
-        gl.readPixels(region.xStart, region.yStart, width, height, gl.RED, gl.FLOAT, buffers.data);
+        gl.readPixels(region.xStart, region.yStart, width, height, compactPrecipitationFeedback ? gl.RGBA : gl.RED, gl.FLOAT, buffers.data);
         for (let y = 0; y < height; y++) {
           const rowStart = y * (width + 1);
           const dataStart = y * width;
           buffers.prefixes[rowStart] = 0;
           for (let x = 0; x < width; x++) {
-            buffers.prefixes[rowStart + x + 1] = buffers.prefixes[rowStart + x] + buffers.data[dataStart + x];
+            buffers.prefixes[rowStart + x + 1] = buffers.prefixes[rowStart + x] + buffers.data[(dataStart + x) * rainReadChannels];
           }
         }
         region.prefixes = buffers.prefixes;
@@ -10245,8 +10285,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     if (transform_feedback_varyings != null)
       gl.transformFeedbackVaryings(program, transform_feedback_varyings, gl.INTERLEAVED_ATTRIBS);
 
+    // Validation depends on current sampler bindings and framebuffer state;
+    // those are not configured until after linking and may be invalid here.
     gl.linkProgram(program);
-    gl.validateProgram(program);
     if (gl.getProgramParameter(program, gl.LINK_STATUS)) {
       return program; // linked succesfully
     } else {
@@ -10309,7 +10350,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.69');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.70');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

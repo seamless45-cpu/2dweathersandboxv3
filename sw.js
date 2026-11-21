@@ -23,7 +23,7 @@
 
 'use strict';
 
-const VERSION = '2026-11-16.69';
+const VERSION = '2026-11-16.70';
 
 const APP_CACHE_PREFIX = 'weather-sandbox-';
 const SHELL_CACHE_PREFIX = APP_CACHE_PREFIX + 'shell-';
@@ -111,7 +111,7 @@ const PRECACHE = [
 const DEFERRED = [
   './resources/img/noise_texture.jpg',
   './resources/img/background.png',
-  './resources/img/surfaceTextureMap.png'
+  './resources/img/surfaceTextureMap-2048.png'
 ];
 
 // Files that must never be pulled into a cache (the repo ships a 21 MB source

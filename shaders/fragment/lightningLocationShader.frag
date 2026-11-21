@@ -22,6 +22,7 @@ out vec4 lightningLocation;
 
 uniform float dryLapse;
 uniform vec4 artificialStrike;      // x, origin y, intensity, active
+uniform bool compactFeedback; // half-float feedback encodes count directly
 uniform float artificialStrikeVariant; // which kind of event a manual click queues (see app.js)
 uniform float simHeightMeters; // simulation height in meters, for physical strike ranges
 
@@ -286,7 +287,7 @@ void main()
   // every iteration, so anything in it was formed this iteration - and the count is
   // only used to average the position and the intensity.
   vec4 incomingRaw = texelFetch(precipFeedbackTex, ivec2(1, 0), 0);
-  float strikeCount = max(round(incomingRaw[START_ITERNUM] / max(iterNum, 1.0)), 1.0);
+  float strikeCount = max(round(incomingRaw[START_ITERNUM] / (compactFeedback ? 1.0 : max(iterNum, 1.0))), 1.0);
   vec4 incoming = vec4(incomingRaw.xy / strikeCount,
                        iterNum,
                        incomingRaw[INTENSITY] / strikeCount);

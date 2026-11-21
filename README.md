@@ -8,6 +8,12 @@ The simulation requires a browser with WebGL2 and `EXT_color_buffer_float`; open
 
 Audio assets use MP3 for broad Web Audio decoding support and load on demand, so unused sounds do not delay startup. Ambient sound-field samples use asynchronous GPU readback and update at most ten times per second.
 
+### Mobile GPU compatibility
+
+Precipitation attributes have explicit locations across update and display programs. When `EXT_float_blend` is unavailable, precipitation feedback and deposition use blendable half-float targets; inactive particles are counted from the transform-feedback buffer at the existing sampling interval, and lightning feedback encodes a count rather than large iteration numbers. This fallback has lower precision and occasional CPU readback cost; rain gauges may be less precise in very intense rain. The simulation still requires WebGL 2 and `EXT_color_buffer_float`, and reports an error if the precipitation framebuffer cannot be created.
+
+To reduce startup memory, the surface image is pre-sized to the resolution already used for GPU upload. On mobile browsers, lightning artwork uses one half-linear-resolution tile generated from the same logical shape. This does not change simulation resolution or saved display settings. A SwiftShader smoke test exercised the fallback, but physical Mali and Apple devices still need testing; a browser or GPU reset can have other causes.
+
 ### Lightning tools
 
 Choose **Lightning Rod** or **Super Lightning Rod** from the Tool menu and click near the ground to place a mast (up to 12 total). The super rod is 1.8× taller, has 2.5 times the base attraction range and a larger guaranteed capture region; actual attraction also varies with height and current. Rod capture and its reach preview stop at the world seam, even when the simulation itself wraps. Shift-click or right-click either type to remove it, or use Clear Lightning Rods. Superbolts still obey their 9–37 km range even when rods attract them; other external positive CG strikes travel 5.5–34 km.
@@ -124,7 +130,7 @@ Because this is the kind of failure that leaves no trace, the app now says what 
 
 Both are checks now: `tests/check-lightning-strikes.js` reads the multiplier and the cooldown out of the shader, runs a 6000-iteration storm through the spawn probability and the cooldown, and requires that strikes actually start and never start closer together than the cooldown; it also ports the reconstruction and requires a strike at k = 1, 2, 64, 65, 200, 1200 and 5000 contributions, with the right position and intensity.
 
-Two more things were released rather than shrunk. The decoded pictures are dropped as soon as they are uploaded - `surfaceTextureMap.png` alone decodes to 4096 x 2560 RGBA, 42 MB of image held by the page for the rest of the session for a texture that is already on the GPU. And `background.png`, a CSS backdrop at 2560 x 1600, is composited once by the browser rather than resident in the context.
+Two more things were released rather than shrunk. The decoded pictures are dropped as soon as they are uploaded - the original 4096 x 2560 source is no longer decoded at startup; the pre-sized 2048 x 1280 upload is released after use. And `background.png`, a CSS backdrop at 2560 x 1600, is composited once by the browser rather than resident in the context.
 
 The surface texture map was the other thing worth shrinking. It is authored at 4096 x 2560 - five ground surfaces stacked vertically, 42 MB of RGBA8 - and it is a tiling detail map whose finest features are fractions of a metre across on a 40 m simulation cell, sampled by `surfaceTexture()` as ground colour rather than as geometry. Its top octave lands on less than a screen pixel at any camera the app allows. `uploadSurfaceTextureMap()` halves it to 2048 x 1280 (10.5 MB) through a 2D canvas before the upload, with a plain `texImage2D` of the full image if there is no 2D context to do it with.
 

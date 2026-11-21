@@ -32,7 +32,7 @@ onmessage = (event) => {
   const fallback = network ? IC_ARTWORK_SIZE : ARTWORK_SIZE;
   const width = Math.max(32, Math.round(msg.width || fallback.width));
   const height = Math.max(32, Math.round(msg.height || fallback.height));
-  const artwork = network ? generateLightningNetwork(width, height) : generateLightningBolt(width, height);
+  const artwork = network ? generateLightningNetwork(width, height) : generateLightningBolt(width, height, msg.logicalScale || 1);
   postMessage({width : artwork.width, height : artwork.height, data : artwork.data},
               [artwork.data.buffer]);
 };
@@ -125,17 +125,20 @@ const CG_SHAPE = {
   taper : 0.2                // artwork pixels a fork sheds each time it narrows
 };
 
-function generateLightningBolt(width, height)
+function generateLightningBolt(width, height, logicalScale = 1)
 {
-  const lightningCanvas = new OffscreenCanvas(width, height);
+  const pixelWidth = width, pixelHeight = height;
+  width /= logicalScale;
+  height /= logicalScale;
+  const lightningCanvas = new OffscreenCanvas(pixelWidth, pixelHeight);
   // willReadFrequently keeps the canvas in system memory instead of asking the GPU
   // for a 2500 x 5000 RGBA backing store - fifty megabytes, for artwork that is
   // drawn once and then handed over as an R8 texture. On a machine whose graphics
   // memory is already tight, that allocation is as much of a problem as the texture.
   const ctx = lightningCanvas.getContext('2d', {willReadFrequently : true});
 
-  ctx.clearRect(0, 0, width, height);
-
+  ctx.clearRect(0, 0, pixelWidth, pixelHeight);
+  if (logicalScale !== 1) ctx.scale(logicalScale, logicalScale);
 
   function genLightningColor(lineWidth)
   {
@@ -186,7 +189,7 @@ function generateLightningBolt(width, height)
   ctx.stroke();
 
 
-  return readRedChannel(ctx, width, height);
+  return readRedChannel(ctx, pixelWidth, pixelHeight);
 
 
   function drawBranch(startX, startY, targetAngle, line_width)

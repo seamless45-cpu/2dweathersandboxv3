@@ -230,7 +230,7 @@ check('and the trunk stays inside the sprite',
     !/startLightningTextureWorker\(\);\s*\}\);/.test(workerBlock),
     'the old code chained the next worker straight out of onmessage');
   check('the artwork is capped at two tiles, and at one after a context loss',
-    /const numLightningTextures = readLightningTileBudget\(\);/.test(app) &&
+    /const numLightningTextures = mobileArtwork \? 1 : readLightningTileBudget\(\);/.test(app) &&
     /if \(Number\.isFinite\(stored\) && stored >= 1 && stored <= 2\)\s*\n\s*return stored;/.test(app) &&
     /return 2;/.test(app) &&
     /if \(lightningTexturesReady < numLightningTextures\)/.test(workerBlock),
