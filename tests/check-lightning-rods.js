@@ -75,7 +75,7 @@ check('a stroke draws the bolt and a flash draws the network',
   'one channel down the picture for a stroke, one network across it for a flash');
 check('a flash is not masked to the cloud it was born in',
   !/strikeLight \*= smoothstep\(0\.0, 3\.0, cloudDensity\);/.test(displayShader) &&
-  /emittedLight \+= lightningBoltLight \/ \(1\. \+ cloudDensity \* 100\.0\);/.test(displayShader),
+  /emittedLight \+= displayLightningRadiance\(lightningBoltLight \/ \(1\. \+ cloudDensity \* 100\.0\)\);/.test(displayShader),
   'a channel that leaves one deck and crosses to the next is cloud-to-cloud lightning; the cloud filters the light, it does not cut the channel');
 check('a flash reads its own artwork, mip-filtered, over a slab of the sky at true aspect ratio',
   /float pixVal = textureGrad\(lightningNetworkTex, flashCoord, gradX, gradY\)\.r;/.test(displayShader) &&
@@ -133,7 +133,7 @@ check('and app.js neither generates nor draws one',
   !/'IC'/.test(appSource) && !/ICLightning/.test(appSource),
   'no array texture, no worker, no second drawArrays');
 check('the bolt is still attenuated by the cloud it is born in',
-  /emittedLight \+= lightningBoltLight \/ \(1\. \+ cloudDensity \* 100\.0\)/.test(displayShader),
+  /emittedLight \+= displayLightningRadiance\(lightningBoltLight \/ \(1\. \+ cloudDensity \* 100\.0\)\)/.test(displayShader),
   'light inside a cloud is scattered by it, not painted over the top of it');
 
 // The light of every strike is drawn in the scene pass, in one fragment, and the
@@ -284,7 +284,7 @@ const softHdrClamp = (value) => {
   const onLift = Number((displayShader.match(/#define lightningOnLightBrightness ([\d.]+)/) || [])[1]);
 
   check('a cloud-to-ground stroke lights the clouds around it',
-    onLift === 0.004 &&
+    onLift === 0.0008 &&
     /lightningOnLight = lightningOnLightBrightness \/ \(pow\(length\(dist\), 2\.\) \+ 0\.03 \* lightningHeightScale\(\)\);/.test(displayShader) &&
     /onLight \+= lightningIlluminationTint \* lightningOnLight/.test(displayShader),
     'the tight lobe has to sit on the channel it came from');

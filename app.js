@@ -5185,7 +5185,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     guiControls.windPushAirTemperatureC = clamp(Number(guiControls.windPushAirTemperatureC) || 0, -40, 50);
     guiControls.windPushSetHumidity = guiControls.windPushSetHumidity === true;
     guiControls.windPushRelativeHumidity = clamp(Number(guiControls.windPushRelativeHumidity) || 0, 0, 100);
-    if (!Object.prototype.hasOwnProperty.call(artificialVariantOptions, guiControls.artificialLightningVariant))
+    if (!Object.prototype.hasOwnProperty.call(artificialVariantUniforms, guiControls.artificialLightningVariant))
       guiControls.artificialLightningVariant = 'ordinary_cg';
     if (!['SPEED_UNIT_KMH', 'SPEED_UNIT_MS', 'SPEED_UNIT_MPH', 'SPEED_UNIT_KT'].includes(guiControls.speedUnit))
       guiControls.speedUnit = 'SPEED_UNIT_KMH';
@@ -6789,7 +6789,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return false;
     // A ground click uses a high source; a sky click chooses its altitude.
     const originY = clamp(y > minOrigin ? y : Math.max(0.6, minOrigin), minOrigin, 0.98);
-    pendingArtificialLightning.push({ x, y : originY, tipY : (surfaceCell + 1) / sim_res_y });
+    pendingArtificialLightning.push({ x, y : originY, tipY : (surfaceCell + 1) / sim_res_y, variant : guiControls.artificialLightningVariant });
     artificialLightningStatus.status = 'Queued: ' + pendingArtificialLightning.length;
     return true;
   }
@@ -7136,8 +7136,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.61'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.61')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.62'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.62')
   ]);
 
   const [
@@ -8090,7 +8090,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.61');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.62');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9031,7 +9031,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               gl.uniform4f(getUniformLoc(lightningLocationProgram, 'artificialStrike'),
                            manualStrike ? manualStrike.x : 0, manualStrike ? manualStrike.y : 0, 2.8, manualStrike ? 1 : 0);
               gl.uniform1f(getUniformLoc(lightningLocationProgram, 'artificialStrikeVariant'),
-                           artificialVariantUniforms[guiControls.artificialLightningVariant] ?? 0);
+                           artificialVariantUniforms[manualStrike ? manualStrike.variant : guiControls.artificialLightningVariant] ?? 0);
               gl.uniform1f(getUniformLoc(lightningLocationProgram, 'artificialStrikeTipY'),
                            manualStrike && manualStrike.tipY !== undefined ? manualStrike.tipY : 0);
               uploadLightningRodUniforms(lightningLocationProgram); // rods capture CG strikes
@@ -10318,7 +10318,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.61');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.62');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

@@ -43,15 +43,15 @@ check('option order matches shader variant dispatch order',
 check('GUI control is an immediate in-page option list with a README-required listen()',
   /\.add\(guiControls, 'artificialLightningVariant', artificialVariantOptions\)\s*\n\s*\.name\('Artificial Lightning Variant'\)\s*\n\s*\.listen\(\)/.test(app));
 check('saved settings validate the variant key and fall back to ordinary cloud-to-ground',
-  /hasOwnProperty\.call\(artificialVariantOptions, guiControls\.artificialLightningVariant\)/.test(app) &&
+  /hasOwnProperty\.call\(artificialVariantUniforms, guiControls\.artificialLightningVariant\)/.test(app) &&
   /guiControls\.artificialLightningVariant = 'ordinary_cg';/.test(app));
 check('default settings pick the ordinary cloud-to-ground variant',
   /artificialLightningVariant : 'ordinary_cg',/.test(app));
 check('slot pass uploads the numeric variant and the rod-tip height for ground-to-cloud',
-  /gl\.uniform1f\(getUniformLoc\(lightningLocationProgram, 'artificialStrikeVariant'\),\s*\n\s*artificialVariantUniforms\[guiControls\.artificialLightningVariant\] \?\? 0\)/.test(app) &&
+  /gl\.uniform1f\(getUniformLoc\(lightningLocationProgram, 'artificialStrikeVariant'\),\s*\n\s*artificialVariantUniforms\[manualStrike \? manualStrike\.variant : guiControls\.artificialLightningVariant\] \?\? 0\)/.test(app) &&
   /gl\.uniform1f\(getUniformLoc\(lightningLocationProgram, 'artificialStrikeTipY'\)/.test(app));
 check('queued clicks remember the terrain surface height for the ground-to-cloud variant',
-  /tipY : \(surfaceCell \+ 1\) \/ sim_res_y/.test(app) &&
+  /tipY : \(surfaceCell \+ 1\) \/ sim_res_y, variant : guiControls\.artificialLightningVariant/.test(app) &&
   /const manualStrike = !artificialAttemptedThisFrame && iterNum > 0 \? pendingArtificialLightning\[0\] : null/.test(app));
 
 check('slot-manager shader declares both uniforms and dispatches on the variant selector',

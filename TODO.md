@@ -111,6 +111,8 @@
 
 - [x] Default HDR to 100% and motion blur off for fresh settings; preserve saved choices. Restore distinct discharge tints, temper bright channels and special optical effects, confine the blue-jet front, and reduce crawler/sprite rendering work during strikes. Appearance and performance still require real-GPU validation across zoom levels and overlapping events.
 
+- [x] Preserve lightning hue before non-filmic RGB clipping, render upper-atmospheric transients inside tall domains as well as above them, retain saved and queued artificial-variant choices, and animate descending sprite tendrils. Real-GPU visual validation remains necessary.
+
 # In Progress
 
 
