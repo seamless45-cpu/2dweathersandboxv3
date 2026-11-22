@@ -78,7 +78,7 @@ check('cloud-to-cloud branch bounds (cull, masks, jag, core, halo) are expressed
 
 check('cloud-to-cloud spine core, halo, outer glow and sub-branch jag scale with hScale',
   /float jagScale = clamp\(span \* 0\.068, 0\.015 \* hScale, 0\.052 \* hScale\);/.test(displayShader) &&
-  /float coreW = max\(0\.0018 \* hScale, worldPix \* 0\.90\) \* \(isPositiveCC \? 1\.28 : 1\.0\);/.test(displayShader) &&
+  /float coreW = 0\.0018 \* hScale \* \(isPositiveCC \? 1\.28 : 1\.0\);/.test(displayShader) &&
   /float mainHalo = exp\(-distMain \/ max\(coreW \* 3\.2, 0\.0045 \* hScale\)\) \* 0\.20 \* edgeFade;/.test(displayShader) &&
   /float mainOuter = exp\(-distMain \/ max\(coreW \* 7\.5, 0\.011 \* hScale\)\) \* 0\.018 \* edgeFade;/.test(displayShader) &&
   /float subJagScale = clamp\(bLen \* 0\.095, 0\.008 \* hScale, 0\.028 \* hScale\);/.test(displayShader) &&

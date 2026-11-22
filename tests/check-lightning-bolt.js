@@ -281,12 +281,12 @@ check('and the trunk stays inside the sprite',
   check('bolt tile mips match the explicit gradient sampling used for minification',
     /gl\.generateMipmap\(gl\.TEXTURE_2D\);\s*\n\s*gl\.texParameteri\(gl\.TEXTURE_2D, gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR\);/
       .test(app.split('function generateLightningTexture')[1].split('function generateLightningNetworkTexture')[0]) &&
-    /textureGrad\(lightningTex, lightningTexCoord, gradX, gradY\)/
+    /sampleLightningArtwork\(lightningTex, lightningTexCoord, gradX, gradY\)/
       .test(fs.readFileSync(path.join(ROOT, 'shaders/fragment/realisticDisplayShader.frag'), 'utf8')),
     'mipmap cost is about one third of the base R8 tile');
   check('the flash network is one small tile, asked for after the first bolt',
     /kind : 'network'/.test(workerBlock) &&
-    /kind : 'network', width : 1024, height : 512/.test(workerBlock) &&
+    /kind : 'network', width : mobileArtwork \? 1024 : 2048, height : mobileArtwork \? 512 : 1024/.test(workerBlock) &&
     /if \(lightningTexturesReady < 1\)\s*\n\s*return \{kind : 'bolt', index : 0\};\s*\n\s*if \(!lightningNetworkReady\)/.test(workerBlock),
     'both kinds need a picture early, and the compact network is ~128 KB, not twelve MB');
   check('the display never samples a tile that has not been drawn yet',

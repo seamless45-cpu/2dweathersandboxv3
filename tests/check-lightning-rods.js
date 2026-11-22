@@ -75,10 +75,10 @@ check('a stroke draws the bolt and a flash draws the network',
   'one channel down the picture for a stroke, one network across it for a flash');
 check('a flash is not masked to the cloud it was born in',
   !/strikeLight \*= smoothstep\(0\.0, 3\.0, cloudDensity\);/.test(displayShader) &&
-  /emittedLight \+= displayLightningRadiance\(lightningBoltLight \/ \(1\. \+ cloudDensity \* 100\.0\)\);/.test(displayShader),
+  /visibleLightning = displayLightningRadiance\(lightningBoltLight \/ \(1\. \+ cloudDensity \* 100\.0\)\);/.test(displayShader),
   'a channel that leaves one deck and crosses to the next is cloud-to-cloud lightning; the cloud filters the light, it does not cut the channel');
 check('a flash reads its own artwork, mip-filtered, over a slab of the sky at true aspect ratio',
-  /vec2 artwork = textureGrad\(lightningNetworkTex, flashCoord, gradX, gradY\)\.rg;/.test(displayShader) &&
+  /vec2 artwork = sampleLightningArtwork\(lightningNetworkTex, flashCoord, gradX, gradY\);/.test(displayShader) &&
   /const float networkTexAspect = networkTexRes\.x \/ networkTexRes\.y;/.test(displayShader) &&
   /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader) &&
   /texCoord\.x - pos\.x\) \/ flashSpan\.x/.test(displayShader) &&
@@ -90,7 +90,7 @@ check('a flash lights the slab it lives in and a stroke lights the cloud under i
   /float cgDx = lightningPos\.x - texCoord\.x;\s*\n\s*vec2 dist = vec2\(cgDx, max\(\(abs\(lightningPos\.y \/ 2\. - texCoord\.y\) - 0\.1 \* lightningHeightScale\(\)\), 0\.\)\);/.test(displayShader),
   'the shipped lobe is a point below the strike (clipped at the tile edge); a network is a slab');
 check('stroke uses explicit screen-space gradients and preserves its own bolt artwork',
-  /textureGrad\(lightningTex, lightningTexCoord, gradX, gradY\)/.test(displayShader) &&
+  /sampleLightningArtwork\(lightningTex, lightningTexCoord, gradX, gradY\)/.test(displayShader) &&
   /screenTexDx = dFdx\(texCoord\)/.test(displayShader) &&
   !/flash \? texture/.test(displayShader));
 check('both network and bolt artwork have mip-filtered textures',
@@ -133,7 +133,7 @@ check('and app.js neither generates nor draws one',
   !/'IC'/.test(appSource) && !/ICLightning/.test(appSource),
   'no array texture, no worker, no second drawArrays');
 check('the bolt is still attenuated by the cloud it is born in',
-  /emittedLight \+= displayLightningRadiance\(lightningBoltLight \/ \(1\. \+ cloudDensity \* 100\.0\)\)/.test(displayShader),
+  /visibleLightning = displayLightningRadiance\(lightningBoltLight \/ \(1\. \+ cloudDensity \* 100\.0\)\)/.test(displayShader),
   'light inside a cloud is scattered by it, not painted over the top of it');
 
 // The light of every strike is drawn in the scene pass, in one fragment, and the

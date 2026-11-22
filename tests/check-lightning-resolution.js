@@ -9,8 +9,8 @@ check('derivatives are captured before nonuniform rendering branches',
   main.indexOf('screenTexDx = dFdx(texCoord)') < main.indexOf('if (texCoord.y > 1.0)') &&
   main.indexOf('screenTexDy = dFdy(texCoord)') < main.indexOf('if (texCoord.y > 1.0)'));
 check('both IC paths use explicit projected gradients and normal CG accounts for rod shear',
-  (shader.match(/textureGrad\(lightningNetworkTex, flashCoord, gradX, gradY\)/g) || []).length === 2 &&
-  /textureGrad\(lightningTex, lightningTexCoord, gradX, gradY\)/.test(shader) && /shear \* screenTexDx.y/.test(shader));
+  (shader.match(/sampleLightningArtwork\(lightningNetworkTex, flashCoord, gradX, gradY\)/g) || []).length === 2 &&
+  /sampleLightningArtwork\(lightningTex, lightningTexCoord, gradX, gradY\)/.test(shader) && /shear \* screenTexDx.y/.test(shader));
 check('external bolt mip level and procedural lines use actual screen footprint, not fixed resolution',
   /textureLod\(lightningTex, vec2\(u, v\), lod\)/.test(shader) && /float pixelWorld = max\(length\(pixelX\), length\(pixelY\)\)/.test(shader) &&
   /float mainF2 = coreW \* coreW \+ 0\.5625 \* mainAA \* mainAA/.test(shader) &&

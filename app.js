@@ -1237,6 +1237,8 @@ class FBO // wraps texture, frambuffer and info in one
   {
     gl.deleteFramebuffer(this.frameBuffer);
     gl.deleteTexture(this.texture);
+    if (this.lightningBloomTexture)
+      gl.deleteTexture(this.lightningBloomTexture);
   }
 }
 
@@ -1281,6 +1283,50 @@ function createHdrFBO()
   }
   throw new Error('This graphics device cannot allocate the floating-point HDR target the display needs.');
 }
+
+// Optional HDR attachment used only for lightning's coloured bloom source.
+// If allocation or attachment fails, keep the original bloom and scene intact.
+function ensureLightningBloomTarget(enabled)
+{
+  if (!enabled) {
+    if (hdrFBO.lightningBloomTexture) {
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, null, 0);
+      gl.deleteTexture(hdrFBO.lightningBloomTexture);
+      hdrFBO.lightningBloomTexture = null;
+    }
+    hdrFBO.lightningBloomAttempted = false;
+    return false;
+  }
+  if (hdrFBO.lightningBloomTexture) return true;
+  if (hdrFBO.lightningBloomAttempted) return false;
+  hdrFBO.lightningBloomAttempted = true;
+  // Avoid a second oversized full-resolution HDR allocation at extreme canvas
+  // sizes. Normal bloom remains available, without changing the user's scale.
+  if (hdrFBO.width * hdrFBO.height * 8 > 48 * 1024 * 1024) {
+    console.warn('Coloured lightning bloom target exceeds the memory budget; using normal bloom.');
+    return false;
+  }
+  const texture = gl.createTexture();
+  if (!texture) return false;
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, hdrFBO.width, hdrFBO.height, 0, gl.RGBA, gl.HALF_FLOAT, null);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, texture, 0);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE) {
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, null, 0);
+    gl.deleteTexture(texture);
+    console.warn('Coloured lightning bloom target unavailable; using normal bloom.');
+    return false;
+  }
+  hdrFBO.lightningBloomTexture = texture;
+  return true;
+}
+
+const clearLightningBloom = new Float32Array([0, 0, 0, 0]);
 
 function createBloomFBOs()
 {
@@ -7130,8 +7176,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.74'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.74')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.75'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.75')
   ]);
 
   const [
@@ -8098,7 +8144,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.74');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.75');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8137,8 +8183,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     };
 
     if (job.kind === 'network') {
-      // The intra-cloud channel network: 1024 x 512, ~512 KB, compact 2:1 tile.
-      lightningGeneratorWorker.postMessage({kind : 'network', width : 1024, height : 512});
+      // Higher-resolution IC artwork on desktop; retain the compact mobile tile.
+      lightningGeneratorWorker.postMessage({kind : 'network', width : mobileArtwork ? 1024 : 2048, height : mobileArtwork ? 512 : 1024});
     } else {
       // The original tile: 2500 x 5000 at a 9 pixel channel. The fork this repo
       // started from halved both and doubled the brightness gain (1250 x 2500 at
@@ -9431,6 +9477,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.bindFramebuffer(gl.FRAMEBUFFER, hdrFBO.frameBuffer); // render to hdr framebuffer
       // gl.viewport(0, 0, sim_res_x, sim_res_y);
       gl.viewport(0, 0, hdrFBO.width, hdrFBO.height);
+      const hasLightningBloom = ensureLightningBloomTarget(guiControls.bloomEnabled);
+      if (hasLightningBloom) {
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+        gl.clearBufferfv(gl.COLOR, 1, clearLightningBloom);
+      }
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
       gl.clearColor(0.0, 0.0, 0.0, 1.0); // background color
       gl.clear(gl.COLOR_BUFFER_BIT);
 
@@ -9494,6 +9546,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         gl.uniform1f(getUniformLoc(realisticDisplayProgram, 'displayVectorField'), 0.0);
       }
       gl.uniform1i(getUniformLoc(realisticDisplayProgram, 'volumetricCloudLighting'), guiControls.volumetricCloudLighting);
+      gl.uniform1i(getUniformLoc(realisticDisplayProgram, 'lightningBloomEnabled'), hasLightningBloom);
 
 
       // Which bolt artwork this window uses, clamped to the ones that exist. The
@@ -9518,8 +9571,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.bindTexture(gl.TEXTURE_2D, ambientLightFBOs[0].texture);
 
       uploadLightningRodUniforms(realisticDisplayProgram);
+      if (hasLightningBloom)
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to hdr framebuffer
+      if (hasLightningBloom)
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
 
       gl.disable(gl.BLEND);
 
@@ -9532,6 +9589,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, hasLightningBloom ? hdrFBO.lightningBloomTexture : hdrFBO.texture);
+        gl.uniform1i(getUniformLoc(isolateBrightPartsProgram, 'lightningBloomTex'), 1);
+        gl.uniform1i(getUniformLoc(isolateBrightPartsProgram, 'hasLightningBloom'), hasLightningBloom);
         gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFBOs[0].frameBuffer); // brightPartsFrameBuffer
         gl.viewport(0, 0, bloomFBOs[0].width, bloomFBOs[0].height);
         gl.clearColor(0.0, 0.0, 0.0, 1.0);                            // background color
@@ -10349,7 +10410,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.74');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.75');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
