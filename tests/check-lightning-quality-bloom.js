@@ -12,7 +12,7 @@ assert.match(scene, /lightningBloomLight \* \(1\.0 - terrainOcclusion\)/);
 assert.match(scene, /lightningBloomOutput = vec4\(bloomSource, bloomPeak\)/);
 assert.match(scene, /lightningBloomOutput = vec4\(0\.0\)/);
 assert.match(bright, /max\(scene - vec3\(lightning\.a\), vec3\(0\.0\)\) \+ lightning\.rgb/);
-assert.match(bright, /if \(!hasLightningBloom\) return scene/);
+assert.match(bright, /if \(!hasLightningBloom\) \{/);
 assert.match(post, /if \(bloomEnabled\)/);
 assert.match(scene, /sampleLightningArtwork\(lightningTex, lightningTexCoord, gradX, gradY\)/);
 assert.equal((scene.match(/sampleLightningArtwork\(lightningNetworkTex, flashCoord, gradX, gradY\)/g)||[]).length,2);
