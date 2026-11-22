@@ -96,7 +96,9 @@ vec3 mappedColor(vec2 uv, vec3 contactLight)
 {
   vec3 color = safeSample(texture(hdrTex, uv).rgb);
   if (bloomEnabled) {
-    color += safeSample(texture(bloomTex, uv).rgb) * 0.990;
+    // The bright pass stores the pyramid at 1/12 scale, except for the
+    // lightning component, making its final contribution twelve times brighter.
+    color += safeSample(texture(bloomTex, uv).rgb) * (0.990 * 12.0);
     color += contactLight;
   }
   float hdrPeak = max(color.r, max(color.g, color.b));

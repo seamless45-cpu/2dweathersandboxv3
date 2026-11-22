@@ -13,27 +13,25 @@ uniform sampler2D lightningBloomTex;
 uniform bool hasLightningBloom;
 out vec3 fragmentColor;
 
-// Keep the white-hot core in the scene while rebuilding its bloom from the
-// strike's coloured emission. Other scene highlights follow the ordinary path.
-vec3 bloomSource(vec2 uv)
-{
-  vec3 scene = texture(hdrTex, uv).rgb;
-  if (!hasLightningBloom) return scene;
-  vec4 lightning = texture(lightningBloomTex, uv);
-  // The alpha is the channel peak, written before the bloom pass. Removing
-  // its neutral core avoids washing the coloured halo out with white light.
-  return max(scene - vec3(lightning.a), vec3(0.0)) + lightning.rgb;
-}
-
+// The pyramid is stored at one twelfth of its eventual strength. This lets us
+// brighten only lightning by 12x without overflowing the half-float pyramid:
+// its lightning component stays at the old level, and ordinary highlights are
+// divided by 12 here and restored by the post-processing composite.
+const float lightningBloomGain = 12.0;
 vec3 brightSample(vec2 uv)
 {
-  vec3 source = bloomSource(uv);
+  vec3 scene = texture(hdrTex, uv).rgb;
+  vec4 lightning = hasLightningBloom ? texture(lightningBloomTex, uv) : vec4(0.0);
+  vec3 other = hasLightningBloom ? max(scene - vec3(lightning.a), vec3(0.0)) : scene;
+  vec3 source = other + lightning.rgb;
   // An invalid HDR sample must not spread through the entire bloom pyramid.
   if (any(isnan(source)) || any(isinf(source))) return vec3(0.0);
   float peak = max(source.r, max(source.g, source.b));
-  // Extract before reducing: a one-pixel channel must not lose its highlight
-  // gain just because it shares a large bloom pixel with darker background.
-  return source * mix(0.02, 0.12, smoothstep(4.0, 40.0, peak));
+  // Keep the original gain calculation and extract before footprint reduction.
+  float gain = mix(0.02, 0.12, smoothstep(4.0, 40.0, peak));
+  // Without the optional lightning target the contributions cannot be
+  // separated, so amplify the fallback scene highlights as well.
+  return ((hasLightningBloom ? other / lightningBloomGain : other) + lightning.rgb) * gain;
 }
 
 void main()
