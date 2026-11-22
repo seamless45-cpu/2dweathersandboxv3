@@ -50,8 +50,8 @@ check('planckBlackbody exists and is the Tanner Helland blackbody fit, unit blue
   /288\.1221695283 \* pow\(t - 60\.0, -0\.0755148492\)/.test(display) &&
   /rgb \/ max\(rgb\.b, 0\.35\)/.test(display));
 
-check('discharge classes use distinct seeded colour temperatures',
-  /planckBlackbody\(30000\.0 \+ 10000\.0/.test(display) &&
+check('special classes retain their intrinsic intensity calculations before upstream colorization',
+  /upstreamColorize\(strikeChannel\)/.test(display) &&
   /planckBlackbody\(18000\.0 \+ 6000\.0/.test(display) &&
   /planckBlackbody\(11000\.0 \+ 4000\.0/.test(display) &&
   /planckBlackbody\(\(isPositiveCC \? 12000\.0 : 22000\.0\)/.test(display) &&
