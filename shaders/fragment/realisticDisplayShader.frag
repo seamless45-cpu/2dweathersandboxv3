@@ -521,18 +521,28 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   // natural channel. Angularity is deliberately small: it must never read as a
   // second channel or a tangle, just a rougher single line.
   float boltHScale = lightningHeightScale();
+  float boltJagAmp = 0.010 * boltHScale; // ~120 m of lateral meander at 12 km
+  // The three triangle waves have total amplitude at most 0.99 * amp,
+  // and the sine envelope is at most one. Reject pixels that cannot reach
+  // the existing artwork bounds even after the warp (including rod shear).
+  // A small margin keeps the bound conservative at floating-point edges.
+  float maxJagU = 1.001 * boltJagAmp / (lightningTexAspect * spanY);
+  if (lightningTexCoord.x < 0.01 - maxJagU || lightningTexCoord.x > 1.01 + maxJagU)
+    return vec3(0.0);
+
   float boltSpanKm = spanY * cellHeight * float(resolution.y) * 0.001;
   float boltSeed = random2d(vec2(pos.x * 12.9, pos.y * 7.1)) * 4.0 + 0.5;
-  float boltJagAmp = 0.010 * boltHScale; // ~120 m of lateral meander at 12 km
   float boltT = clamp(lightningTexCoord.y, 0.0, 1.0);
   float boltEnv = sin(PI * boltT);
   float boltJag = boltEnv * fractalLateralJag(boltT, boltSpanKm, boltSeed, boltJagAmp);
-  float boltJagDeriv = cos(PI * boltT) * PI * fractalLateralJag(boltT, boltSpanKm, boltSeed, boltJagAmp)
-                     + boltEnv * fractalLateralJagDeriv(boltT, boltSpanKm, boltSeed, boltJagAmp);
   lightningTexCoord.x += boltJag / (lightningTexAspect * spanY);
 
   if (lightningTexCoord.x < 0.01 || lightningTexCoord.x > 1.01 || lightningTexCoord.y < 0.01 || lightningTexCoord.y > 1.01) // prevent edge effect when mipmapping
     return vec3(0);
+
+  // The gradient is only needed for fragments that survived the exact bounds.
+  float boltJagDeriv = cos(PI * boltT) * PI * fractalLateralJag(boltT, boltSpanKm, boltSeed, boltJagAmp)
+                     + boltEnv * fractalLateralJagDeriv(boltT, boltSpanKm, boltSeed, boltJagAmp);
 
   // Explicit gradients avoid undefined derivatives in the divergent slot loop.
   // Include the rod-tip shear so mip selection tracks the actual projected tile.
