@@ -21,9 +21,9 @@ for(const format of ['gl.RGBA32F','gl.RG32F','gl.R32F'])
  assert(app.includes(`compactPrecipitationFeedback ? gl.RGBA16F : ${format}`));
 assert.match(app,/compactPrecipitationFeedback \? gl.HALF_FLOAT : gl.FLOAT/);
 assert.match(app,/gl\.checkFramebufferStatus\(gl\.FRAMEBUFFER\) !== gl\.FRAMEBUFFER_COMPLETE/);
-assert.match(app,/gl\.getBufferSubData\(gl\.COPY_READ_BUFFER, 0, dropletSample\)/);
+assert.match(app,/gl\.copyBufferSubData\(gl\.COPY_READ_BUFFER, gl\.COPY_WRITE_BUFFER, 0, 0, values\.byteLength\)/);
 assert.match(app,/precipitationEven \? precipVertexBuffer_1 : precipVertexBuffer_0/);
-assert.match(app,/if \(dropletSample\[i\] < 0\) inactiveCount\+\+/);
+assert.match(app,/if \(values\[i\] < 0\) result\+\+/);
 assert.match(app,/gl\.uniform1f\(gl\.getUniformLocation\(precipitationProgram, 'inactiveDroplets'\), NUM_DROPLETS\)/);
 assert.match(precip,/compactFeedback \? 1\.0 : iterNum/);
 assert.match(precip,/compactFeedback \? vec4\(2\.0, 2\.0, 0\.0, 1\.0\)/);

@@ -45,7 +45,7 @@ const d = fakeGL(); const failed = context.createLightningReadback(d.gl, new Flo
 failed.request({}, {iteration:6}); d.setWait(d.gl.WAIT_FAILED); assert.strictEqual(failed.poll(), null);
 assert.strictEqual(failed.request({}, {iteration:7}).result.iteration,7);
 assert.match(app, /completedLightning\.generation !== lightningReadbackGeneration/);
-assert.match(app, /if \(!compactDropletSample \|\| compactDropletSample\.length !== NUM_DROPLETS \* 5\)/);
+assert.match(app, /createPrecipitationCountReadback\(gl, NUM_DROPLETS, compactPrecipitationFeedback\)/);
 const poll = app.slice(app.indexOf('    #pollAmbientSoundReadback()'), app.indexOf('    #cancelAmbientSoundReadback()'));
 assert.match(poll, /if \(!this\.#ambientWeatherReadbackBuffer\)/);
 assert.doesNotMatch(poll, /gl\.deleteBuffer\(this\.#ambientWallReadbackBuffer\)/);
