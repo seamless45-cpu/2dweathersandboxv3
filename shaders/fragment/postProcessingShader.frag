@@ -70,7 +70,7 @@ vec3 safeSample(vec3 value)
 // A tight halo from the actual channel source, not the broad storm bloom.
 // Four bilinear diagonal taps form a small 3x3 footprint and keep the colour
 // attached to thin or branching channels at screen-pixel resolution.
-vec3 lightningContactHalo(vec2 uv)
+vec4 lightningContactHalo(vec2 uv)
 {
   vec2 stepUV = 0.5 * max(canvasTexelSize, outputTexelSize);
   vec3 a = safeSample(texture(lightningHaloTex, uv + vec2(-stepUV.x, -stepUV.y)).rgb);
@@ -85,7 +85,11 @@ vec3 lightningContactHalo(vec2 uv)
     light *= smoothstep(2.0, 8.0, peak);
   // Bound the near halo separately from the large bloom pyramid. Strong
   // strikes remain local instead of turning the whole sky into a bright blob.
-  return 0.32 * light / (1.0 + peak / 4.0);
+  // Whiten only the tight, lightning-sourced center. The broad bloom stays
+  // chromatic; a smooth intensity transition avoids a hard white outline.
+  // Never whiten ordinary scene highlights when the optional source is absent.
+  float whiteCenter = hasLightningBloom ? smoothstep(0.15, 8.0, peak) : 0.0;
+  return vec4(0.32 * light / (1.0 + peak / 4.0), whiteCenter);
 }
 
 vec3 mappedColor(vec2 uv, vec3 contactLight)
@@ -124,9 +128,12 @@ void main()
   // temporal-AA or 24-tap motion-blur sample. Add its display-space increment
   // after those effects so they cannot detach it from the current channel.
   vec3 contactIncrement = vec3(0.0);
+  float whiteCenter = 0.0;
   if (bloomEnabled) {
-    vec3 withContact = mappedColor(texCoord, lightningContactHalo(texCoord));
+    vec4 contact = lightningContactHalo(texCoord);
+    vec3 withContact = mappedColor(texCoord, contact.rgb);
     contactIncrement = max(withContact - outputCol, vec3(0.0));
+    whiteCenter = contact.a;
   }
 
   // The five mappedColor taps that clamp history are shared by temporal AA and
@@ -276,5 +283,8 @@ void main()
   */
 
   outputCol = clamp(outputCol + contactIncrement, 0.0, 1.0);
+  // Apply in display space so HDR tone mapping cannot tint the bright center
+  // back to the background colour or expose the narrow channel through it.
+  outputCol = mix(outputCol, vec3(1.0), whiteCenter);
   fragmentColor = vec4(outputCol, 1.0);
 }
