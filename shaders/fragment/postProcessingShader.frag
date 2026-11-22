@@ -17,6 +17,9 @@ uniform float exposure;
 
 uniform sampler2D hdrTex;
 uniform sampler2D bloomTex;
+uniform sampler2D lightningHaloTex;
+uniform bool hasLightningBloom;
+uniform vec2 canvasTexelSize;
 uniform sampler2D historyTex;
 uniform vec2 outputTexelSize;
 uniform bool bloomEnabled;
@@ -64,11 +67,34 @@ vec3 safeSample(vec3 value)
   return clamp(value, vec3(0.0), vec3(hdrReadCeiling));
 }
 
-vec3 mappedColor(vec2 uv)
+// A tight halo from the actual channel source, not the broad storm bloom.
+// Four bilinear diagonal taps form a small 3x3 footprint and keep the colour
+// attached to thin or branching channels at screen-pixel resolution.
+vec3 lightningContactHalo(vec2 uv)
+{
+  vec2 stepUV = 0.5 * max(canvasTexelSize, outputTexelSize);
+  vec3 a = safeSample(texture(lightningHaloTex, uv + vec2(-stepUV.x, -stepUV.y)).rgb);
+  vec3 b = safeSample(texture(lightningHaloTex, uv + vec2( stepUV.x, -stepUV.y)).rgb);
+  vec3 c = safeSample(texture(lightningHaloTex, uv + vec2(-stepUV.x,  stepUV.y)).rgb);
+  vec3 d = safeSample(texture(lightningHaloTex, uv + vec2( stepUV.x,  stepUV.y)).rgb);
+  vec3 light = (a + b + c + d) * 0.25;
+  float peak = max(light.r, max(light.g, light.b));
+  // If the optional lightning source could not be allocated, the bound HDR
+  // scene is a conservative fallback. Only its strongest highlights qualify.
+  if (!hasLightningBloom)
+    light *= smoothstep(2.0, 8.0, peak);
+  // Bound the near halo separately from the large bloom pyramid. Strong
+  // strikes remain local instead of turning the whole sky into a bright blob.
+  return 0.32 * light / (1.0 + peak / 4.0);
+}
+
+vec3 mappedColor(vec2 uv, vec3 contactLight)
 {
   vec3 color = safeSample(texture(hdrTex, uv).rgb);
-  if (bloomEnabled)
+  if (bloomEnabled) {
     color += safeSample(texture(bloomTex, uv).rgb) * 0.990;
+    color += contactLight;
+  }
   float hdrPeak = max(color.r, max(color.g, color.b));
   color *= min(1.0, hdrReadCeiling / max(hdrPeak, 1e-6));
 
@@ -86,9 +112,22 @@ vec3 mappedColor(vec2 uv)
   return pow(max(color, vec3(0.0)), ONE_OVER_GAMMA);
 }
 
+vec3 mappedColor(vec2 uv)
+{
+  return mappedColor(uv, vec3(0.0));
+}
+
 void main()
 {
   vec3 outputCol = mappedColor(texCoord);
+  // Evaluate the small local halo only once, not for every optional FXAA,
+  // temporal-AA or 24-tap motion-blur sample. Add its display-space increment
+  // after those effects so they cannot detach it from the current channel.
+  vec3 contactIncrement = vec3(0.0);
+  if (bloomEnabled) {
+    vec3 withContact = mappedColor(texCoord, lightningContactHalo(texCoord));
+    contactIncrement = max(withContact - outputCol, vec3(0.0));
+  }
 
   // The five mappedColor taps that clamp history are shared by temporal AA and
   // the motion blur below (history there is clamped to the same box), so they
@@ -236,5 +275,6 @@ void main()
     }
   */
 
+  outputCol = clamp(outputCol + contactIncrement, 0.0, 1.0);
   fragmentColor = vec4(outputCol, 1.0);
 }

@@ -7176,8 +7176,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.76'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.76')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.77'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.77')
   ]);
 
   const [
@@ -8144,7 +8144,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.76');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.77');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8493,6 +8493,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform1i(gl.getUniformLocation(postProcessingProgram, 'hdrTex'), 0);
   gl.uniform1i(gl.getUniformLocation(postProcessingProgram, 'bloomTex'), 1);
   gl.uniform1i(gl.getUniformLocation(postProcessingProgram, 'historyTex'), 2);
+  gl.uniform1i(gl.getUniformLocation(postProcessingProgram, 'lightningHaloTex'), 5);
 
 
   gl.useProgram(isolateBrightPartsProgram);
@@ -9684,6 +9685,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.uniform2f(getUniformLoc(postProcessingProgram, 'motionBlurResolution'), sim_res_x, sim_res_y);
       gl.uniform1f(getUniformLoc(postProcessingProgram, 'motionBlurIterPerFrame'), motionBlurSimulationSteps);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'motionBlurWrap'), guiControls.wrapHorizontally);
+      // Unit 5 is always a float texture, including when the optional source
+      // is unavailable or bloom is off (samplers are validated even if gated).
+      gl.activeTexture(gl.TEXTURE5);
+      gl.bindTexture(gl.TEXTURE_2D, hasLightningBloom ? hdrFBO.lightningBloomTexture : hdrFBO.texture);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'hasLightningBloom'), hasLightningBloom);
+      gl.uniform2f(getUniformLoc(postProcessingProgram, 'canvasTexelSize'), 1.0 / canvas.width, 1.0 / canvas.height);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'bloomEnabled'), guiControls.bloomEnabled);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'toneMappingEnabled'), guiControls.filmicToneMapping);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'fxaaEnabled'), guiControls.fxaaEnabled);
@@ -10410,7 +10417,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.76');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.77');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
