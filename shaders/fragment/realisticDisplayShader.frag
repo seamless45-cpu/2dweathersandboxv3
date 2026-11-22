@@ -166,6 +166,18 @@ float lightningIntensityOverTime(float Tin, vec2 lightningPos, float intensity)
   return max(curve, firstReturnIntensity(Tin, intensity, 0.65, 0.78));
 }
 
+// Niels747's ordinary CG return curve: the leader occupies the first unit,
+// then the original position-seeded restrike train and decay run unchanged.
+float upstreamGroundIntensity(float time, vec2 pos, float intensity)
+{
+  float T0 = time - 1.0;
+  float repeatPeriod = map_range(random2d(pos), 0.0, 1.0, 1.5, 3.0);
+  float flashes = floor(map_range(random2d(pos * 2.737250), 0.0, 1.0, 1.0, max(intensity - 0.5, 0.0) * 2.0));
+  float minT = max(T0 - repeatPeriod * flashes, 0.0);
+  float T = max(mod(T0, repeatPeriod), minT);
+  return max(1.0 / (0.05 + pow(T * 2.0, 3.0)) - 0.005, 0.0) * pow(intensity, 2.0);
+}
+
 // Visual timeline in the existing strike clock. A stepped leader grows from
 // the source to the attachment point; after attachment a faster bright front
 // runs back up the established path. This is an animation approximation:
@@ -519,25 +531,23 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   if (lightningTexCoord.x < 0.01 || lightningTexCoord.x > 1.01)
     return vec3(0.0);
 
-  float shear = rodHit && lightningTexCoord.y > 0.0 && lightningTexCoord.y < 1.0
-    ? (originalBoltBottomU - 0.5) * 1.25 * pow(lightningTexCoord.y, 0.25) : 0.0;
-  vec2 gradX = vec2(screenTexDx.x * scaleMult * aspectRatios[0] / lightningTexAspect
-                    - shear * screenTexDx.y * scaleMult, -screenTexDx.y * scaleMult);
-  vec2 gradY = vec2(screenTexDy.x * scaleMult * aspectRatios[0] / lightningTexAspect
-                    - shear * screenTexDy.y * scaleMult, -screenTexDy.y * scaleMult);
-  float pixVal = lightningCoverage(sampleLightningArtwork(lightningTex, lightningTexCoord, gradX, gradY).b, 0.004);
-
-  const float mainBoltBrightness = 30000.;
-
-  // A high cutoff erased averaged subpixel channels. Keep full-white peak
-  // radiance unchanged while allowing filtered partial coverage to survive.
-  const float brightnessThreshold = 0.004;
-  currentLightningIntensity *= mainBoltBrightness;
-
-  pixVal *= 0.05;
-
+  // Niels747 uses the base artwork with linear filtering, not a mipmapped
+  // coverage approximation. The original threshold keeps faint forks from
+  // becoming bright, parallel-looking channels during the return stroke.
+  float pixVal = textureLod(lightningTex, lightningTexCoord, 0.0).b;
+  const float branchShowFactor = 2.5;
+  const float leaderBrightness = 50000.0;
+  const float mainBoltBrightness = 100000.0;
+  float brightnessThreshold = clamp(1.0 - lightningTime * branchShowFactor +
+                                    lightningTexCoord.y * branchShowFactor, 0.0, 1.0);
+  if (lightningTime > 1.0) {
+    brightnessThreshold = 0.95;
+    currentLightningIntensity *= mainBoltBrightness;
+  } else {
+    currentLightningIntensity = leaderBrightness;
+  }
+  pixVal = max(pixVal - brightnessThreshold, 0.0);
   pixVal *= currentLightningIntensity;
-  pixVal *= groundChannelStage(lightningTime, clamp(lightningTexCoord.y, 0.0, 1.0));
 
   // Approximate channel temperatures vary by discharge and by strike; atmospheric
   // filtering and exposure also affect the observed colour.
@@ -1069,7 +1079,8 @@ vec4 computeAirColor(vec2 bndFragCoord)
 
   // Every strike in the slot array is drawn until its own animation is over.
   // Slots are independent, so a new strike never truncates a running one.
-  vec3 lightningBoltLight = vec3(0.0); // cloud-to-ground strokes
+  vec3 lightningBoltLight = vec3(0.0); // special discharge channels
+  vec3 upstreamGroundLight = vec3(0.0); // ordinary CG retains upstream radiance
   for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
     if (!inLightningWorldTile())
       break; // no channel, crawler or lightning illumination in repeated tiles
@@ -1089,14 +1100,17 @@ vec4 computeAirColor(vec2 bndFragCoord)
       continue;
     if (iterNum < lightningStartIterNum || (metaArt
         ? iterNum >= lightningSlotEnd(lightningData, lightningMeta)
-        : iterNum >= strikeAnimEnd(lightningData)))
+        : iterNum >= parentStrikeAnimEnd(lightningData, lightningMeta)))
       continue;
 
     vec2 lightningPos = lightningData.xy;
     float lightningTime = metaArt ? (iterNum - lightningStartIterNum) / 20.0 : calcLightningTime(lightningStartIterNum);
     // Every strike starts directly on the trigger iteration with zero fixed delay.
-    float currentLightningIntensity = lightningIntensityOverTime(lightningTime, lightningPos, lightningData[INTENSITY]);
-    if (currentLightningIntensity <= 0.0)
+    bool ordinaryCG = lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY && abs(lightningMeta.y) < 0.25;
+    float currentLightningIntensity = ordinaryCG
+      ? upstreamGroundIntensity(lightningTime, lightningPos, lightningData[INTENSITY])
+      : lightningIntensityOverTime(lightningTime, lightningPos, lightningData[INTENSITY]);
+    if (currentLightningIntensity <= 0.0 && !(ordinaryCG && lightningTime <= 1.0))
       continue;
 
     // The two kinds, two channels: a stroke is one channel down the picture, a
@@ -1193,7 +1207,12 @@ vec4 computeAirColor(vec2 bndFragCoord)
       coreReference = (isPositiveIC ? 3600.0 : 2400.0) * currentLightningIntensity;
     else
       coreReference = 1500.0 * currentLightningIntensity;
-    lightningBoltLight += apparentChannelColor(strikeChannel, lightningIlluminationTint, coreReference);
+    if (!isFlash && !isExternalPositive && !isCloudToCloud) {
+      // Preserve the variant tint, rather than forcing the upstream fixed blue.
+      upstreamGroundLight += strikeChannel * lightningIlluminationTint;
+    } else {
+      lightningBoltLight += apparentChannelColor(strikeChannel, lightningIlluminationTint, coreReference);
+    }
     if (lightningBloomEnabled) {
       float strikePeak = max(strikeChannel.r, max(strikeChannel.g, strikeChannel.b));
       lightningBloomLight += strikePeak * lightningIlluminationTint;
@@ -1240,7 +1259,7 @@ vec4 computeAirColor(vec2 bndFragCoord)
   }
 
   vec3 visibleLightning = displayLightningRadiance(lightningBoltLight / (1. + cloudDensity * 100.0));
-  emittedLight += visibleLightning;
+  emittedLight += visibleLightning + upstreamGroundLight / (1. + cloudDensity * 100.0);
   if (lightningBloomEnabled) {
     vec3 glowColor = displayLightningRadiance(lightningBloomLight / (1. + cloudDensity * 100.0));
     float glowPeak = max(glowColor.r, max(glowColor.g, glowColor.b));
@@ -1649,10 +1668,13 @@ void main()
       if (abs(strikeMeta.y - 5.0) < 0.25) continue; // legacy upward slot
       if (iterNum < strikeData[START_ITERNUM] || (artificialMeta(strikeMeta.z)
           ? iterNum >= lightningSlotEnd(strikeData, strikeMeta)
-          : iterNum >= strikeAnimEnd(strikeData)))
+          : iterNum >= parentStrikeAnimEnd(strikeData, strikeMeta)))
         continue; // this strike is not running
       float rodStrikeT = artificialMeta(strikeMeta.z) ? (iterNum - strikeData[START_ITERNUM]) / 20.0 : calcLightningTime(strikeData[START_ITERNUM]);
-      float slotGlow = lightningIntensityOverTime(rodStrikeT, strikeData.xy, strikeData[INTENSITY]);
+      bool rodOrdinaryCG = strikeData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY && abs(strikeMeta.y) < 0.25;
+      float slotGlow = rodOrdinaryCG
+        ? upstreamGroundIntensity(rodStrikeT, strikeData.xy, strikeData[INTENSITY])
+        : lightningIntensityOverTime(rodStrikeT, strikeData.xy, strikeData[INTENSITY]);
       if (strikeData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY && abs(strikeMeta.y - 1.0) < 0.25 && strikeMeta.w >= 0.5) {
         bool rodStrikeIsHyperbolt = strikeMeta.w >= 1.5;
         float rodEndWindow = rodStrikeIsHyperbolt ? 0.3 : 2.824;

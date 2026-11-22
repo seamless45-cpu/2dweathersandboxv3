@@ -82,7 +82,7 @@ check('the display curve runs on the lifetime-stretched clock so the whole train
 /* ------------------------------------------------------------- branches */
 
 check('ordinary CG retains the upstream artwork forks instead of extra procedural leaders',
-  /sampleLightningArtwork\(lightningTex, lightningTexCoord, gradX, gradY\)\.b/.test(display) &&
+  /textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.b/.test(display) &&
   !/ccEvalBranch\(pKm, anchor, bDir, bLen/.test(display));
 
 check('external positives fork per class budget: all families use zero or one fork',

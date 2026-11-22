@@ -90,7 +90,7 @@ check('a flash lights the slab it lives in and a stroke lights the cloud under i
   /float cgDx = lightningPos\.x - texCoord\.x;\s*\n\s*vec2 dist = vec2\(cgDx, max\(\(abs\(lightningPos\.y \/ 2\. - texCoord\.y\) - 0\.1 \* lightningHeightScale\(\)\), 0\.\)\);/.test(displayShader),
   'the shipped lobe is a point below the strike (clipped at the tile edge); a network is a slab');
 check('stroke uses explicit screen-space gradients and preserves its own bolt artwork',
-  /sampleLightningArtwork\(lightningTex, lightningTexCoord, gradX, gradY\)/.test(displayShader) &&
+  /textureLod\(lightningTex, lightningTexCoord, 0\.0\)/.test(displayShader) &&
   /screenTexDx = dFdx\(texCoord\)/.test(displayShader) &&
   !/flash \? texture/.test(displayShader));
 check('both network and bolt artwork have mip-filtered textures',
@@ -176,7 +176,7 @@ const softHdrClamp = (value) => {
     Number.isFinite(HDR_CEILING) && HDR_CEILING > 1000 && HDR_CEILING < 65504,
     'ceiling ' + HDR_CEILING + ', 16F limit 65504');
   check('a cloud-to-ground stroke retains substantial HDR brightness',
-    boltBrightness >= 30000 && boltBrightness < HDR_CEILING * 1.5,
+    boltBrightness === 100000,
     'stroke ' + boltBrightness + ', ceiling ' + HDR_CEILING);
   check('the scene fragment is written through that compression, not a clamp',
     /fragmentColor = vec4\(softHdrClamp\(max\(color \* finalLight \* opacity, 0\.0\)[\s\S]{0,64}?\+ emittedLight \* \(1\.0 - terrainOcclusion\) \+ rodGlow\), opacity\);/

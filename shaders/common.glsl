@@ -353,13 +353,22 @@ float artificialMetaRawZ(float metaZ)
   return metaZ >= 10.0 ? metaZ - 10.0 : metaZ;
 }
 
+// Ordinary CG uses the upstream one-unit leader before its return curve.
+// Keep the slot alive for that extra unit; special variants retain their clocks.
+float parentStrikeAnimEnd(vec4 strike, vec4 meta)
+{
+  float end = strikeAnimEnd(strike);
+  bool ordinaryCG = strike[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY && abs(meta.y) < 0.25;
+  return end + (ordinaryCG && strike[START_ITERNUM] > 0.0 ? 5.0 : 0.0);
+}
+
 // Optical effects need enough simulation steps to be seen at up to 50 steps
 // per rendered frame. Ordinary strikes and superbolts retain their own timing.
 float lightningSlotEnd(vec4 strike, vec4 meta)
 {
   if (strike[START_ITERNUM] <= 0.0)
     return 0.0;
-  float end = strikeAnimEnd(strike);
+  float end = parentStrikeAnimEnd(strike, meta);
   // Artificial CG stores -1 in otherwise-unused targetY and plays its parent
   // channel at quarter speed so a manual click survives high iteration rates.
   if (abs(meta.y - 5.0) < 0.25)

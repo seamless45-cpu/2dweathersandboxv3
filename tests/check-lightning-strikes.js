@@ -227,10 +227,10 @@ check('the slot count agrees between app.js, common.glsl and this test',
     !/float T0 = Tin - 1\.;/.test(displayShader),
     'the curve runs on the lifetime-stretched clock (IC 0.72x, external +CG 0.85x, +CC 1.25x), sharing the slot manager clock');
 
-  check('neither IC nor CG delays main bolt brightness behind a lightningTime > 1.0 gate',
-    !/if \(lightningTime > 1\.0\)/.test(displayShader) &&
-    !/currentLightningIntensity = leaderBrightness;/.test(displayShader),
-    'displayLightning and displayFlash must strike immediately when triggered');
+  check('ordinary CG uses the upstream leader and return-stroke transition',
+    /if \(lightningTime > 1\.0\)/.test(displayShader) &&
+    /currentLightningIntensity = leaderBrightness;/.test(displayShader),
+    'the leader precedes the original return stroke');
 
   check('both IC and CG sample the curve directly from the strike trigger iteration',
     /lightningIntensityOverTime\(lightningTime, lightningPos, lightningData\[INTENSITY\]\)/.test(displayShader),
@@ -259,18 +259,16 @@ check('the slot count agrees between app.js, common.glsl and this test',
     return 255 * Math.pow(aces, 1 / 2.2);
   };
 
-  check('the CG channel uses a reduced HDR gain',
-    mainBoltBrightness === 30000,
+  check('the CG channel uses the upstream HDR gain',
+    mainBoltBrightness === 100000,
     'mainBoltBrightness ' + mainBoltBrightness);
   check('the channel is the raw curve times that, with no easing',
     /pixVal \*= currentLightningIntensity;/.test(displayShader) &&
     !/cgChannelFalloff/.test(displayShader) && !/curveShare/.test(displayShader) &&
     !/channelBrightness/.test(displayShader) && !/lightningCurvePeak/.test(displayShader),
     'the curve goes straight into the gain, as it did in the shipped shader');
-  check('CG channel threshold is active immediately on trigger without waiting for a leader crawl',
-    /const float brightnessThreshold = 0\.004;/.test(cgSection) && /pixVal \*= 0\.05/.test(cgSection) &&
-    !/brightnessThreshold = 1\. - lightningTime \* branchShowFactor;/.test(displayShader),
-    'the full bolt reaches ground immediately when triggered');
+  check('CG uses the upstream leader threshold and return-stroke cutoff',
+    /brightnessThreshold = 0\.95;/.test(cgSection) && /branchShowFactor = 2\.5;/.test(cgSection));
 
   // the channel, iteration by iteration, from the strike's booking to one past its end
   const channelOverTime = (strike) => {
@@ -452,8 +450,8 @@ check('no shader gates a running strike on the worst-case length any more',
   !/slotStart < LIGHTNING_ANIM_ITERS/.test(precipitationVert),
   'LIGHTNING_ANIM_ITERS is a bound now, not a timer');
 check('the display pass draws a strike while it has light, and not for a fixed time',
-  displayShader.split('iterNum >= strikeAnimEnd(lightningData)').length - 1 === 1 &&
-  displayShader.includes('iterNum >= strikeAnimEnd(strikeData)'),
+  displayShader.includes('iterNum >= parentStrikeAnimEnd(lightningData, lightningMeta)') &&
+  displayShader.includes('iterNum >= parentStrikeAnimEnd(strikeData, strikeMeta)'),
   'expected the strike slot loop plus the rod tip glow to use strikeAnimEnd');
 check('strikeAnimEnd reads the same curve the display does',
   /strike\.xy \* 2\.737250/.test(common) &&

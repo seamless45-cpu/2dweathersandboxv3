@@ -14,7 +14,7 @@ assert.match(scene, /lightningBloomOutput = vec4\(0\.0\)/);
 assert.match(bright, /outputCol \*= 0\.02/);
 assert.doesNotMatch(bright, /lightningBloomTex/);
 assert.match(post, /if \(bloomEnabled\)/);
-assert.match(scene, /sampleLightningArtwork\(lightningTex, lightningTexCoord, gradX, gradY\)/);
+assert.match(scene, /textureLod\(lightningTex, lightningTexCoord, 0\.0\)/);
 assert.equal((scene.match(/sampleLightningArtwork\(lightningNetworkTex, flashCoord, gradX, gradY\)/g)||[]).length,2);
 assert.match(scene, /textureGrad\(artworkTex, uv - major \* 0\.25, dx, dy\)/);
 assert.match(scene, /textureGrad\(artworkTex, uv \+ major \* 0\.25, dx, dy\)/);

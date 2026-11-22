@@ -6,7 +6,7 @@
  * transfer RG bytes. Only plain data crosses the worker boundary.
  */
 if (typeof importScripts === 'function')
-  importScripts('./upstreamLightningGenerator.js?v=2026-11-16.90');
+  importScripts('./upstreamLightningGenerator.js?v=2026-11-16.91');
 
 onmessage = (event) => {
   const msg = event.data || {};
@@ -23,7 +23,9 @@ onmessage = (event) => {
     for (let i = 0; i < width * height; i++) {
       packed[i * 3] = artwork.data[i * 2];
       packed[i * 3 + 1] = artwork.data[i * 2 + 1];
-      packed[i * 3 + 2] = Math.round(original[i * 4] * original[i * 4 + 3] / 255);
+      // Upstream uploads the ImageData RGB without premultiplying alpha and
+      // samples its red channel. Preserve that exact intensity in our blue slot.
+      packed[i * 3 + 2] = original[i * 4];
     }
     artwork.data = packed;
   }
