@@ -253,21 +253,20 @@ const softHdrClamp = (value) => {
     'the curve times mainBoltBrightness, straight - no envelope and no easing of the tail');
 }
 
-// The bloom pass retains ambient and highlight energy; its RGB shoulders
-// preserve a visible falloff instead of clipping a bright strike into a slab.
+// Pin the requested bright HDR bloom; strong strikes can clip to a flat slab.
 {
   const brightParts = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'isolateBrightPartsShader.frag'), 'utf8');
   const post = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'postProcessingShader.frag'), 'utf8');
 
   check('the bright pass preserves ambient bloom and boosts HDR highlights',
-    /mix\(0\.02, 0\.12, smoothstep\(4\.0, 40\.0, peak\)\)/.test(brightParts) && /vec3 highlight = sum \/ float\(countX \* countY\);/.test(brightParts),
+    /mix\(0\.02, 0\.12, smoothstep\(4\.0, 40\.0, peak\)\)/.test(brightParts) && /fragmentColor = sum \/ float\(countX \* countY\);/.test(brightParts),
     'one multiply, the shipped one');
   check('nothing in the bright pass singles the channel out',
     !/brightKnee/.test(brightParts) && !/brightCeiling/.test(brightParts) &&
     !/brightGain/.test(brightParts) && !/ambientGain/.test(brightParts),
     'no knee, no ceiling, no second gain');
-  check('the bloom composite uses a hue-preserving shoulder',
-    /bloom \* \(0\.7 \/ \(0\.7 \+ bloomPeak\)\)/.test(post));
+  check('the bloom composite adds HDR light before tone mapping',
+    /color \+= safeSample\(texture\(bloomTex, uv\)\.rgb\) \* 0\.990;/.test(post));
   check('the tonemap reads both buffers through a NaN and infinity guard',
     /vec3 safeSample\(vec3 value\)/.test(post) &&
     /color = safeSample\(texture\(hdrTex, uv\)\.rgb\);/.test(post),
