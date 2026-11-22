@@ -6,21 +6,11 @@ const fs = require("fs"),
   const bin = (await import(require.resolve("@sparticuz/chromium"))).default;
   const file = "shaders/fragment/isolateBrightPartsShader.frag",
     current = fs.readFileSync(file, "utf8"),
-    old = current
-      .replace(
-        "return source * mix(0.02, 0.12, smoothstep(4.0, 40.0, peak));",
-        "vec3 highlight = source * mix(0.02, 0.12, smoothstep(4.0, 40.0, peak)); float highlightPeak = max(highlight.r, max(highlight.g, highlight.b)); return highlight * (log2(1.0 + highlightPeak) / max(highlightPeak, 1e-6));",
-      )
-      .replace(
-        "vec3 highlight = sum / float(countX * countY);\n  float highlightPeak = max(highlight.r, max(highlight.g, highlight.b));\n  fragmentColor = highlight * (log2(1.0 + highlightPeak) / max(highlightPeak, 1e-6));",
-        "fragmentColor = sum / float(countX * countY);",
-      ),
     app = fs.readFileSync("app.js", "utf8"),
     helper = app.slice(
       app.indexOf("function createPrecipitationCountReadback("),
       app.indexOf("\nfunction createHdrFBO()"),
     );
-  if (old === current) throw Error("baseline shader was not reconstructed");
   let b = await chromium.launch({
     executablePath: await bin.executablePath(),
     args: [
@@ -33,7 +23,7 @@ const fs = require("fs"),
   });
   let page = await b.newPage();
   let result = await page.evaluate(
-    async ({ old, current, helper }) => {
+    async ({ current, helper }) => {
       let canvas = document.createElement("canvas"),
         gl = canvas.getContext("webgl2");
       if (
@@ -96,8 +86,7 @@ const fs = require("fs"),
           throw Error("fbo");
         return f;
       }
-      let oldp = program(old),
-        newp = program(current);
+      let currentProgram = program(current);
       function render(p, ratio, uniform) {
         const n = 64,
           d = n / ratio;
@@ -141,8 +130,7 @@ const fs = require("fs"),
           bloom.push({
             ratio,
             uniform,
-            old: render(oldp, ratio, uniform),
-            new: render(newp, ratio, uniform),
+            output: render(currentProgram, ratio, uniform),
             error: gl.getError(),
           });
       const factory = new Function(
@@ -178,16 +166,14 @@ const fs = require("fs"),
       }
       return { bloom, counts };
     },
-    { old, current, helper },
+    { current, helper },
   );
   console.log(JSON.stringify(result, null, 2));
   if (
     result.bloom.some(
-      (x) =>
-        x.error ||
-        (!x.uniform && x.new[0] < x.old[0] - 0.001) ||
-        (!x.uniform && x.ratio > 1 && x.new[0] <= x.old[0] + 0.01) ||
-        (x.uniform && Math.abs(x.old[0] - x.new[0]) > 0.001),
+      (x) => x.error || x.output[0] <= 0 ||
+        Math.abs(x.output[1] / x.output[0] - 0.45) > 0.002 ||
+        (x.uniform && Math.abs(x.output[0] - 120) > 0.05)
     ) ||
     result.counts.some((x) => x.error || x.count !== (x.compact ? 2 : 7))
   )

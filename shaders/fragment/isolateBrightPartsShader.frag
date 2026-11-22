@@ -59,12 +59,5 @@ void main()
       sum += brightSample(texCoord + dx * sx + dy * sy);
     }
   }
-  // Integrate HDR energy before compression. Compressing every tap first
-  // throws away most energy from a subpixel channel that shares a bloom pixel
-  // with dark air (Jensen's inequality); averaging first preserves coverage.
-  // The shared RGB shoulder still prevents a flat saturated blur and keeps
-  // each variant's hue. Uniform fields keep the same brightness as before.
-  vec3 highlight = sum / float(countX * countY);
-  float highlightPeak = max(highlight.r, max(highlight.g, highlight.b));
-  fragmentColor = highlight * (log2(1.0 + highlightPeak) / max(highlightPeak, 1e-6));
+  fragmentColor = sum / float(countX * countY);
 }

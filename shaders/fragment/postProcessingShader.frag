@@ -91,9 +91,10 @@ vec3 lightningContactHalo(vec2 uv)
 vec3 mappedColor(vec2 uv, vec3 contactLight)
 {
   vec3 color = safeSample(texture(hdrTex, uv).rgb);
-  vec3 bloom = vec3(0.0);
-  if (bloomEnabled)
-    bloom = safeSample(texture(bloomTex, uv).rgb) * 0.990 + contactLight;
+  if (bloomEnabled) {
+    color += safeSample(texture(bloomTex, uv).rgb) * 0.990;
+    color += contactLight;
+  }
   float hdrPeak = max(color.r, max(color.g, color.b));
   color *= min(1.0, hdrReadCeiling / max(hdrPeak, 1e-6));
 
@@ -107,17 +108,6 @@ vec3 mappedColor(vec2 uv, vec3 contactLight)
     color *= mappedPeak / max(peak, 1e-6);
   } else {
     color /= max(1.0, peak);
-  }
-  if (bloomEnabled) {
-    // Adding bloom before the scene's highlight clamp can make it disappear:
-    // when the scene is already above white the clamp divides both by the
-    // same peak. Composite the bounded bloom in linear display space instead,
-    // with a screen blend so it can brighten unclipped channels without hard
-    // clipping into a flat patch. Exposure still controls the glow.
-    bloom *= max(exposure, 0.0);
-    float bloomPeak = max(bloom.r, max(bloom.g, bloom.b));
-    vec3 glow = bloom * (0.7 / (0.7 + bloomPeak));
-    color += (vec3(1.0) - color) * glow;
   }
   return pow(max(color, vec3(0.0)), ONE_OVER_GAMMA);
 }
