@@ -266,7 +266,7 @@ const softHdrClamp = (value) => {
     !/brightGain/.test(brightParts) && !/ambientGain/.test(brightParts),
     'no knee, no ceiling, no second gain');
   check('the bloom composite adds HDR light before tone mapping',
-    /color \+= safeSample\(texture\(bloomTex, uv\)\.rgb\) \* 0\.990;/.test(post));
+    /color \+= safeSample\(texture\(bloomTex, uv\)\.rgb\) \* \(0\.990 \* 12\.0\);/.test(post));
   check('the tonemap reads both buffers through a NaN and infinity guard',
     /vec3 safeSample\(vec3 value\)/.test(post) &&
     /color = safeSample\(texture\(hdrTex, uv\)\.rgb\);/.test(post),

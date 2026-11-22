@@ -8,7 +8,7 @@ const app = fs.readFileSync('app.js','utf8');
 assert.match(shader, /ceil\(footprintX \* 0\.5\), 2\.0, 4\.0/);
 assert.match(shader, /ceil\(footprintY \* 0\.5\), 2\.0, 4\.0/);
 assert.match(shader, /sum \+= brightSample\(texCoord \+ dx \* sx \+ dy \* sy\)/);
-assert.match(shader, /return source \* mix\(0\.02, 0\.12, smoothstep\(4\.0, 40\.0, peak\)\)/);
+assert.match(shader, /float gain = mix\(0\.02, 0\.12, smoothstep\(4\.0, 40\.0, peak\)\)/);
 assert.match(shader, /if \(any\(isnan\(source\)\) \|\| any\(isinf\(source\)\)\)/);
 assert.match(app, /if \(guiControls\.bloomEnabled\) \{/);
 const smooth = (a,b,v) => {const x=Math.max(0,Math.min(1,(v-a)/(b-a)));return x*x*(3-2*x)};

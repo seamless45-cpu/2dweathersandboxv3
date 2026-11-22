@@ -87,7 +87,7 @@ const fs = require("fs"),
         return f;
       }
       let currentProgram = program(current);
-      function render(p, ratio, uniform) {
+      function render(p, ratio, uniform, mode = "lightning") {
         const n = 64,
           d = n / ratio;
         let data = new Float32Array(n * n * 4);
@@ -96,10 +96,17 @@ const fs = require("fs"),
             let k = (y * n + x) * 4;
             if (uniform || x === 32) data.set([1000, 450, 200, 1000], k);
           }
+        const scene = new Float32Array(data.length), lightning = new Float32Array(data.length);
+        for (let i=0; i<data.length; i+=4) {
+          if (data[i] === 0) continue;
+          if (mode === "other" || mode === "fallback") scene.set([1000,450,200,1], i);
+          else if (mode === "mixed") { scene.set([1500,1500,1500,1], i); lightning.set([1000,450,200,1000], i); }
+          else {scene.set([1000,450,200,1], i); lightning.set([1000,450,200,1000], i);}
+        }
         gl.activeTexture(gl.TEXTURE0);
-        let tex = texture(n, n, data);
+        let tex = texture(n, n, scene);
         gl.activeTexture(gl.TEXTURE1);
-        let tex2 = texture(n, n, data);
+        let tex2 = texture(n, n, lightning);
         let out = texture(d, d, null),
           f = fbo(out);
         gl.activeTexture(gl.TEXTURE0);
@@ -109,7 +116,7 @@ const fs = require("fs"),
         gl.useProgram(p);
         gl.uniform1i(gl.getUniformLocation(p, "hdrTex"), 0);
         gl.uniform1i(gl.getUniformLocation(p, "lightningBloomTex"), 1);
-        gl.uniform1i(gl.getUniformLocation(p, "hasLightningBloom"), 1);
+        gl.uniform1i(gl.getUniformLocation(p, "hasLightningBloom"), mode === "fallback" ? 0 : 1);
         gl.viewport(0, 0, d, d);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         let pixel = new Float32Array(4);
@@ -133,6 +140,9 @@ const fs = require("fs"),
             output: render(currentProgram, ratio, uniform),
             error: gl.getError(),
           });
+      let split = {};
+      for (const mode of ["lightning", "other", "mixed", "fallback"])
+        split[mode] = render(currentProgram, 1, true, mode);
       const factory = new Function(
         helper + ";return createPrecipitationCountReadback",
       )();
@@ -164,7 +174,7 @@ const fs = require("fs"),
         }
         reads.dispose();
       }
-      return { bloom, counts };
+      return { bloom, counts, split };
     },
     { current, helper },
   );
@@ -178,6 +188,18 @@ const fs = require("fs"),
     result.counts.some((x) => x.error || x.count !== (x.compact ? 2 : 7))
   )
     throw Error("regression");
+  // Composite multiplies by 12. Lightning therefore contributes 12 times
+  // the old bright-pass value, other highlights remain unchanged, and the
+  // no-MRT fallback intentionally boosts all highlights.
+  for (let c=0;c<3;c++) {
+    const lightning = [1000,450,200][c], other = [500,500,500][c];
+    const close = (actual, expected) => Math.abs(actual-expected) < .08;
+    if (!close(result.split.lightning[c]*12, lightning*.12*12) ||
+        !close(result.split.other[c]*12, lightning*.12) ||
+        !close(result.split.mixed[c]*12, (lightning*12+other)*.12) ||
+        !close(result.split.fallback[c]*12, lightning*.12*12))
+      throw Error('lightning/scene bloom gain regression: '+JSON.stringify(result.split));
+  }
   await b.close();
 })().catch((e) => {
   console.error(e);
