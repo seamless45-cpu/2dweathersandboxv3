@@ -15,29 +15,19 @@ out vec3 fragmentColor;
 
 // Keep the white-hot core in the scene while rebuilding its bloom from the
 // strike's coloured emission. Other scene highlights follow the ordinary path.
-vec3 bloomSource(vec2 uv, out float lightningShare)
+vec3 bloomSource(vec2 uv)
 {
   vec3 scene = texture(hdrTex, uv).rgb;
-  if (!hasLightningBloom) {
-    // No separate lightning buffer: only boost very bright scene highlights.
-    float peak = max(scene.r, max(scene.g, scene.b));
-    lightningShare = smoothstep(4.0, 40.0, peak);
-    return scene;
-  }
+  if (!hasLightningBloom) return scene;
   vec4 lightning = texture(lightningBloomTex, uv);
   // The alpha is the channel peak, written before the bloom pass. Removing
   // its neutral core avoids washing the coloured halo out with white light.
-  vec3 source = max(scene - vec3(lightning.a), vec3(0.0)) + lightning.rgb;
-  float sourcePeak = max(source.r, max(source.g, source.b));
-  float lightningPeak = max(lightning.r, max(lightning.g, lightning.b));
-  lightningShare = clamp(lightningPeak / max(sourcePeak, 1e-6), 0.0, 1.0);
-  return source;
+  return max(scene - vec3(lightning.a), vec3(0.0)) + lightning.rgb;
 }
 
 vec3 brightSample(vec2 uv)
 {
-  float lightningShare;
-  vec3 source = bloomSource(uv, lightningShare);
+  vec3 source = bloomSource(uv);
   // An invalid HDR sample must not spread through the entire bloom pyramid.
   if (any(isnan(source)) || any(isinf(source))) return vec3(0.0);
   float peak = max(source.r, max(source.g, source.b));
@@ -49,12 +39,7 @@ vec3 brightSample(vec2 uv)
   // those raw values saturates into a flat slab, not a visible falloff. Apply
   // a hue-preserving logarithmic shoulder before the pyramid, while retaining
   // monotonic brightness and weak highlights (no hard clipping).
-  // Brighten the channel contribution after compression so the glow remains
-  // visible even for subpixel branches, while ordinary background highlights
-  // keep their previous intensity. The pyramid and final shoulder still give
-  // a soft falloff instead of a clipped, flat halo.
-  return highlight * (log2(1.0 + highlightPeak) / max(highlightPeak, 1e-6)) *
-         mix(1.0, 4.0, lightningShare);
+  return highlight * (log2(1.0 + highlightPeak) / max(highlightPeak, 1e-6));
 }
 
 void main()
