@@ -1242,6 +1242,79 @@ class FBO // wraps texture, frambuffer and info in one
   }
 }
 
+// A single reusable pixel-pack buffer avoids a CPU/GPU rendezvous on every
+// lightning status check. Never overwrite an in-flight read: poll its fence
+// without waiting and skip new requests until the prior snapshot is ready.
+function createLightningReadback(gl, values, width)
+{
+  let buffer = null;
+  let sync = null;
+  let pending = null;
+  let synchronous = false;
+
+  function disableAsync() {
+    if (sync) gl.deleteSync(sync);
+    if (buffer) gl.deleteBuffer(buffer);
+    sync = null;
+    buffer = null;
+    pending = null;
+    synchronous = true;
+  }
+
+  return {
+    poll() {
+      if (!sync) return null;
+      const status = gl.clientWaitSync(sync, 0, 0);
+      if (status === gl.WAIT_FAILED) {
+        disableAsync();
+        return null;
+      }
+      if (status !== gl.ALREADY_SIGNALED && status !== gl.CONDITION_SATISFIED)
+        return null;
+      gl.deleteSync(sync);
+      sync = null;
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, values);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      const result = pending;
+      pending = null;
+      return result;
+    },
+    request(framebuffer, sample) {
+      if (pending) return {accepted: false, result: null};
+      gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+      gl.readBuffer(gl.COLOR_ATTACHMENT0);
+      if (!buffer && !synchronous) {
+        buffer = gl.createBuffer();
+        if (buffer) {
+          gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+          gl.bufferData(gl.PIXEL_PACK_BUFFER, values.byteLength, gl.STREAM_READ);
+          gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        } else {
+          synchronous = true;
+        }
+      }
+      if (!synchronous) {
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+        gl.readPixels(0, 0, width, 2, gl.RGBA, gl.FLOAT, 0);
+        sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        if (sync) {
+          pending = sample;
+          gl.flush();
+          return {accepted: true, result: null};
+        }
+        disableAsync();
+      }
+      // If allocation or synchronization fails, preserve lightning events via
+      // the original synchronous read rather than losing thunder or rod counts.
+      gl.readPixels(0, 0, width, 2, gl.RGBA, gl.FLOAT, values);
+      return {accepted: true, result: sample};
+    },
+    dispose() { disableAsync(); }
+  };
+}
+
 function createHdrFBO()
 {
   const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
@@ -3331,18 +3404,20 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.#ambientWallReadbackBuffer);
         gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.#ambientReadbackWallValues);
         gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-        gl.deleteBuffer(this.#ambientWallReadbackBuffer);
-        this.#ambientWallReadbackBuffer = null;
         sample.justAboveSurfaceCellY = clamp(
           sample.simYpos - this.#ambientReadbackWallValues[sample.sampleWidth_2 * 4 + 2] + 3,
           0,
           sim_res_y - 1
         );
-        this.#ambientWeatherReadbackBuffer = gl.createBuffer();
-        if (!this.#ambientWeatherReadbackBuffer)
-          throw new Error('Unable to allocate ambient-audio weather readback buffer.');
-        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.#ambientWeatherReadbackBuffer);
-        gl.bufferData(gl.PIXEL_PACK_BUFFER, Float32Array.BYTES_PER_ELEMENT * 8, gl.STREAM_READ);
+        if (!this.#ambientWeatherReadbackBuffer) {
+          this.#ambientWeatherReadbackBuffer = gl.createBuffer();
+          if (!this.#ambientWeatherReadbackBuffer)
+            throw new Error('Unable to allocate ambient-audio weather readback buffer.');
+          gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.#ambientWeatherReadbackBuffer);
+          gl.bufferData(gl.PIXEL_PACK_BUFFER, Float32Array.BYTES_PER_ELEMENT * 8, gl.STREAM_READ);
+        } else {
+          gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.#ambientWeatherReadbackBuffer);
+        }
         gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_0);
         gl.readBuffer(gl.COLOR_ATTACHMENT0);
         gl.readPixels(sample.simXpos, sample.justAboveSurfaceCellY, 1, 1, gl.RGBA, gl.FLOAT, 0);
@@ -3364,8 +3439,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.#ambientReadbackBaseValues);
       gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 16, this.#ambientReadbackWaterValues);
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-      gl.deleteBuffer(this.#ambientWeatherReadbackBuffer);
-      this.#ambientWeatherReadbackBuffer = null;
       this.#ambientReadbackSample = null;
       this.#applyAmbientSoundSample(sample);
     }
@@ -7176,8 +7249,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.78'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.78')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.79'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.79')
   ]);
 
   const [
@@ -7741,6 +7814,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const lightningDataFrameBuffs = [gl.createFramebuffer(), gl.createFramebuffer()];
 
   let lastSuperboltCheckIteration = 0;
+  let lightningReadbackGeneration = 0;
   let superboltCheckFrame = 0;
   let lastSuperboltShakeIteration = 0;
   let superboltShakeStartTimeMs = -1;
@@ -7752,6 +7826,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   // Set up Textures
   async function setupTextures()
   {
+    lightningReadbackGeneration++;
     ambientLightDirty = true;
     superboltShakeStartTimeMs = -1;
     pendingArtificialLightning.length = 0;
@@ -8144,7 +8219,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.78');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.79');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8621,8 +8696,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const HYPERBOLT_SHAKE_DURATION_MS = 12500.0;
   const HYPERBOLT_SHAKE_PEAK_AMP = 0.450; // intensity 450 / 1000 of the view height
   const precipSampleValues = new Float32Array(4);
+  let compactDropletSample = null;
   const countedSlotStartIter = new Float64Array(numLightningSlots);
   const lightningDataValues = new Float32Array(numLightningSlots * 2 * 4);
+  const lightningReadback = createLightningReadback(gl, lightningDataValues, numLightningSlots);
   const manualSlotReadback = new Float32Array(numLightningSlots * 4);
 
   function hashShakeStep(seed, step)
@@ -9068,7 +9145,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
                   // Half floats cannot count tens of thousands of single increments.
                   // Read the freshly written transform-feedback buffer only at the
                   // existing low-frequency sampling interval instead.
-                  const dropletSample = new Float32Array(NUM_DROPLETS * 5);
+                  if (!compactDropletSample || compactDropletSample.length !== NUM_DROPLETS * 5)
+                    compactDropletSample = new Float32Array(NUM_DROPLETS * 5);
+                  const dropletSample = compactDropletSample;
                   gl.bindBuffer(gl.COPY_READ_BUFFER, precipitationEven ? precipVertexBuffer_1 : precipVertexBuffer_0);
                   gl.getBufferSubData(gl.COPY_READ_BUFFER, 0, dropletSample);
                   gl.bindBuffer(gl.COPY_READ_BUFFER, null);
@@ -9173,13 +9252,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           airplane.move();
         }
 
-        // Thunder is read back out of the GPU, and a readback waits for everything
-        // queued to finish: doing it every frame is a sync on every frame, which on
-        // a busy GPU is milliseconds of stall that no other optimisation can hide.
-        // Every third frame is 20 Hz at 60 fps - far inside the tolerance of
-        // hearing thunder - and no strike is missed, because a strike is found by
-        // comparing its start iteration against the last one we heard, not against
-        // the previous frame.
+        // Poll an earlier GPU snapshot without blocking the render loop. One
+        // reusable pack buffer is sufficient; do not overwrite an in-flight read.
         const lightningReadbackTick = (guiControls.enablePrecipitation || iterNum <= manualLightningActiveUntil) &&
                                       iterNum != lastSuperboltCheckIteration &&
                                       (superboltCheckFrame++ % 3) === 0;
@@ -9188,22 +9262,28 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         const rodCaptureCheckDue = lightningRods.length > 0 && (guiControls.enablePrecipitation || iterNum <= manualLightningActiveUntil) &&
                                    iterNum != lastRodCaptureCheckIteration &&
                                    (rodCaptureFrame++ % 12) === 0;
-        if (lightningSoundDue || rodCaptureCheckDue || superboltCheckDue) {
-          if (lightningSoundDue)
-            lastLightningSoundCheckIteration = iterNum;
-          if (superboltCheckDue)
-            lastSuperboltCheckIteration = iterNum;
-          lastRodCaptureCheckIteration = iterNum;
-          gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuffs[lightningDataSrc]);
-          gl.readBuffer(gl.COLOR_ATTACHMENT0);
-          gl.readPixels(0, 0, numLightningSlots, 2, gl.RGBA, gl.FLOAT, lightningDataValues);
-
-          if (superboltCheckDue) {
+        let completedLightning = lightningReadback.poll();
+        if (completedLightning && completedLightning.generation !== lightningReadbackGeneration)
+          completedLightning = null; // a simulation reset superseded this snapshot
+        if (!completedLightning && (lightningSoundDue || rodCaptureCheckDue || superboltCheckDue)) {
+          const request = lightningReadback.request(lightningDataFrameBuffs[lightningDataSrc], {
+            sound: lightningSoundDue, superbolt: superboltCheckDue, iteration: iterNum,
+            generation: lightningReadbackGeneration
+          });
+          if (request.accepted) {
+            if (lightningSoundDue) lastLightningSoundCheckIteration = iterNum;
+            if (superboltCheckDue) lastSuperboltCheckIteration = iterNum;
+            lastRodCaptureCheckIteration = iterNum;
+            completedLightning = request.result;
+          }
+        }
+        if (completedLightning) {
+          if (completedLightning.superbolt) {
             let newestSuperboltIter = lastSuperboltShakeIteration;
             let newestHyperboltIter = lastHyperboltShakeIteration;
             for (let slot = 0; slot < numLightningSlots; slot++) {
               const start = Math.round(lightningDataValues[slot * 4 + START_ITERNUM_INDEX]);
-              if (start > iterNum)
+              if (start > completedLightning.iteration)
                 continue;
               const metaOffset = (numLightningSlots + slot) * 4;
               const strikeClass = lightningDataValues[metaOffset + 3];
@@ -9228,7 +9308,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             let capturesUpdated = false;
             for (let slot = 0; slot < numLightningSlots; slot++) {
               const start = Math.round(lightningDataValues[slot * 4 + START_ITERNUM_INDEX]);
-              if (start <= 0 || start > iterNum || countedSlotStartIter[slot] === start)
+              if (start <= 0 || start > completedLightning.iteration || countedSlotStartIter[slot] === start)
                 continue;
               countedSlotStartIter[slot] = start;
               const targetX = lightningDataValues[slot * 4 + 0];
@@ -9244,14 +9324,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               updateLightningRodStatus();
           }
 
-          if (lightningSoundDue) {
+          if (completedLightning.sound && guiControls.sound) {
             // thunder belongs to the newest strike in the slot array that we have
             // not heard yet (several strikes can be in flight at once now)
             let newestSlot = -1;
             let newestIteration = lastLightningSoundIteration;
             for (let slot = 0; slot < numLightningSlots; slot++) {
               const start = Math.round(lightningDataValues[slot * 4 + START_ITERNUM_INDEX]);
-              if (start > newestIteration && start <= iterNum) {
+              if (start > newestIteration && start <= completedLightning.iteration) {
                 newestIteration = start;
                 newestSlot = slot;
               }
@@ -10417,7 +10497,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.78');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.79');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
