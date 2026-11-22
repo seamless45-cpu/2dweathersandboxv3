@@ -21,7 +21,7 @@ const shader=fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','utf
 for (const name of ['displayFlash','displayPositiveFlash']) {
  const start=shader.indexOf('vec3 '+name+'('), end=shader.indexOf('\n}', start);
  const body=shader.slice(start,end);
- assert(body.includes('textureGrad(lightningNetworkTex, flashCoord, gradX, gradY)'));
+ assert(body.includes('sampleLightningArtwork(lightningNetworkTex, flashCoord, gradX, gradY)'));
  assert(!body.includes('flashLateralJag') && !body.includes('ccEvalBranch'));
 }
 // Match the shader's analytic derivative against finite differences, away from

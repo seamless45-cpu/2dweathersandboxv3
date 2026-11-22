@@ -16,7 +16,7 @@ assert.doesNotMatch(app, /guiControls\.motionBlurEnabled = (?:true|false);/);
 for (const name of ['displayFlash', 'displayPositiveFlash']) {
   const start = shader.indexOf('vec3 ' + name + '(');
   const body = shader.slice(start, shader.indexOf('\n}', start));
-  assert(body.indexOf('if (flashCoord.y < 0.004') < body.indexOf('textureGrad('));
+  assert(body.indexOf('if (flashCoord.y < 0.004') < body.indexOf('sampleLightningArtwork('));
   assert.doesNotMatch(body, /flashLateralJag|flashCoord\.x \+=/);
 }
 assert.doesNotMatch(shader, /drawUpperAtmosphereLightning|drawAnvilCrawler|displayGroundToCloud/);

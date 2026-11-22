@@ -9,21 +9,32 @@ in vec2 texCoordXpY0; // right
 in vec2 texCoordX0Yp; // up
 
 uniform sampler2D hdrTex;
+uniform sampler2D lightningBloomTex;
+uniform bool hasLightningBloom;
 out vec3 fragmentColor;
 
-// Build the bloom pyramid from HDR radiance. The baseline remains subtle,
-// while high-energy highlights receive a stronger, hue-preserving contribution.
+// Keep the white-hot core in the scene while rebuilding its bloom from the
+// strike's coloured emission. Other scene highlights follow the ordinary path.
+vec3 bloomSource(vec2 uv)
+{
+  vec3 scene = texture(hdrTex, uv).rgb;
+  if (!hasLightningBloom) return scene;
+  vec4 lightning = texture(lightningBloomTex, uv);
+  // The alpha is the channel peak, written before the bloom pass. Removing
+  // its neutral core avoids washing the coloured halo out with white light.
+  return max(scene - vec3(lightning.a), vec3(0.0)) + lightning.rgb;
+}
+
 void main()
 {
-  // Integrate the destination footprint rather than taking one point sample.
-  // At reduced bloom quality a narrow bolt can otherwise fall between samples
-  // and contribute no glow at all.
+  // Integrate the destination footprint: downsampled bloom must not skip a
+  // narrow channel simply because it falls between output pixels.
   vec2 dx = dFdx(texCoord) * 0.25;
   vec2 dy = dFdy(texCoord) * 0.25;
-  vec3 outputCol = (texture(hdrTex, texCoord - dx - dy).rgb +
-                    texture(hdrTex, texCoord + dx - dy).rgb +
-                    texture(hdrTex, texCoord - dx + dy).rgb +
-                    texture(hdrTex, texCoord + dx + dy).rgb) * 0.25;
+  vec3 outputCol = (bloomSource(texCoord - dx - dy) +
+                    bloomSource(texCoord + dx - dy) +
+                    bloomSource(texCoord - dx + dy) +
+                    bloomSource(texCoord + dx + dy)) * 0.25;
 
   // A backstop, not the mechanism: the scene is written through softHdrClamp()
   // (common.glsl), so it arrives finite. If a sample were ever NaN, every term

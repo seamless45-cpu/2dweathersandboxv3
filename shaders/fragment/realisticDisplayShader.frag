@@ -53,8 +53,10 @@ uniform float displayVectorField;
 
 uniform float iterNum;
 uniform bool volumetricCloudLighting;
+uniform bool lightningBloomEnabled;
 
-out vec4 fragmentColor;
+layout(location = 0) out vec4 fragmentColor;
+layout(location = 1) out vec4 lightningBloomOutput;
 
 #include "common.glsl"
 
@@ -77,6 +79,7 @@ vec3 color;
 float opacity = 1.0;
 
 vec3 emittedLight = vec3(0.); // pure light, like lightning
+vec3 lightningBloomLight = vec3(0.0); // chromatic source before core whitening
 
 float shadowLight;
 
@@ -356,6 +359,24 @@ float lightningCoverage(float sampleValue, float threshold)
   return pow(coverage, 1.2);
 }
 
+// Two taps along the elongated projected footprint retain fine texture
+// detail without disabling mip filtering or increasing the HDR render scale.
+// Gradients are captured outside the divergent lightning slot loop.
+vec2 sampleLightningArtwork(sampler2D artworkTex, vec2 uv, vec2 gradX, vec2 gradY)
+{
+  vec2 size = vec2(textureSize(artworkTex, 0));
+  float lenX = length(gradX * size);
+  float lenY = length(gradY * size);
+  if (max(lenX, lenY) <= 1.5 * max(min(lenX, lenY), 1.0))
+    return textureGrad(artworkTex, uv, gradX, gradY).rg;
+  bool majorX = lenX > lenY;
+  vec2 major = majorX ? gradX : gradY;
+  vec2 dx = majorX ? gradX * 0.5 : gradX;
+  vec2 dy = majorX ? gradY : gradY * 0.5;
+  return 0.5 * (textureGrad(artworkTex, uv - major * 0.25, dx, dy).rg +
+                textureGrad(artworkTex, uv + major * 0.25, dx, dy).rg);
+}
+
 // Artwork stores trunks in red and forks in green. Forks tagged with a low
 // green value are omitted for positive discharges; this is selected per fork
 // at generation time, not per fragment or animation frame.
@@ -522,7 +543,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
                     - shear * screenTexDx.y * scaleMult + boltJagDerivU * (-screenTexDx.y * scaleMult), -screenTexDx.y * scaleMult);
   vec2 gradY = vec2(screenTexDy.x * scaleMult * aspectRatios[0] / lightningTexAspect
                     - shear * screenTexDy.y * scaleMult + boltJagDerivU * (-screenTexDy.y * scaleMult), -screenTexDy.y * scaleMult);
-  vec2 artwork = textureGrad(lightningTex, lightningTexCoord, gradX, gradY).rg;
+  vec2 artwork = sampleLightningArtwork(lightningTex, lightningTexCoord, gradX, gradY);
   float branchFade = dischargeBranchFade(lightningTime);
   float pixVal = lightningCoverage(artwork.r, 0.004) +
                  artworkBranchCoverage(artwork.g, false) * branchFade;
@@ -636,7 +657,7 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
                     flashFlip * screenTexDx.y / flashSpan.y);
   vec2 gradY = vec2(flashDir * screenTexDy.x / flashSpan.x,
                     flashFlip * screenTexDy.y / flashSpan.y);
-  vec2 artwork = textureGrad(lightningNetworkTex, flashCoord, gradX, gradY).rg;
+  vec2 artwork = sampleLightningArtwork(lightningNetworkTex, flashCoord, gradX, gradY);
   float pixVal = lightningCoverage(artwork.r, flashThreshold) +
                  artworkBranchCoverage(artwork.g, false) * dischargeBranchFade(lightningTime);
 
@@ -690,7 +711,7 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
                     flashFlip * screenTexDx.y / flashSpan.y);
   vec2 gradY = vec2(flashDir * screenTexDy.x / flashSpan.x,
                     flashFlip * screenTexDy.y / flashSpan.y);
-  vec2 artwork = textureGrad(lightningNetworkTex, flashCoord, gradX, gradY).rg;
+  vec2 artwork = sampleLightningArtwork(lightningNetworkTex, flashCoord, gradX, gradY);
   float pixVal = lightningCoverage(artwork.r, flashThreshold) +
                  artworkBranchCoverage(artwork.g, true) * dischargeBranchFade(lightningTime);
 
@@ -933,7 +954,7 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
 
   float worldPix = max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)),
                        length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y)));
-  float coreW = max(0.0018 * hScale, worldPix * 0.90) * (isPositiveCC ? 1.28 : 1.0);
+  float coreW = 0.0018 * hScale * (isPositiveCC ? 1.28 : 1.0);
   float edgeFade = smoothstep(0.0, 0.025, t) * (1.0 - smoothstep(0.975, 1.0, t));
   // Footprint-filtered core (same Gaussian idiom as channelGlow /
   // ccEvalBranch): a fixed world-space edge snaps to 0 or full coverage
@@ -1233,6 +1254,10 @@ vec4 computeAirColor(vec2 bndFragCoord)
     else
       coreReference = 1500.0 * currentLightningIntensity;
     lightningBoltLight += apparentChannelColor(strikeChannel, lightningIlluminationTint, coreReference);
+    if (lightningBloomEnabled) {
+      float strikePeak = max(strikeChannel.r, max(strikeChannel.g, strikeChannel.b));
+      lightningBloomLight += strikePeak * lightningIlluminationTint;
+    }
 
     // The light a strike throws on the clouds around it.
     float lightningOnLight;
@@ -1274,7 +1299,14 @@ vec4 computeAirColor(vec2 bndFragCoord)
     }
   }
 
-  emittedLight += displayLightningRadiance(lightningBoltLight / (1. + cloudDensity * 100.0));
+  vec3 visibleLightning = displayLightningRadiance(lightningBoltLight / (1. + cloudDensity * 100.0));
+  emittedLight += visibleLightning;
+  if (lightningBloomEnabled) {
+    vec3 glowColor = displayLightningRadiance(lightningBloomLight / (1. + cloudDensity * 100.0));
+    float glowPeak = max(glowColor.r, max(glowColor.g, glowColor.b));
+    float visiblePeak = max(visibleLightning.r, max(visibleLightning.g, visibleLightning.b));
+    lightningBloomLight = glowColor * (visiblePeak / max(glowPeak, 1e-6));
+  }
 
   return vec4(color, opacity);
 }
@@ -1298,6 +1330,8 @@ void main()
   color = vec3(0.0);
   opacity = 1.0;
   emittedLight = vec3(0.0);
+  lightningBloomLight = vec3(0.0);
+  lightningBloomOutput = vec4(0.0);
   onLight = vec3(0.0);
   rodGlow = vec3(0.0);
   // Precise per-pixel terrain coverage for the flash: how much solid geometry
@@ -1798,5 +1832,11 @@ void main()
   fragmentColor = vec4(softHdrClamp(max(color * finalLight * opacity, 0.0)
                                     + emittedLight * (1.0 - terrainOcclusion) + rodGlow), opacity);
 
+  // Preserve a chromatic bloom source independently of the white-hot channel.
+  // Alpha stores its peak so the bright pass can replace the core's white
+  // contribution, rather than adding coloured light on top of white bloom.
+  vec3 bloomSource = lightningBloomLight * (1.0 - terrainOcclusion);
+  float bloomPeak = max(bloomSource.r, max(bloomSource.g, bloomSource.b));
+  lightningBloomOutput = vec4(bloomSource, bloomPeak);
   drawCursor(cursor, view); // over everything else
 }
