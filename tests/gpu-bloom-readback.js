@@ -188,16 +188,16 @@ const fs = require("fs"),
     result.counts.some((x) => x.error || x.count !== (x.compact ? 2 : 7))
   )
     throw Error("regression");
-  // Composite multiplies by 12. Lightning therefore contributes 12 times
+  // Composite multiplies by 24. Lightning therefore contributes 24 times
   // the old bright-pass value, other highlights remain unchanged, and the
   // no-MRT fallback intentionally boosts all highlights.
   for (let c=0;c<3;c++) {
     const lightning = [1000,450,200][c], other = [500,500,500][c];
     const close = (actual, expected) => Math.abs(actual-expected) < .08;
-    if (!close(result.split.lightning[c]*12, lightning*.12*12) ||
-        !close(result.split.other[c]*12, lightning*.12) ||
-        !close(result.split.mixed[c]*12, (lightning*12+other)*.12) ||
-        !close(result.split.fallback[c]*12, lightning*.12*12))
+    if (!close(result.split.lightning[c]*24, lightning*.12*24) ||
+        !close(result.split.other[c]*24, lightning*.12) ||
+        !close(result.split.mixed[c]*24, (lightning*24+other)*.12) ||
+        !close(result.split.fallback[c]*24, lightning*.12*24))
       throw Error('lightning/scene bloom gain regression: '+JSON.stringify(result.split));
   }
   await b.close();
