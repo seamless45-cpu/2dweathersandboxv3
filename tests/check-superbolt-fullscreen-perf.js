@@ -105,7 +105,7 @@ check('realisticDisplayShader.frag reuses fetched field state in computeAirColor
   /vec4 airColor = computeAirColor\(bndFragCoord\);/.test(displayShader) &&
   /if \(texCoord\.y > 1\.0\) \{[\s\S]{0,120}if \(rodCount == 0\)/.test(displayShader) &&
   /function updateDiagnosticOverlays\(\)\s*\{[\s\S]{0,650}if \(!capeMode/.test(appSource) &&
-  /const precipSampleValues = new Float32Array\(4\);/.test(appSource) &&
+  /createPrecipitationCountReadback\(gl, NUM_DROPLETS, compactPrecipitationFeedback\)/.test(appSource) &&
   /gl\.viewport\(0, 0, bloomFBOs\[0\]\.width, bloomFBOs\[0\]\.height\)/.test(appSource) &&
   !/\bbloomFBO\./.test(appSource) &&
   !/gl\.bindTexture\(gl\.TEXTURE_2D, bloomFBOs\[0\]\.texture\);\s*\n\s*gl\.texParameteri/.test(appSource));

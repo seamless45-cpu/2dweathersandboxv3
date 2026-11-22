@@ -260,7 +260,7 @@ const softHdrClamp = (value) => {
   const post = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'postProcessingShader.frag'), 'utf8');
 
   check('the bright pass preserves ambient bloom and boosts HDR highlights',
-    /mix\(0\.02, 0\.12, smoothstep\(4\.0, 40\.0, peak\)\)/.test(brightParts) && /fragmentColor = sum \/ float\(countX \* countY\);/.test(brightParts),
+    /mix\(0\.02, 0\.12, smoothstep\(4\.0, 40\.0, peak\)\)/.test(brightParts) && /vec3 highlight = sum \/ float\(countX \* countY\);/.test(brightParts),
     'one multiply, the shipped one');
   check('nothing in the bright pass singles the channel out',
     !/brightKnee/.test(brightParts) && !/brightCeiling/.test(brightParts) &&

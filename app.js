@@ -1315,6 +1315,86 @@ function createLightningReadback(gl, values, width)
   };
 }
 
+// Snapshot the infrequent precipitation count into one reusable staging buffer.
+// The compact path copies the freshly written transform-feedback buffer; the
+// float-blend path reads its one-pixel counter. Never read or overwrite an
+// in-flight snapshot until its fence signals.
+function createPrecipitationCountReadback(gl, numDroplets, compact)
+{
+  let values = null; // allocated once, on the first request
+  let buffer = null, sync = null, pending = null, synchronous = false;
+  function disableAsync() {
+    if (sync) gl.deleteSync(sync);
+    if (buffer) gl.deleteBuffer(buffer);
+    sync = null; buffer = null; pending = null; synchronous = true;
+  }
+  function count() {
+    if (!compact) return values[0];
+    let result = 0;
+    for (let i = 2; i < values.length; i += 5)
+      if (values[i] < 0) result++;
+    return result;
+  }
+  function synchronousRead(source) {
+    if (compact) {
+      gl.bindBuffer(gl.COPY_READ_BUFFER, source);
+      gl.getBufferSubData(gl.COPY_READ_BUFFER, 0, values);
+      gl.bindBuffer(gl.COPY_READ_BUFFER, null);
+    } else {
+      gl.readBuffer(gl.COLOR_ATTACHMENT0);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, values);
+    }
+    return count();
+  }
+  return {
+    poll() {
+      if (!sync) return null;
+      const status = gl.clientWaitSync(sync, 0, 0);
+      if (status === gl.WAIT_FAILED) { disableAsync(); return null; }
+      if (status !== gl.ALREADY_SIGNALED && status !== gl.CONDITION_SATISFIED) return null;
+      gl.deleteSync(sync); sync = null;
+      gl.bindBuffer(gl.COPY_READ_BUFFER, buffer);
+      gl.getBufferSubData(gl.COPY_READ_BUFFER, 0, values);
+      gl.bindBuffer(gl.COPY_READ_BUFFER, null);
+      const result = {count: count(), generation: pending};
+      pending = null;
+      return result;
+    },
+    request(source, generation) {
+      if (sync) return null;
+      if (!values) values = new Float32Array(compact ? numDroplets * 5 : 4);
+      if (!buffer && !synchronous) {
+        buffer = gl.createBuffer();
+        if (buffer) {
+          gl.bindBuffer(gl.COPY_WRITE_BUFFER, buffer);
+          gl.bufferData(gl.COPY_WRITE_BUFFER, values.byteLength, gl.STREAM_READ);
+          gl.bindBuffer(gl.COPY_WRITE_BUFFER, null);
+        } else synchronous = true;
+      }
+      if (!synchronous) {
+        if (compact) {
+          gl.bindBuffer(gl.COPY_READ_BUFFER, source);
+          gl.bindBuffer(gl.COPY_WRITE_BUFFER, buffer);
+          gl.copyBufferSubData(gl.COPY_READ_BUFFER, gl.COPY_WRITE_BUFFER, 0, 0, values.byteLength);
+          gl.bindBuffer(gl.COPY_WRITE_BUFFER, null);
+          gl.bindBuffer(gl.COPY_READ_BUFFER, null);
+        } else {
+          gl.readBuffer(gl.COLOR_ATTACHMENT0);
+          gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+          gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, 0);
+          gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        }
+        sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        if (sync) { pending = generation; gl.flush(); return null; }
+        disableAsync();
+      }
+      // Preserve the original counter if staging or synchronization fails.
+      return {count: synchronousRead(source), generation};
+    },
+    dispose() { disableAsync(); }
+  };
+}
+
 function createHdrFBO()
 {
   const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
@@ -7249,8 +7329,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.82'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.82')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.83'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.83')
   ]);
 
   const [
@@ -7478,6 +7558,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   var lightEven = true;
   var precipitationEven = true;
+  let precipitationBufferGeneration = 0;
 
   const precipitationVao_0 = gl.createVertexArray();
   const precipVertexBuffer_0 = gl.createBuffer();
@@ -7505,6 +7586,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   function setupPrecipitationBuffers()
   {
+    precipitationBufferGeneration++;
     precipitationEven = true;
     gl.bindVertexArray(precipitationVao_0);
 
@@ -8219,7 +8301,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.82');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.83');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8695,8 +8777,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const HYPERBOLT_SHAKE_DECAY_PER_SEC = 0.44; // 2.2 / 5: decays to ~nothing by the end of 12.5 s
   const HYPERBOLT_SHAKE_DURATION_MS = 12500.0;
   const HYPERBOLT_SHAKE_PEAK_AMP = 0.450; // intensity 450 / 1000 of the view height
-  const precipSampleValues = new Float32Array(4);
-  let compactDropletSample = null;
+  const precipitationCountReadback = createPrecipitationCountReadback(gl, NUM_DROPLETS, compactPrecipitationFeedback);
+  function applyPrecipitationCount(result) {
+    if (!result || result.generation !== precipitationBufferGeneration) return;
+    guiControls.inactiveDroplets = result.count;
+    gl.useProgram(precipitationProgram);
+    gl.uniform1f(getUniformLoc(precipitationProgram, 'inactiveDroplets'), result.count);
+  }
   const countedSlotStartIter = new Float64Array(numLightningSlots);
   const lightningDataValues = new Float32Array(numLightningSlots * 2 * 4);
   const lightningReadback = createLightningReadback(gl, lightningDataValues, numLightningSlots);
@@ -8955,6 +9042,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       if (!guiControls.paused) { // Simulation part
 
+        applyPrecipitationCount(precipitationCountReadback.poll());
         const sunAngle = guiControls.sunAngle;
         let nightAccelerationActive = !airplaneMode && guiControls.dayNightCycle && guiControls.accelerateNight && !guiControls.realTimeCycle && (sunAngle < 0. || sunAngle > 180.);
 
@@ -9138,29 +9226,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               gl.endTransformFeedback();
               gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
 
-              // sample to count number of inactive droplets
+              // Queue a snapshot without forcing this frame to wait for the GPU.
               if (iterNum % 600 == 0) {
-                let inactiveCount;
-                if (compactPrecipitationFeedback) {
-                  // Half floats cannot count tens of thousands of single increments.
-                  // Read the freshly written transform-feedback buffer only at the
-                  // existing low-frequency sampling interval instead.
-                  if (!compactDropletSample || compactDropletSample.length !== NUM_DROPLETS * 5)
-                    compactDropletSample = new Float32Array(NUM_DROPLETS * 5);
-                  const dropletSample = compactDropletSample;
-                  gl.bindBuffer(gl.COPY_READ_BUFFER, precipitationEven ? precipVertexBuffer_1 : precipVertexBuffer_0);
-                  gl.getBufferSubData(gl.COPY_READ_BUFFER, 0, dropletSample);
-                  gl.bindBuffer(gl.COPY_READ_BUFFER, null);
-                  inactiveCount = 0;
-                  for (let i = 2; i < dropletSample.length; i += 5)
-                    if (dropletSample[i] < 0) inactiveCount++;
-                } else {
-                  gl.readBuffer(gl.COLOR_ATTACHMENT0);
-                  gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, precipSampleValues);
-                  inactiveCount = precipSampleValues[0];
-                }
-                guiControls.inactiveDroplets = inactiveCount;
-                gl.uniform1f(getUniformLoc(precipitationProgram, 'inactiveDroplets'), inactiveCount);
+                const source = precipitationEven ? precipVertexBuffer_1 : precipVertexBuffer_0;
+                applyPrecipitationCount(precipitationCountReadback.request(source, precipitationBufferGeneration));
               }
 
               gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
@@ -10497,7 +10566,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.82');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.83');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
