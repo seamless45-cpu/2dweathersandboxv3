@@ -1,31 +1,13 @@
 /*
- * lightningGenerator.js — procedural lightning artwork, generated off the main
- * thread and transferred as an ImageBitmap.
- *
- * There is one kind of artwork: a cloud-to-ground bolt. One dominant channel
- * grows downward with the classic dendritic forks, drawn the way the original app
- * drew it - one heading, step, kick, pull back toward vertical, and a 9 pixel
- * channel on a 2500 x 5000 tile (see CG_SHAPE and ARTWORK_SIZE).
- *
- * Every strike uses it. Intra-cloud flashes used to be a separate network of
- * hair-thin filaments, drawn from eight artwork tiles through their own additive
- * light pass; they are drawn with this bolt now, at this bright, and the filament
- * artwork is gone with the pass that used it (see realisticDisplayShader.frag).
- *
- * Protocol:
- *   worker.postMessage({width, height})                  -> bolt artwork
- *   worker.postMessage({kind: 'network', width, height})  -> intra-cloud network
- * The worker posts back {width, height, data} with data a Uint8Array of one byte
- * per texel, transferred - not an ImageBitmap. See readRedChannel below for why.
- *
- * What crosses is built here, field by field, and it is *only* data: a number, a
- * number, a typed array. Anything else the generator hangs off its return value -
- * the counters the test harness counts segments with, a method, whatever gets added
- * next - stays in the worker. Posting such an object directly throws
- * `DataCloneError` inside the worker, the artwork never arrives, and the display
- * has nothing to draw with: no lightning at all, of either kind, with a single line
- * in the console to say so.
+ * Lightning artwork worker. Ordinary ground strikes use the adapted Niels747
+ * generator; the existing bolt artwork is retained for special variants, and
+ * intra-cloud flashes retain their separate network. Bolt jobs pack the
+ * special trunk/forks and original grayscale into RGB bytes; network jobs
+ * transfer RG bytes. Only plain data crosses the worker boundary.
  */
+if (typeof importScripts === 'function')
+  importScripts('./upstreamLightningGenerator.js?v=2026-11-16.89');
+
 onmessage = (event) => {
   const msg = event.data || {};
   const network = msg.kind === 'network';
@@ -33,6 +15,18 @@ onmessage = (event) => {
   const width = Math.max(32, Math.round(msg.width || fallback.width));
   const height = Math.max(32, Math.round(msg.height || fallback.height));
   const artwork = network ? generateLightningNetwork(width, height) : generateLightningBolt(width, height, msg.logicalScale || 1);
+  if (!network) {
+    // Preserve the existing special-variant artwork in RG; blue carries the
+    // original Niels747 grayscale bolt, in the same mipmapped texture.
+    const original = generateUpstreamLightningBolt(width, height, msg.logicalScale || 1).data;
+    const packed = new Uint8Array(width * height * 3);
+    for (let i = 0; i < width * height; i++) {
+      packed[i * 3] = artwork.data[i * 2];
+      packed[i * 3 + 1] = artwork.data[i * 2 + 1];
+      packed[i * 3 + 2] = Math.round(original[i * 4] * original[i * 4 + 3] / 255);
+    }
+    artwork.data = packed;
+  }
   postMessage({width : artwork.width, height : artwork.height, data : artwork.data},
               [artwork.data.buffer]);
 };

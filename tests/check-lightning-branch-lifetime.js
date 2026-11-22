@@ -25,9 +25,9 @@ Math.random = random; restore();
 const shader = fs.readFileSync('shaders/fragment/realisticDisplayShader.frag', 'utf8');
 assert.match(shader, /1\.0 - smoothstep\(0\.68, 1\.10, time\)/);
 assert.equal((shader.match(/artworkBranchCoverage\(artwork\.g, true\)/g) || []).length, 2);
-assert.equal((shader.match(/artworkBranchCoverage\(artwork\.g, false\)/g) || []).length, 2);
+assert.equal((shader.match(/artworkBranchCoverage\(artwork\.g, false\)/g) || []).length, 1);
 assert.match(shader, /branchCore \*= branchFade;/);
-assert.match(shader, /branchSum \* intensityRaw \* 1200\.0 \* branchFade/);
+// Ordinary CG now keeps the original generator’s baked forks.
 assert.match(shader, /extBranchGain \* intensityRaw \* 950\.0 \* branchFade/);
 const fade = t => { let x = Math.max(0, Math.min(1, (t - .68) / .42)); return 1 - x*x*(3-2*x); };
 assert.equal(fade(.65), 1); assert(fade(.9) > 0 && fade(.9) < 1); assert.equal(fade(1.1), 0);

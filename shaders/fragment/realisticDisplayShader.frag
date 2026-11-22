@@ -68,6 +68,7 @@ uniform int rodCount;
 uniform float rodThickness;     // half width of the mast, in cells
 uniform float rodHeight;        // height of the mast, in cells
 uniform float lightningBottomU; // bottom trunk U coordinate of active bolt tile
+uniform float originalBoltBottomU; // original artwork ground contact for rod alignment
 
 #include "commonDisplay.glsl"
 
@@ -362,19 +363,19 @@ float lightningCoverage(float sampleValue, float threshold)
 // Two taps along the elongated projected footprint retain fine texture
 // detail without disabling mip filtering or increasing the HDR render scale.
 // Gradients are captured outside the divergent lightning slot loop.
-vec2 sampleLightningArtwork(sampler2D artworkTex, vec2 uv, vec2 gradX, vec2 gradY)
+vec3 sampleLightningArtwork(sampler2D artworkTex, vec2 uv, vec2 gradX, vec2 gradY)
 {
   vec2 size = vec2(textureSize(artworkTex, 0));
   float lenX = length(gradX * size);
   float lenY = length(gradY * size);
   if (max(lenX, lenY) <= 1.5 * max(min(lenX, lenY), 1.0))
-    return textureGrad(artworkTex, uv, gradX, gradY).rg;
+    return textureGrad(artworkTex, uv, gradX, gradY).rgb;
   bool majorX = lenX > lenY;
   vec2 major = majorX ? gradX : gradY;
   vec2 dx = majorX ? gradX * 0.5 : gradX;
   vec2 dy = majorX ? gradY : gradY * 0.5;
-  return 0.5 * (textureGrad(artworkTex, uv - major * 0.25, dx, dy).rg +
-                textureGrad(artworkTex, uv + major * 0.25, dx, dy).rg);
+  return 0.5 * (textureGrad(artworkTex, uv - major * 0.25, dx, dy).rgb +
+                textureGrad(artworkTex, uv + major * 0.25, dx, dy).rgb);
 }
 
 // Artwork stores trunks in red and forks in green. Forks tagged with a low
@@ -511,52 +512,20 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   if (lightningTexCoord.y < 0.01 || lightningTexCoord.y > 1.01)
     return vec3(0.0);
 
-  float uShift = rodHit ? (lightningBottomU - 0.5) * pow(clamp(lightningTexCoord.y, 0.0, 1.0), 1.25) : 0.0;
-  lightningTexCoord.x += 0.5 + uShift;                                                                                    // center lightning bolt
-
-  // Lateral tortuosity, the CC channel's own fractal applied to where the tile
-  // is SAMPLED (the artwork itself is untouched): the channel snakes in a bounded
-  // envelope anchored to the cloud attachment (t = 0) and the ground / rod tip
-  // (t = 1), so the strike stays glued but the middle of the channel jags like a
-  // natural channel. Angularity is deliberately small: it must never read as a
-  // second channel or a tangle, just a rougher single line.
-  float boltHScale = lightningHeightScale();
-  float boltJagAmp = 0.010 * boltHScale; // ~120 m of lateral meander at 12 km
-  // The three triangle waves have total amplitude at most 0.99 * amp,
-  // and the sine envelope is at most one. Reject pixels that cannot reach
-  // the existing artwork bounds even after the warp (including rod shear).
-  // A small margin keeps the bound conservative at floating-point edges.
-  float maxJagU = 1.001 * boltJagAmp / (lightningTexAspect * spanY);
-  if (lightningTexCoord.x < 0.01 - maxJagU || lightningTexCoord.x > 1.01 + maxJagU)
+  // Use the upstream artwork directly, without the fork's additional warp or
+  // procedural branches. Keep only the rod shear needed to meet a captured tip.
+  float uShift = rodHit ? (originalBoltBottomU - 0.5) * pow(clamp(lightningTexCoord.y, 0.0, 1.0), 1.25) : 0.0;
+  lightningTexCoord.x += 0.5 + uShift;
+  if (lightningTexCoord.x < 0.01 || lightningTexCoord.x > 1.01)
     return vec3(0.0);
 
-  float boltSpanKm = spanY * cellHeight * float(resolution.y) * 0.001;
-  float boltSeed = random2d(vec2(pos.x * 12.9, pos.y * 7.1)) * 4.0 + 0.5;
-  float boltT = clamp(lightningTexCoord.y, 0.0, 1.0);
-  float boltEnv = sin(PI * boltT);
-  float boltJag = boltEnv * fractalLateralJag(boltT, boltSpanKm, boltSeed, boltJagAmp);
-  lightningTexCoord.x += boltJag / (lightningTexAspect * spanY);
-
-  if (lightningTexCoord.x < 0.01 || lightningTexCoord.x > 1.01 || lightningTexCoord.y < 0.01 || lightningTexCoord.y > 1.01) // prevent edge effect when mipmapping
-    return vec3(0);
-
-  // The gradient is only needed for fragments that survived the exact bounds.
-  float boltJagDeriv = cos(PI * boltT) * PI * fractalLateralJag(boltT, boltSpanKm, boltSeed, boltJagAmp)
-                     + boltEnv * fractalLateralJagDeriv(boltT, boltSpanKm, boltSeed, boltJagAmp);
-
-  // Explicit gradients avoid undefined derivatives in the divergent slot loop.
-  // Include the rod-tip shear so mip selection tracks the actual projected tile.
   float shear = rodHit && lightningTexCoord.y > 0.0 && lightningTexCoord.y < 1.0
-    ? (lightningBottomU - 0.5) * 1.25 * pow(lightningTexCoord.y, 0.25) : 0.0;
-  float boltJagDerivU = boltJagDeriv / (lightningTexAspect * spanY); // uv x shift per tile v
+    ? (originalBoltBottomU - 0.5) * 1.25 * pow(lightningTexCoord.y, 0.25) : 0.0;
   vec2 gradX = vec2(screenTexDx.x * scaleMult * aspectRatios[0] / lightningTexAspect
-                    - shear * screenTexDx.y * scaleMult + boltJagDerivU * (-screenTexDx.y * scaleMult), -screenTexDx.y * scaleMult);
+                    - shear * screenTexDx.y * scaleMult, -screenTexDx.y * scaleMult);
   vec2 gradY = vec2(screenTexDy.x * scaleMult * aspectRatios[0] / lightningTexAspect
-                    - shear * screenTexDy.y * scaleMult + boltJagDerivU * (-screenTexDy.y * scaleMult), -screenTexDy.y * scaleMult);
-  vec2 artwork = sampleLightningArtwork(lightningTex, lightningTexCoord, gradX, gradY);
-  float branchFade = dischargeBranchFade(lightningTime);
-  float pixVal = lightningCoverage(artwork.r, 0.004) +
-                 artworkBranchCoverage(artwork.g, false) * branchFade;
+                    - shear * screenTexDy.y * scaleMult, -screenTexDy.y * scaleMult);
+  float pixVal = lightningCoverage(sampleLightningArtwork(lightningTex, lightningTexCoord, gradX, gradY).b, 0.004);
 
   const float mainBoltBrightness = 30000.;
 
@@ -575,45 +544,6 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   vec3 lightningCol = planckBlackbody(30000.0 + 10000.0 * (random2d(pos * 7.7 + 1.31) - 0.5));
 
   vec3 outputColor = max(pixVal * lightningCol, vec3(0));
-
-  // Per-strike branching beyond the artwork's baked forks: 1-3 short side
-  // leaders, seeded, so no two strokes fork alike. They root on the drawn
-  // channel centreline (rod-tip shear included) and inherit the trunk's
-  // temperature. They sit BELOW the core radiance - a branch is a finger of
-  // the same discharge, not a second bolt.
-  float heightKm = cellHeight * float(resolution.y) * 0.001;
-  vec2 pKm = vec2((texCoord.x - pos.x) * aspectRatios.x * heightKm,
-                  (texCoord.y - topY) * heightKm);
-  float spanKm = spanY * heightKm;
-  float branchSeedBase = random2d(vec2(pos.x * 5.13, pos.y * 3.71) + 0.77);
-  int branchCount = 1 + int(floor(branchSeedBase * 2.999));
-  float intensityRaw = currentLightningIntensity / 30000.0; // undo the artwork radiance gain
-  float branchSum = 0.0;
-  for (int bi = 0; bi < 3; bi++) {
-    if (bi >= branchCount || branchFade <= 0.0)
-      break;
-    float fi = float(bi);
-    float br1 = random2d(vec2(pos.x * 9.1 + fi * 3.7, pos.y * 4.3 + fi * 1.9));
-    float br2 = random2d(vec2(pos.x * 13.7 + fi * 7.1, pos.y * 8.9 + fi * 2.3));
-    float tb = 0.18 + 0.60 * fract(0.31 + fi * 0.37 + br1 * 0.71);
-    float uOff = rodHit ? (lightningBottomU - 0.5) * pow(clamp(tb, 0.0, 1.0), 1.25) : 0.0;
-    float bJag = fractalLateralJag(tb, spanKm, boltSeed, 0.010 * lightningHeightScale()) * sin(PI * tb);
-    vec2 anchor = vec2((uOff * lightningTexAspect * spanY + bJag) * heightKm,
-                       -tb * spanY * heightKm);
-    float sideSign = mod(fi, 2.0) < 1.0 ? -1.0 : 1.0;
-    if (br2 < 0.5)
-      sideSign = -sideSign;
-    float forkAngle = mix(0.48, 0.85, br1);
-    vec2 bDir = normalize(vec2(sideSign * sin(forkAngle), -cos(forkAngle)));
-    float bLen = spanKm * mix(0.12, 0.26, br2);
-    float growth = dischargeBranchGrowth(lightningTime, tb);
-    if (growth <= 0.0) continue;
-    bLen *= growth;
-    float coreW = max(0.0021 * lightningHeightScale(), 0.0013);
-    vec2 bVal = ccEvalBranch(pKm, anchor, bDir, bLen, sideSign, pos.x * 17.3 + fi * 5.7, coreW, mix(0.50, 0.72, br1), max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)), length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y))) * heightKm);
-    branchSum += (bVal.x * 1.05 + bVal.y * 0.30) * groundChannelStage(lightningTime, tb);
-  }
-  outputColor += lightningCol * branchSum * intensityRaw * 1200.0 * branchFade;
 
   return outputColor;
 }
@@ -667,7 +597,7 @@ vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity
                     flashFlip * screenTexDx.y / flashSpan.y);
   vec2 gradY = vec2(flashDir * screenTexDy.x / flashSpan.x,
                     flashFlip * screenTexDy.y / flashSpan.y);
-  vec2 artwork = sampleLightningArtwork(lightningNetworkTex, flashCoord, gradX, gradY);
+  vec2 artwork = sampleLightningArtwork(lightningNetworkTex, flashCoord, gradX, gradY).rg;
   float pixVal = lightningCoverage(artwork.r, flashThreshold) +
                  artworkBranchCoverage(artwork.g, false) * dischargeBranchFade(lightningTime);
 
@@ -721,7 +651,7 @@ vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningI
                     flashFlip * screenTexDx.y / flashSpan.y);
   vec2 gradY = vec2(flashDir * screenTexDy.x / flashSpan.x,
                     flashFlip * screenTexDy.y / flashSpan.y);
-  vec2 artwork = sampleLightningArtwork(lightningNetworkTex, flashCoord, gradX, gradY);
+  vec2 artwork = sampleLightningArtwork(lightningNetworkTex, flashCoord, gradX, gradY).rg;
   float pixVal = lightningCoverage(artwork.r, flashThreshold) +
                  artworkBranchCoverage(artwork.g, true) * dischargeBranchFade(lightningTime);
 
