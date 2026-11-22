@@ -236,10 +236,10 @@ const softHdrClamp = (value) => {
   // 2026-11-19: the channel now takes its tint from a Planckian blackbody at
   // the variant's temperature (ordinary CG ~30,000 K with per-strike jitter),
   // replacing the hand-picked violet-white; the artwork itself is unchanged.
-  check('the channel colour follows the stroke Kelvin temperature, not a hand pick',
-    /vec3 lightningCol = planckBlackbody\(30000\.0 \+ 10000\.0 \* \(random2d\(pos \* 7\.7 \+ 1\.31\) - 0\.5\)\);/.test(displayShader) &&
+  check('the channel uses the original upstream RGB',
+    /vec3 lightningCol = upstreamLightningColor;/.test(displayShader) &&
     /pixVal \* lightningCol/.test(displayShader),
-    'lightningCol is the Planckian stroke tint');
+    'lightningCol uses the upstream channel tint');
   check('there is no cooling colour any more',
     !/lightningCoolingCol/.test(displayShader),
     'the fade to an ember went with the rest of the later look');

@@ -286,13 +286,9 @@ float fractalLateralJagDeriv(float t, float spanKm, float seed, float amp)
   return (0.58 * f1 * sgn1 + 0.28 * f2 * sgn2 + 0.13 * f3 * sgn3) * spanKm * amp * 4.0;
 }
 
-// Approximate blackbody (Planckian) chromaticity for an arc channel, in linear
-// RGB with the blue channel normalised to unit gain. Tanner Helland's fit of the
-// CIE 1931 colour-matching curves to measured blackbody radiators, valid from
-// ~1000 K up; lightning return strokes run at roughly 24,000-38,000 K and are
-// all comfortably inside it. This is what the per-variant Kelvin temperatures
-// below feed - a stroke is a hot emitter, and its colour should follow T rather
-// than be picked by hand.
+// Blackbody helper retained by the special-variant intensity calculations.
+// Their final displayed channel colour is replaced by the upstream RGB below;
+// these internal values are not an independently displayed variant palette.
 vec3 planckBlackbody(float kelvin)
 {
   float t = clamp(kelvin, 1000.0, 720000.0) / 100.0;
@@ -313,44 +309,13 @@ vec3 planckBlackbody(float kelvin)
   return rgb / max(rgb.b, 0.35); // blue stays unit gain for HDR tinting
 }
 
-// Linear-RGB apparent colours for the discharge classes: ordinary CG, IC,
-// +IC, -CC, +CC, +CG, superbolt and hyperbolt. These are
-// restrained artistic tints, not measured emission spectra.
-vec3 lightningVariantTint(int kind)
-{
-  if (kind == 0) return vec3(1.00, 0.76, 0.54); // CG: warm white
-  if (kind == 1) return vec3(0.65, 0.82, 1.00); // IC: cool white
-  if (kind == 2) return vec3(1.00, 0.67, 0.78); // +IC: rose white
-  if (kind == 3) return vec3(0.70, 0.62, 1.00); // -CC: pale violet
-  if (kind == 4) return vec3(1.00, 0.64, 0.46); // +CC: peach
-  if (kind == 5) return vec3(1.00, 0.84, 0.45); // +CG: ivory
-  if (kind == 6) return vec3(0.97, 0.98, 1.00); // superbolt: near white
-  return vec3(0.57, 1.00, 0.86);                // hyperbolt: pale cyan
-}
-
-// Stable per-strike filtering, shared by its channel and cloud illumination.
-// No screen-position or frame-time randomness: branches do not flicker hue.
-vec3 apparentLightningTint(int kind, vec2 strikePos, float startIteration)
-{
-  float seed = random2d(strikePos * vec2(19.7, 31.1) +
-                        vec2(mod(startIteration, 4096.0) * 0.013, 7.37));
-  vec3 tint = lightningVariantTint(kind) * mix(vec3(1.0, 0.97, 0.93), vec3(0.96, 0.99, 1.0), seed);
-  // Increase chroma in linear light, not brightness or a fixed blue overlay.
-  // Keep the strongest component unchanged and preserve each class's hue.
-  float peak = max(tint.r, max(tint.g, tint.b));
-  return peak * pow(tint / peak, vec3(1.65));
-}
-
-vec3 apparentChannelColor(vec3 radiance, vec3 tint, float coreReference)
+// Niels747's original linear-RGB lightning channel colour. All variants keep
+// their own geometry and intensity, but use the same upstream colour.
+const vec3 upstreamLightningColor = vec3(0.70, 0.57, 1.0);
+vec3 upstreamColorize(vec3 radiance)
 {
   float peak = max(radiance.r, max(radiance.g, radiance.b));
-  vec3 colored = mix(vec3(peak), radiance, 0.12) * tint;
-  // Whiten only the well-covered center of a channel. A normalized signal,
-  // rather than absolute brightness, keeps low-intensity variants and
-  // restrikes consistent while dim edges retain their coloured bloom.
-  float coverage = peak / max(coreReference, 1e-6);
-  float whiteCore = 0.86 * smoothstep(0.08, 0.55, coverage);
-  return mix(colored, vec3(peak), whiteCore);
+  return max(peak, 0.0) * upstreamLightningColor;
 }
 
 // Increase lightning-only emission before the bloom pyramid. This boosts weak
@@ -549,9 +514,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   pixVal = max(pixVal - brightnessThreshold, 0.0);
   pixVal *= currentLightningIntensity;
 
-  // Approximate channel temperatures vary by discharge and by strike; atmospheric
-  // filtering and exposure also affect the observed colour.
-  vec3 lightningCol = planckBlackbody(30000.0 + 10000.0 * (random2d(pos * 7.7 + 1.31) - 0.5));
+  vec3 lightningCol = upstreamLightningColor;
 
   vec3 outputColor = max(pixVal * lightningCol, vec3(0));
 
@@ -1132,10 +1095,8 @@ vec4 computeAirColor(vec2 bndFragCoord)
     bool isPositiveCC = isCloudToCloud && lightningMeta.y >= 2.5;
     bool isSuperbolt = isExternalPositive && lightningMeta.w >= 0.5;
     bool isHyperbolt = isExternalPositive && lightningMeta.w >= 1.5;
-    int lightningKind = isHyperbolt ? 9 : isSuperbolt ? 6 :
-                        isExternalPositive ? 5 : isCloudToCloud ? (isPositiveCC ? 4 : 3) :
-                        isFlash ? (isPositiveIC ? 2 : 1) : 0;
-    vec3 lightningIlluminationTint = apparentLightningTint(lightningKind, lightningPos, lightningStartIterNum);
+    // Upstream lights its surroundings neutrally, not with a variant tint.
+    vec3 lightningIlluminationTint = vec3(1.0);
     const float superboltBrightnessMult = 12.0;
     const float superboltDurationShorten = 0.1;
     const float hyperboltBrightnessMult = 30.0; // 2.5x a superbolt
@@ -1196,27 +1157,15 @@ vec4 computeAirColor(vec2 bndFragCoord)
                                     : displayLightning(lightningPos, lightningTime, currentLightningIntensity);
     }
 
-    // Peak signal for a fully covered channel in each renderer, before the
-    // shared colour treatment. Filtering reduces the coverage proportionally.
-    float coreReference;
-    if (isExternalPositive)
-      coreReference = 3000.0 * extCurve * (isSuperbolt ? strokeBrightnessMult : 1.0);
-    else if (isCloudToCloud)
-      coreReference = 900.0 * currentLightningIntensity * ccIntensityGain * ccTailFade;
-    else if (isFlash)
-      coreReference = (isPositiveIC ? 3600.0 : 2400.0) * currentLightningIntensity;
+    // Ordinary CG already carries the exact upstream RGB. Other variants
+    // retain their geometry and radiance while adopting that same colour.
+    float strikePeak = max(strikeChannel.r, max(strikeChannel.g, strikeChannel.b));
+    if (ordinaryCG)
+      upstreamGroundLight += strikeChannel;
     else
-      coreReference = 1500.0 * currentLightningIntensity;
-    if (!isFlash && !isExternalPositive && !isCloudToCloud) {
-      // Preserve the variant tint, rather than forcing the upstream fixed blue.
-      upstreamGroundLight += strikeChannel * lightningIlluminationTint;
-    } else {
-      lightningBoltLight += apparentChannelColor(strikeChannel, lightningIlluminationTint, coreReference);
-    }
-    if (lightningBloomEnabled) {
-      float strikePeak = max(strikeChannel.r, max(strikeChannel.g, strikeChannel.b));
-      lightningBloomLight += strikePeak * lightningIlluminationTint;
-    }
+      lightningBoltLight += upstreamColorize(strikeChannel);
+    if (lightningBloomEnabled)
+      lightningBloomLight += strikePeak * upstreamLightningColor;
 
     // The light a strike throws on the clouds around it.
     float lightningOnLight;

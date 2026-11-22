@@ -7,7 +7,7 @@ const scene = fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','ut
 const bright = fs.readFileSync('shaders/fragment/isolateBrightPartsShader.frag','utf8');
 const post = fs.readFileSync('shaders/fragment/postProcessingShader.frag','utf8');
 assert.match(scene, /layout\(location = 1\) out vec4 lightningBloomOutput/);
-assert.match(scene, /strikePeak \* lightningIlluminationTint/);
+assert.match(scene, /strikePeak \* upstreamLightningColor/);
 assert.match(scene, /lightningBloomLight \* \(1\.0 - terrainOcclusion\)/);
 assert.match(scene, /lightningBloomOutput = vec4\(bloomSource, bloomPeak\)/);
 assert.match(scene, /lightningBloomOutput = vec4\(0\.0\)/);
