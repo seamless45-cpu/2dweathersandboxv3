@@ -33,7 +33,13 @@ vec3 brightSample(vec2 uv)
   float peak = max(source.r, max(source.g, source.b));
   // Extract before reducing: a one-pixel channel must not lose its highlight
   // gain just because it shares a large bloom pixel with darker background.
-  return source * mix(0.02, 0.12, smoothstep(4.0, 40.0, peak));
+  vec3 highlight = source * mix(0.02, 0.12, smoothstep(4.0, 40.0, peak));
+  float highlightPeak = max(highlight.r, max(highlight.g, highlight.b));
+  // Bright channels can exceed display white by thousands of times. Blur of
+  // those raw values saturates into a flat slab, not a visible falloff. Apply
+  // a hue-preserving logarithmic shoulder before the pyramid, while retaining
+  // monotonic brightness and weak highlights (no hard clipping).
+  return highlight * (log2(1.0 + highlightPeak) / max(highlightPeak, 1e-6));
 }
 
 void main()

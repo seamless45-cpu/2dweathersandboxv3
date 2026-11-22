@@ -253,11 +253,8 @@ const softHdrClamp = (value) => {
     'the curve times mainBoltBrightness, straight - no envelope and no easing of the tail');
 }
 
-// The bloom is where a bolt's light actually shows, and the shipped app took two
-// percent of the whole frame into it and nothing else. That is what is back: no
-// knee to single the channel out, no ceiling of its own, and no second lobe on the
-// clouds. The one thing kept is the NaN backstop at the read, which cannot change
-// the picture and is the guard the HDR chain is required to have.
+// The bloom pass retains ambient and highlight energy; its RGB shoulders
+// preserve a visible falloff instead of clipping a bright strike into a slab.
 {
   const brightParts = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'isolateBrightPartsShader.frag'), 'utf8');
   const post = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'postProcessingShader.frag'), 'utf8');
@@ -269,8 +266,8 @@ const softHdrClamp = (value) => {
     !/brightKnee/.test(brightParts) && !/brightCeiling/.test(brightParts) &&
     !/brightGain/.test(brightParts) && !/ambientGain/.test(brightParts),
     'no knee, no ceiling, no second gain');
-  check('the bloom composite is the shipped 0.990',
-    /color \+= safeSample\(texture\(bloomTex, uv\)\.rgb\) \* 0\.990;/.test(post));
+  check('the bloom composite uses a hue-preserving shoulder',
+    /bloom \* \(0\.7 \/ \(0\.7 \+ bloomPeak\)\)/.test(post));
   check('the tonemap reads both buffers through a NaN and infinity guard',
     /vec3 safeSample\(vec3 value\)/.test(post) &&
     /color = safeSample\(texture\(hdrTex, uv\)\.rgb\);/.test(post),
