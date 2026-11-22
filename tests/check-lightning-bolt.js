@@ -271,7 +271,7 @@ check('and the trunk stays inside the sprite',
     !/close\(\)\s*\{\s*\}/.test(source),
     'the payload is built here, so nothing added to the generator can break the wire');
   check('the upload asks the driver for exactly the bytes it has',
-    /gl\.texImage2D\(gl\.TEXTURE_2D, 0, gl\.RG8, artwork\.width, artwork\.height, 0, gl\.RG, gl\.UNSIGNED_BYTE, artwork\.data\)/
+    /gl\.texImage2D\(gl\.TEXTURE_2D, 0, gl\.RGB8, artwork\.width, artwork\.height, 0, gl\.RGB, gl\.UNSIGNED_BYTE, artwork\.data\)/
       .test(app) && !/bitmap\.close\(\)/.test(app),
     'no RGBA bitmap in the upload path, so no RGBA temporary on the GPU');
   check('a lost context leaves a lighter next load behind',

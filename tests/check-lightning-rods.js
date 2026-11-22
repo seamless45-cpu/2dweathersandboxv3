@@ -78,7 +78,7 @@ check('a flash is not masked to the cloud it was born in',
   /visibleLightning = displayLightningRadiance\(lightningBoltLight \/ \(1\. \+ cloudDensity \* 100\.0\)\);/.test(displayShader),
   'a channel that leaves one deck and crosses to the next is cloud-to-cloud lightning; the cloud filters the light, it does not cut the channel');
 check('a flash reads its own artwork, mip-filtered, over a slab of the sky at true aspect ratio',
-  /vec2 artwork = sampleLightningArtwork\(lightningNetworkTex, flashCoord, gradX, gradY\);/.test(displayShader) &&
+  /vec2 artwork = sampleLightningArtwork\(lightningNetworkTex, flashCoord, gradX, gradY\)\.rg;/.test(displayShader) &&
   /const float networkTexAspect = networkTexRes\.x \/ networkTexRes\.y;/.test(displayShader) &&
   /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader) &&
   /texCoord\.x - pos\.x\) \/ flashSpan\.x/.test(displayShader) &&

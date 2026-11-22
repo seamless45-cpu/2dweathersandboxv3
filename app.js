@@ -7329,8 +7329,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.88'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.88')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.89'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.89')
   ]);
 
   const [
@@ -7860,7 +7860,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   /*
    * How many bolt artworks to keep resident, and how the app decides.
    *
-   * One 2500 x 5000 R8 tile uses 12.5 MB for its base and roughly 16.7 MB
+   * One 2500 x 5000 RGB8 tile uses 37.5 MB for its base and roughly 50 MB
    * including mips. Two provide variety while limiting GPU memory pressure.
    * If a graphics context is lost, the next load uses one tile instead.
    */
@@ -7881,6 +7881,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
                         (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const numLightningTextures = mobileArtwork ? 1 : readLightningTileBudget();
   const lightningBoltBottomUs = new Float32Array(numLightningTextures).fill(0.5);
+  const originalBoltBottomUs = new Float32Array(numLightningTextures).fill(0.5);
 
 
 
@@ -8183,7 +8184,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   noiseImage = airplaneImage = airplaneReversedImage = airplaneGearImage = surfaceTextureImage = colorScalesImage = null;
 
 
-  function findBoltBottomU(artwork)
+  function findBoltBottomU(artwork, channel = 0)
   {
     const { width, height, data } = artwork;
     if (!data || width <= 0 || height <= 0)
@@ -8194,7 +8195,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     for (let y = startRow; y < height; y++) {
       const rowOffset = y * width;
       for (let x = 0; x < width; x++) {
-        const val = data[(rowOffset + x) * 2];
+        const val = data[(rowOffset + x) * 3 + channel];
         if (val >= 200) {
           const w = val - 199;
           weightedSum += ((x + 0.5) / width) * w;
@@ -8207,17 +8208,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   function generateLightningTexture(i, artwork)
   {
-    lightningBoltBottomUs[i] = findBoltBottomU(artwork);
-    // The artwork arrives as two bytes per texel (see readChannelArtwork in
-    // lightningGenerator.js), so the driver receives two channels (trunk and forks) and
-    // never sees the 50 MB RGBA picture the canvas had.
+    lightningBoltBottomUs[i] = findBoltBottomU(artwork, 0);
+    originalBoltBottomUs[i] = findBoltBottomU(artwork, 2);
+    // RGB packs the existing special-variant trunk and forks plus the original
+    // Niels747 grayscale bolt; the two kinds share one mipmapped texture.
     gl.bindTexture(gl.TEXTURE_2D, lightningTextures[i]);
     // Use tight packing for any artwork width. Restore shared unpack state afterwards.
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, artwork.width, artwork.height, 0, gl.RG, gl.UNSIGNED_BYTE, artwork.data);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB8, artwork.width, artwork.height, 0, gl.RGB, gl.UNSIGNED_BYTE, artwork.data);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
     // Mips filter thin channels to the actual HDR pixel footprint at each zoom.
-    // Cost: about one third of the 25 MB RG8 base tile per ready bolt.
+    // Mips cost about one third of the 37.5 MB RGB8 base tile per desktop bolt.
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -8301,7 +8302,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.88');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.89');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8354,11 +8355,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
   }
 
-  const emptyLightningTexturePixel = new Uint8Array([0, 0]);
+  const emptyLightningTexturePixel = new Uint8Array([0, 0, 0]);
   for (let i = 0; i < numLightningTextures; i++) {
     lightningTextures[i] = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, lightningTextures[i]);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, 1, 1, 0, gl.RG, gl.UNSIGNED_BYTE, emptyLightningTexturePixel);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB8, 1, 1, 0, gl.RGB, gl.UNSIGNED_BYTE, emptyLightningTexturePixel);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -9712,6 +9713,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.activeTexture(gl.TEXTURE7);
       gl.bindTexture(gl.TEXTURE_2D, lightningTextures[lightningTexNum]);
       gl.uniform1f(getUniformLoc(realisticDisplayProgram, 'lightningBottomU'), lightningBoltBottomUs[lightningTexNum]);
+      gl.uniform1f(getUniformLoc(realisticDisplayProgram, 'originalBoltBottomU'), originalBoltBottomUs[lightningTexNum]);
       gl.activeTexture(gl.TEXTURE10);
       gl.bindTexture(gl.TEXTURE_2D, lightningNetworkTexture);
       gl.activeTexture(gl.TEXTURE8);
@@ -10566,7 +10568,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.88');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.89');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

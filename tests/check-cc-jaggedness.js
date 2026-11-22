@@ -54,23 +54,9 @@ check('fractalLateralJagDeriv mirrors the helper (same frequencies, carries the 
 
 /* ------------------------------------------- CG bolt artwork warp */
 
-check('CG bolt applies the CC fractal as a lateral sample warp under an anchored envelope',
-  /float boltJagAmp = 0\.010 \* boltHScale;/.test(shader) &&
-  /float boltT = clamp\(lightningTexCoord\.y, 0\.0, 1\.0\);/.test(shader) &&
-  /float boltEnv = sin\(PI \* boltT\);/.test(shader) &&
-  /float boltJag = boltEnv \* fractalLateralJag\(boltT, boltSpanKm, boltSeed, boltJagAmp\);/.test(shader) &&
-  /lightningTexCoord\.x \+= boltJag \/ \(lightningTexAspect \* spanY\);/.test(shader));
-
-check('the bolt warp amplitude is bounded and cannot grow into a mess',
-  (() => {
-    const amps = [...shader.matchAll(/boltJagAmp = ([\d.]+) \* boltHScale/g)].map(m => Number(m[1]));
-    return amps.length === 1 && amps[0] <= 0.012;
-  })());
-
-check('the bolt warp derivative propagates into both mip gradients',
-  /float boltJagDerivU = boltJagDeriv \/ \(lightningTexAspect \* spanY\);/.test(shader) &&
-  /\+ boltJagDerivU \* \(-screenTexDx\.y \* scaleMult\), -screenTexDx\.y \* scaleMult\);/.test(shader) &&
-  /\+ boltJagDerivU \* \(-screenTexDy\.y \* scaleMult\), -screenTexDy\.y \* scaleMult\);/.test(shader));
+const ordinaryCg = shader.slice(shader.indexOf('vec3 displayLightning('), shader.indexOf('vec3 displayFlash('));
+check('ordinary CG samples the original artwork without the added warp',
+  !/fractalLateralJag/.test(ordinaryCg) && /sampleLightningArtwork\(lightningTex, lightningTexCoord, gradX, gradY\)\.b/.test(ordinaryCg));
 
 /* ------------------------------------------- IC / +IC network warps */
 

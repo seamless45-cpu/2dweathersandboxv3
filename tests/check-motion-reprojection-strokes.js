@@ -64,7 +64,7 @@ assert(cloudLeader + cloudRise * smooth(.40,.55,.55) > 100 * cloudLeader);
 for (const f of ['displayLightning','displayExternalLightning']) {
  const start=display.indexOf('vec3 '+f+'('), end=display.indexOf('\n}',start);
  assert(display.slice(start,end).includes('groundChannelStage(lightningTime'));
- assert(display.slice(start,end).includes('dischargeBranchGrowth(lightningTime'));
+ if (f === 'displayExternalLightning') assert(display.slice(start,end).includes('dischargeBranchGrowth(lightningTime'));
 }
 for (const f of ['displayFlash','displayPositiveFlash','displayCloudToCloudLightning']) {
  const start=display.indexOf('vec3 '+f+'('), end=display.indexOf('\n}',start);

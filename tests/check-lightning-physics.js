@@ -81,9 +81,9 @@ check('the display curve runs on the lifetime-stretched clock so the whole train
 
 /* ------------------------------------------------------------- branches */
 
-check('CG strokes fork 1-3 seeded side leaders rooted on the drawn channel',
-  /int branchCount = 1 \+ int\(floor\(branchSeedBase \* 2\.999\)\);/.test(display) &&
-  /ccEvalBranch\(pKm, anchor, bDir, bLen/.test(display));
+check('ordinary CG retains the upstream artwork forks instead of extra procedural leaders',
+  /sampleLightningArtwork\(lightningTex, lightningTexCoord, gradX, gradY\)\.b/.test(display) &&
+  !/ccEvalBranch\(pKm, anchor, bDir, bLen/.test(display));
 
 check('external positives fork per class budget: all families use zero or one fork',
   /int extBranchCount = extBranchSeed < 0\.35 \? 1 : 0;/.test(display));
