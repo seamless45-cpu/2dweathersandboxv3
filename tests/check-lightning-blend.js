@@ -27,7 +27,7 @@ check('realistic display is drawn with premultiplied blending (ONE, ONE_MINUS_SR
 check('the old SRC_ALPHA blend no longer feeds the realistic display',
   !/gl\.enable\(gl\.BLEND\);\s*\n\s*gl\.blendFunc\(gl\.SRC_ALPHA, gl\.ONE_MINUS_SRC_ALPHA\);\s*\n\s*\n\s*\n\s*\/\/ draw clouds and terrain/.test(app));
 check('bloom and tonemap consume only the HDR rgb channel',
-  /texture\(hdrTex, uv\)\.rgb/.test(isolate) &&
+  /texture\(hdrTex, texCoord\)\.rgb/.test(isolate) &&
   /texture\(hdrTex, uv\)\.rgb/.test(postProcessing) &&
   !/hdrTex[^\n]*\.a\b/.test(isolate) && !/hdrTex[^\n]*\.a\b/.test(postProcessing));
 check('documentation explains the premultiplied contract for the blend site',

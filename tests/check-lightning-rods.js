@@ -258,15 +258,15 @@ const softHdrClamp = (value) => {
   const brightParts = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'isolateBrightPartsShader.frag'), 'utf8');
   const post = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'postProcessingShader.frag'), 'utf8');
 
-  check('the bright pass preserves ambient bloom and boosts HDR highlights',
-    /mix\(0\.02, 0\.12, smoothstep\(4\.0, 40\.0, peak\)\)/.test(brightParts) && /fragmentColor = sum \/ float\(countX \* countY\);/.test(brightParts),
+  check('the bright pass uses the upstream 2% shared scene extraction',
+    /outputCol \*= 0\.02;/.test(brightParts) && /texture\(hdrTex, texCoord\)\.rgb/.test(brightParts),
     'one multiply, the shipped one');
   check('nothing in the bright pass singles the channel out',
     !/brightKnee/.test(brightParts) && !/brightCeiling/.test(brightParts) &&
     !/brightGain/.test(brightParts) && !/ambientGain/.test(brightParts),
     'no knee, no ceiling, no second gain');
   check('the bloom composite adds HDR light before tone mapping',
-    /color \+= safeSample\(texture\(bloomTex, uv\)\.rgb\) \* \(0\.990 \* 24\.0\);/.test(post));
+    /color \+= safeSample\(texture\(bloomTex, uv\)\.rgb\) \* 0\.990;/.test(post));
   check('the tonemap reads both buffers through a NaN and infinity guard',
     /vec3 safeSample\(vec3 value\)/.test(post) &&
     /color = safeSample\(texture\(hdrTex, uv\)\.rgb\);/.test(post),

@@ -8,10 +8,10 @@ const post = fs.readFileSync(path.join(root, 'shaders/fragment/postProcessingSha
 const bright = fs.readFileSync(path.join(root, 'shaders/fragment/isolateBrightPartsShader.frag'), 'utf8');
 assert.match(shader, /peak \/ 24000\.0/);
 assert.match(shader, /vec3 c = max\(radiance, vec3\(0\.0\)\) \* 18\.0;/);
-assert.match(bright, /mix\(0\.02, 0\.12, smoothstep\(4\.0, 40\.0, peak\)\)/);
+assert.match(bright, /outputCol \*= 0\.02/);
 assert.match(post, /color \/= max\(1\.0, peak\)/);
 assert.match(post, /color \*= mappedPeak \/ max\(peak, 1e-6\)/);
-const mapped = post.slice(post.indexOf('vec3 mappedColor(vec2 uv, vec3 contactLight)'));
+const mapped = post.slice(post.indexOf('vec3 mappedColor(vec2 uv)'));
 assert(mapped.indexOf('texture(bloomTex, uv)') < mapped.indexOf('float peak ='));
 const emit = c => c.map(v => v * 18 / (1 + Math.max(...c) * 18 / 24000));
 const previous = c => c.map(v => v * 6 / (1 + Math.max(...c) * 6 / 4000));
