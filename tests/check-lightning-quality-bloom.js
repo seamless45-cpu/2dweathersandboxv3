@@ -11,8 +11,8 @@ assert.match(scene, /strikePeak \* lightningIlluminationTint/);
 assert.match(scene, /lightningBloomLight \* \(1\.0 - terrainOcclusion\)/);
 assert.match(scene, /lightningBloomOutput = vec4\(bloomSource, bloomPeak\)/);
 assert.match(scene, /lightningBloomOutput = vec4\(0\.0\)/);
-assert.match(bright, /max\(scene - vec3\(lightning\.a\), vec3\(0\.0\)\)/);
-assert.match(bright, /hasLightningBloom \? texture\(lightningBloomTex, uv\) : vec4\(0\.0\)/);
+assert.match(bright, /outputCol \*= 0\.02/);
+assert.doesNotMatch(bright, /lightningBloomTex/);
 assert.match(post, /if \(bloomEnabled\)/);
 assert.match(scene, /sampleLightningArtwork\(lightningTex, lightningTexCoord, gradX, gradY\)/);
 assert.equal((scene.match(/sampleLightningArtwork\(lightningNetworkTex, flashCoord, gradX, gradY\)/g)||[]).length,2);
@@ -41,15 +41,5 @@ assert.equal(bad.calls.filter(x=>x[0]==='delete').length,1);bad.setComplete(true
 bad.context.ensureLightningBloomTarget(false);assert(bad.context.ensureLightningBloomTarget(true));
 const oversized=makeTest(true); oversized.context.hdrFBO.width=8192; oversized.context.hdrFBO.height=8192;
 assert(!oversized.context.ensureLightningBloomTarget(true)); assert.equal(oversized.calls.length,0);
-// Simulate white-core and chromatic bloom extraction through the same RGB
-// shoulder and gamma mapping used in the renderer. No fixed blue tint, and
-// background remains unchanged where there is no lightning contribution.
-const extract=(scene,tint,peak)=>scene.map((v,i)=>Math.max(v-peak,0)+tint[i]*peak);
-const gamma=c=>{const p=Math.max(1,...c);return c.map(x=>(x/p)**(1/2.2));};
-for(const tint of [[1,.52,.25],[.47,.72,1],[1,.5,.67],[.62,.51,1],[1,.45,.24],[1,.75,.29],[.95,.97,1],[.4,1,.76]]) {
- const core=[100,98,96], old=gamma(core), fresh=gamma(extract(core,tint,100));
- if(Math.min(...tint)<.9) assert(Math.min(...fresh)<Math.min(...old)-.05,'bloom hue should be measurably less white');
- assert.equal(fresh.indexOf(Math.max(...fresh)),tint.indexOf(Math.max(...tint)));
-}
-assert.deepStrictEqual(extract([.2,.4,.6],[1,.5,.2],0),[.2,.4,.6]);
-console.log('Lightning bloom source, optional MRT fallback and detail filtering checks passed');
+assert.match(app, /ensureLightningBloomTarget\(false\)/);
+console.log('Shared upstream bloom and retained variant detail filtering checks passed');

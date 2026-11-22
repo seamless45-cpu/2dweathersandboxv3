@@ -2,7 +2,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const post = fs.readFileSync('shaders/fragment/postProcessingShader.frag', 'utf8');
-const map = post.slice(post.indexOf('vec3 mappedColor(vec2 uv, vec3 contactLight)'), post.indexOf('\nvec3 mappedColor(vec2 uv)'));
+const map = post.slice(post.indexOf('vec3 mappedColor(vec2 uv)'), post.indexOf('\nvoid main()'));
 assert.match(map, /if \(bloomEnabled\) \{/);
 assert(map.indexOf('texture(bloomTex, uv)') < map.indexOf('color /= max(1.0, peak)'));
 assert.doesNotMatch(map, /color \+= \(vec3\(1.0\) - color\) \* glow/);

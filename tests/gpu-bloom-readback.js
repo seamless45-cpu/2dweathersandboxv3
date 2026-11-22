@@ -87,6 +87,13 @@ const fs = require("fs"),
         return f;
       }
       let currentProgram = program(current);
+      // Niels747's unmodified bright pass: a single scene sample times 0.02.
+      let upstreamProgram = program(`#version 300 es
+precision highp float;
+uniform sampler2D hdrTex;
+in vec2 texCoord;
+out vec3 fragmentColor;
+void main() { fragmentColor = texture(hdrTex, texCoord).rgb * 0.02; }`);
       function render(p, ratio, uniform, mode = "lightning") {
         const n = 64,
           d = n / ratio;
@@ -138,11 +145,9 @@ const fs = require("fs"),
             ratio,
             uniform,
             output: render(currentProgram, ratio, uniform),
+            upstream: render(upstreamProgram, ratio, uniform),
             error: gl.getError(),
           });
-      let split = {};
-      for (const mode of ["lightning", "other", "mixed", "fallback"])
-        split[mode] = render(currentProgram, 1, true, mode);
       const factory = new Function(
         helper + ";return createPrecipitationCountReadback",
       )();
@@ -174,32 +179,14 @@ const fs = require("fs"),
         }
         reads.dispose();
       }
-      return { bloom, counts, split };
+      return { bloom, counts };
     },
     { current, helper },
   );
   console.log(JSON.stringify(result, null, 2));
-  if (
-    result.bloom.some(
-      (x) => x.error || x.output[0] <= 0 ||
-        Math.abs(x.output[1] / x.output[0] - 0.45) > 0.002 ||
-        (x.uniform && Math.abs(x.output[0] - 120) > 0.05)
-    ) ||
-    result.counts.some((x) => x.error || x.count !== (x.compact ? 2 : 7))
-  )
-    throw Error("regression");
-  // Composite multiplies by 24. Lightning therefore contributes 24 times
-  // the old bright-pass value, other highlights remain unchanged, and the
-  // no-MRT fallback intentionally boosts all highlights.
-  for (let c=0;c<3;c++) {
-    const lightning = [1000,450,200][c], other = [500,500,500][c];
-    const close = (actual, expected) => Math.abs(actual-expected) < .08;
-    if (!close(result.split.lightning[c]*24, lightning*.12*24) ||
-        !close(result.split.other[c]*24, lightning*.12) ||
-        !close(result.split.mixed[c]*24, (lightning*24+other)*.12) ||
-        !close(result.split.fallback[c]*24, lightning*.12*24))
-      throw Error('lightning/scene bloom gain regression: '+JSON.stringify(result.split));
-  }
+  if (result.bloom.some(x => x.error || x.output.some((v,i) => Math.abs(v-x.upstream[i]) > 0.001)) ||
+      result.counts.some(x => x.error || x.count !== (x.compact ? 2 : 7)))
+    throw Error("upstream bright-pass or precipitation regression");
   await b.close();
 })().catch((e) => {
   console.error(e);

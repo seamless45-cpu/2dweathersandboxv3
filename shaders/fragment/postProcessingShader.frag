@@ -17,9 +17,6 @@ uniform float exposure;
 
 uniform sampler2D hdrTex;
 uniform sampler2D bloomTex;
-uniform sampler2D lightningHaloTex;
-uniform bool hasLightningBloom;
-uniform vec2 canvasTexelSize;
 uniform sampler2D historyTex;
 uniform vec2 outputTexelSize;
 uniform bool bloomEnabled;
@@ -67,39 +64,11 @@ vec3 safeSample(vec3 value)
   return clamp(value, vec3(0.0), vec3(hdrReadCeiling));
 }
 
-// A tight halo from the actual channel source, not the broad storm bloom.
-// Four bilinear diagonal taps form a small 3x3 footprint and keep the colour
-// attached to thin or branching channels at screen-pixel resolution.
-vec4 lightningContactHalo(vec2 uv)
-{
-  vec2 stepUV = 0.5 * max(canvasTexelSize, outputTexelSize);
-  vec3 a = safeSample(texture(lightningHaloTex, uv + vec2(-stepUV.x, -stepUV.y)).rgb);
-  vec3 b = safeSample(texture(lightningHaloTex, uv + vec2( stepUV.x, -stepUV.y)).rgb);
-  vec3 c = safeSample(texture(lightningHaloTex, uv + vec2(-stepUV.x,  stepUV.y)).rgb);
-  vec3 d = safeSample(texture(lightningHaloTex, uv + vec2( stepUV.x,  stepUV.y)).rgb);
-  vec3 light = (a + b + c + d) * 0.25;
-  float peak = max(light.r, max(light.g, light.b));
-  // If the optional lightning source could not be allocated, the bound HDR
-  // scene is a conservative fallback. Only its strongest highlights qualify.
-  if (!hasLightningBloom)
-    light *= smoothstep(2.0, 8.0, peak);
-  // Bound the near halo separately from the large bloom pyramid. Strong
-  // strikes remain local instead of turning the whole sky into a bright blob.
-  // Whiten only the tight, lightning-sourced center. The broad bloom stays
-  // chromatic; a smooth intensity transition avoids a hard white outline.
-  // Never whiten ordinary scene highlights when the optional source is absent.
-  float whiteCenter = hasLightningBloom ? smoothstep(0.15, 8.0, peak) : 0.0;
-  return vec4(0.32 * light / (1.0 + peak / 4.0), whiteCenter);
-}
-
-vec3 mappedColor(vec2 uv, vec3 contactLight)
+vec3 mappedColor(vec2 uv)
 {
   vec3 color = safeSample(texture(hdrTex, uv).rgb);
   if (bloomEnabled) {
-    // The bright pass stores the pyramid at 1/24 scale, except for the
-    // lightning component, making its final contribution twenty-four times brighter.
-    color += safeSample(texture(bloomTex, uv).rgb) * (0.990 * 24.0);
-    color += contactLight;
+    color += safeSample(texture(bloomTex, uv).rgb) * 0.990;
   }
   float hdrPeak = max(color.r, max(color.g, color.b));
   color *= min(1.0, hdrReadCeiling / max(hdrPeak, 1e-6));
@@ -118,26 +87,9 @@ vec3 mappedColor(vec2 uv, vec3 contactLight)
   return pow(max(color, vec3(0.0)), ONE_OVER_GAMMA);
 }
 
-vec3 mappedColor(vec2 uv)
-{
-  return mappedColor(uv, vec3(0.0));
-}
-
 void main()
 {
   vec3 outputCol = mappedColor(texCoord);
-  // Evaluate the small local halo only once, not for every optional FXAA,
-  // temporal-AA or 24-tap motion-blur sample. Add its display-space increment
-  // after those effects so they cannot detach it from the current channel.
-  vec3 contactIncrement = vec3(0.0);
-  float whiteCenter = 0.0;
-  if (bloomEnabled) {
-    vec4 contact = lightningContactHalo(texCoord);
-    vec3 withContact = mappedColor(texCoord, contact.rgb);
-    contactIncrement = max(withContact - outputCol, vec3(0.0));
-    whiteCenter = contact.a;
-  }
-
   // The five mappedColor taps that clamp history are shared by temporal AA and
   // the motion blur below (history there is clamped to the same box), so they
   // are only fetched when at least one of the two feedback effects needs them.
@@ -284,9 +236,5 @@ void main()
     }
   */
 
-  outputCol = clamp(outputCol + contactIncrement, 0.0, 1.0);
-  // Apply in display space so HDR tone mapping cannot tint the bright center
-  // back to the background colour or expose the narrow channel through it.
-  outputCol = mix(outputCol, vec3(1.0), whiteCenter);
   fragmentColor = vec4(outputCol, 1.0);
 }
