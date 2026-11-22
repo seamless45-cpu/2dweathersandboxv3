@@ -13,11 +13,11 @@ uniform sampler2D lightningBloomTex;
 uniform bool hasLightningBloom;
 out vec3 fragmentColor;
 
-// The pyramid is stored at one twelfth of its eventual strength. This lets us
-// brighten only lightning by 12x without overflowing the half-float pyramid:
+// The pyramid is stored at one twenty-fourth of its eventual strength. This lets us
+// brighten only lightning by 24x without increasing the pyramid's peak input:
 // its lightning component stays at the old level, and ordinary highlights are
-// divided by 12 here and restored by the post-processing composite.
-const float lightningBloomGain = 12.0;
+// divided by 24 here and restored by the post-processing composite.
+const float lightningBloomGain = 24.0;
 vec3 brightSample(vec2 uv)
 {
   vec3 scene = texture(hdrTex, uv).rgb;
