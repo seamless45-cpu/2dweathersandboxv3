@@ -278,10 +278,10 @@ check('and the trunk stays inside the sprite',
     /localStorage\.setItem\('lightningTileBudget', '1'\)/.test(app) &&
     /if \(graphicsContextLost\)\s*\/\/ nothing can be uploaded/.test(workerBlock),
     'the browser does not say how much memory it wanted; it says no');
-  check('bolt tile mips match the explicit gradient sampling used for minification',
+  check('special bolt artwork retains mipmaps while ordinary CG samples level zero',
     /gl\.generateMipmap\(gl\.TEXTURE_2D\);\s*\n\s*gl\.texParameteri\(gl\.TEXTURE_2D, gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR\);/
       .test(app.split('function generateLightningTexture')[1].split('function generateLightningNetworkTexture')[0]) &&
-    /sampleLightningArtwork\(lightningTex, lightningTexCoord, gradX, gradY\)/
+    /textureLod\(lightningTex, lightningTexCoord, 0\.0\)/
       .test(fs.readFileSync(path.join(ROOT, 'shaders/fragment/realisticDisplayShader.frag'), 'utf8')),
     'mipmap cost is about one third of the base R8 tile');
   check('the flash network is one small tile, asked for after the first bolt',

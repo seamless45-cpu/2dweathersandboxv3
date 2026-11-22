@@ -56,7 +56,7 @@ check('fractalLateralJagDeriv mirrors the helper (same frequencies, carries the 
 
 const ordinaryCg = shader.slice(shader.indexOf('vec3 displayLightning('), shader.indexOf('vec3 displayFlash('));
 check('ordinary CG samples the original artwork without the added warp',
-  !/fractalLateralJag/.test(ordinaryCg) && /sampleLightningArtwork\(lightningTex, lightningTexCoord, gradX, gradY\)\.b/.test(ordinaryCg));
+  !/fractalLateralJag/.test(ordinaryCg) && /textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.b/.test(ordinaryCg));
 
 /* ------------------------------------------- IC / +IC network warps */
 

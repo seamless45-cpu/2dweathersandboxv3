@@ -10,7 +10,7 @@ check('derivatives are captured before nonuniform rendering branches',
   main.indexOf('screenTexDy = dFdy(texCoord)') < main.indexOf('if (texCoord.y > 1.0)'));
 check('both IC paths use explicit projected gradients and normal CG accounts for rod shear',
   (shader.match(/sampleLightningArtwork\(lightningNetworkTex, flashCoord, gradX, gradY\)/g) || []).length === 2 &&
-  /sampleLightningArtwork\(lightningTex, lightningTexCoord, gradX, gradY\)/.test(shader) && /shear \* screenTexDx.y/.test(shader));
+  /textureLod\(lightningTex, lightningTexCoord, 0\.0\)/.test(shader) && /originalBoltBottomU/.test(shader));
 check('external bolt mip level and procedural lines use actual screen footprint, not fixed resolution',
   /textureLod\(lightningTex, vec2\(u, v\), lod\)/.test(shader) && /float pixelWorld = max\(length\(pixelX\), length\(pixelY\)\)/.test(shader) &&
   /float mainF2 = coreW \* coreW \+ 0\.5625 \* mainAA \* mainAA/.test(shader) &&
@@ -38,6 +38,6 @@ check('filtered channel coverage survives minification and subpixel phase', cont
 check('partial coverage is contrast-shaped to reduce washed-out halos without losing full-white peak',
   /return pow\(coverage, 1\.2\)/.test(shader) &&
   (shader.match(/lightningCoverage\(artwork\.r,/g) || []).length === 3 &&
-  /lightningCoverage\(sampleLightningArtwork\(lightningTex, lightningTexCoord, gradX, gradY\)\.b, 0\.004\)/.test(shader) &&
+  /textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.b/.test(shader) &&
   contrasted(0.25) > 0.25 * 0.5 && contrasted(0.5) < 0.5 && contrasted(1) === 1);
 if (failed) process.exitCode = 1;

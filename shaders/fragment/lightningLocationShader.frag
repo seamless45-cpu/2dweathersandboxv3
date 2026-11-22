@@ -43,6 +43,17 @@ float lightningHorizontalDist(float a, float b)
   return abs(a - b);
 }
 
+// Only coalesce an immediately repeated natural source, not a neighboring cell,
+// a later strike, or an intentional manual click. Meta.x is the cloud origin,
+// even if a rod or a special variant moved the visible target elsewhere.
+bool sameNaturalStrike(vec4 data, vec4 meta, vec4 incoming, bool isArtificial, float now, vec2 cellSize)
+{
+  float age = now - data[START_ITERNUM];
+  vec2 originDifference = abs(vec2(meta.x, data.y) - incoming.xy);
+  return !isArtificial && !artificialMeta(meta.z) && data[START_ITERNUM] > 0.0 &&
+         age > 0.0 && age <= 2.0 && all(lessThanEqual(originDifference, cellSize * 0.25));
+}
+
 float rodEffectiveRadius(int rodIdx, float intensity)
 {
   float effectiveHeight = rodHeight * (rodTypes[rodIdx] > 0.5 ? 1.8 : 1.0);
@@ -313,6 +324,12 @@ void main()
           abs(data[START_ITERNUM] - incoming[START_ITERNUM]) < 0.5)
         duplicate = true;
       vec4 meta = texelFetch(lightningDataTex, ivec2(i, 1), 0);
+      // A repeated natural feedback sample from the same source on the next
+      // iteration is one strike, not a second parallel channel. Restrict this
+      // to an almost identical origin and two steps; deliberate manual clicks
+      // and genuinely separate storm cells can still coexist.
+      if (sameNaturalStrike(data, meta, incoming, isArtificial, iterNum, texelSize))
+        duplicate = true;
       if (freeSlot < 0 && !slotBusy(data, meta))
         freeSlot = i;
     }

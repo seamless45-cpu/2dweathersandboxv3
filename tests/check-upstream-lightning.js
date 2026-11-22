@@ -35,7 +35,7 @@ for (const scale of [1, .5]) {
   for(let i=0;i<width*height;i++) {
     assert.equal(bytes[i*3],special.data[i*2]);
     assert.equal(bytes[i*3+1],special.data[i*2+1]);
-    assert.equal(bytes[i*3+2],Math.round(original.data[i*4]*original.data[i*4+3]/255));
+    assert.equal(bytes[i*3+2],original.data[i*4]);
     if(bytes[i*3+2]) lit++;
   }
   assert(lit>height, 'original bolt was not drawn');
