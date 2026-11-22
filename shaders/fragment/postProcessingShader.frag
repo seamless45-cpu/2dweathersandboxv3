@@ -92,7 +92,11 @@ vec3 mappedColor(vec2 uv, vec3 contactLight)
 {
   vec3 color = safeSample(texture(hdrTex, uv).rgb);
   if (bloomEnabled) {
-    color += safeSample(texture(bloomTex, uv).rgb) * 0.990;
+    vec3 bloom = safeSample(texture(bloomTex, uv).rgb) * 0.990;
+    float bloomPeak = max(bloom.r, max(bloom.g, bloom.b));
+    // Keep the bloom contribution below display white without independently
+    // clipping RGB. The scene and user exposure are otherwise unchanged.
+    color += bloom * (0.7 / (0.7 + bloomPeak));
     color += contactLight;
   }
   float hdrPeak = max(color.r, max(color.g, color.b));
