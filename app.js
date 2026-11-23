@@ -1437,6 +1437,51 @@ function createHdrFBO()
   throw new Error('This graphics device cannot allocate the floating-point HDR target the display needs.');
 }
 
+// A transient 2x HDR target for distant lightning. Keep the user's HDR
+// setting and the ordinary target intact, and bound memory on small devices.
+let zoomHdrFBO = null;
+let zoomHdrWanted = false;
+let zoomHdrFailedSize = '';
+let previousZoomSupersampleActive = false;
+function selectZoomHdrFBO(zoom, enabled)
+{
+  zoomHdrWanted = enabled && (zoomHdrWanted ? zoom < 0.85 : zoom < 0.75);
+  const useExtra = zoomHdrWanted && hdrRenderScale < 2.0 && !guiControls.superSharpDetail;
+  if (!useExtra) {
+    if (zoomHdrFBO) zoomHdrFBO.dispose();
+    zoomHdrFBO = null;
+    zoomHdrFailedSize = '';
+    return hdrFBO;
+  }
+  const width = canvas.width * 2, height = canvas.height * 2;
+  const sizeKey = `${width}x${height}`;
+  if (zoomHdrFBO && (zoomHdrFBO.width !== width || zoomHdrFBO.height !== height)) {
+    zoomHdrFBO.dispose();
+    zoomHdrFBO = null;
+  }
+  if (zoomHdrFBO) return zoomHdrFBO;
+  if (zoomHdrFailedSize === sizeKey) return hdrFBO;
+  // RGBA16F uses 8 bytes/pixel; this target is in addition to the base HDR.
+  const maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+  if (width > maxSize || height > maxSize || width * height * 8 > 64 * 1024 * 1024) {
+    zoomHdrFailedSize = sizeKey;
+    console.warn('Zoomed-out supersampling exceeds the GPU size or memory budget; using the selected HDR scale.');
+    return hdrFBO;
+  }
+  const candidate = new FBO(width, height, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, gl.LINEAR);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, candidate.frameBuffer);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+    candidate.dispose();
+    zoomHdrFailedSize = sizeKey;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    console.warn('Zoomed-out supersampling is unavailable; using the selected HDR scale.');
+    return hdrFBO;
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  zoomHdrFBO = candidate;
+  return zoomHdrFBO;
+}
+
 // Optional HDR attachment used only for lightning's coloured bloom source.
 // If allocation or attachment fails, keep the original bloom and scene intact.
 function ensureLightningBloomTarget(enabled)
@@ -2934,6 +2979,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     currentPerformanceReadouts.frameTime = frameTime.toFixed(1) + ' ms';
     currentPerformanceReadouts.simulationRate = measuredSimulationStepsPerSecond + ' steps/s';
     currentPerformanceReadouts.renderQuality = 'HDR ' + guiControls.hdrQuality +
+      (zoomHdrFBO && previousZoomSupersampleActive ? ' / Zoom 2x HDR' : '') +
       ' / Bloom ' + (guiControls.bloomEnabled ? guiControls.bloomQuality : 'Off') +
       (guiControls.superSharpDetail ? ' / 2x Pixel Ratio' : '') +
       (guiControls.filmicToneMapping ? ' / ACES' : '') +
@@ -7329,8 +7375,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.95'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.95')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.96'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.96')
   ]);
 
   const [
@@ -8302,7 +8348,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.95');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.96');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9564,6 +9610,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     temporalPreviousView = currentTemporalView;
     temporalPreviousDisplayMode = guiControls.displayMode;
 
+    const sceneHdrFBO = selectZoomHdrFBO(cam.curZoom, guiControls.displayMode == 'DISP_REAL' && !SETUP_MODE);
+    const zoomSupersampleActive = zoomHdrWanted && sceneHdrFBO.width >= canvas.width * 2 && sceneHdrFBO.height >= canvas.height * 2;
+    if (zoomSupersampleActive !== previousZoomSupersampleActive) {
+      temporalHistoryValid = false;
+      motionBlurHistoryValid = false;
+    }
+    previousZoomSupersampleActive = zoomSupersampleActive;
     if (guiControls.displayMode == 'DISP_REAL') {
 
       if (ambientLightDirty) { //  Ambient Light Calculation
@@ -9624,9 +9677,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         ambientLightDirty = false;
       }
 
-      gl.bindFramebuffer(gl.FRAMEBUFFER, hdrFBO.frameBuffer); // render to hdr framebuffer
+      gl.bindFramebuffer(gl.FRAMEBUFFER, sceneHdrFBO.frameBuffer); // render to hdr framebuffer
       // gl.viewport(0, 0, sim_res_x, sim_res_y);
-      gl.viewport(0, 0, hdrFBO.width, hdrFBO.height);
+      gl.viewport(0, 0, sceneHdrFBO.width, sceneHdrFBO.height);
       // Niels747 bloom reads the shared HDR scene directly, without a separate
       // lightning attachment or contact halo. Saved bloom settings are untouched.
       const hasLightningBloom = ensureLightningBloomTarget(false);
@@ -9741,7 +9794,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         gl.useProgram(isolateBrightPartsProgram);
 
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);
+        gl.bindTexture(gl.TEXTURE_2D, sceneHdrFBO.texture);
         gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFBOs[0].frameBuffer); // brightPartsFrameBuffer
         gl.viewport(0, 0, bloomFBOs[0].width, bloomFBOs[0].height);
         gl.clearColor(0.0, 0.0, 0.0, 1.0);                            // background color
@@ -9804,7 +9857,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         createTemporalHistoryTexture();
       gl.useProgram(postProcessingProgram);
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);
+      gl.bindTexture(gl.TEXTURE_2D, sceneHdrFBO.texture);
       // draw-time sampler validation covers every statically used sampler, even
       // ones this frame never actually taps (TAA is off by default, and the
       // motion-blur trail is gated on motionBlurHistoryValid). Units 1 and 2
@@ -9818,12 +9871,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       if (bloomFBOs.length) // bloom may have been turned off if its target is not renderable
         gl.bindTexture(gl.TEXTURE_2D, bloomFBOs[0].texture);
       else
-        gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);
+        gl.bindTexture(gl.TEXTURE_2D, sceneHdrFBO.texture);
       gl.activeTexture(gl.TEXTURE2);
       if (temporalHistoryTexture)
         gl.bindTexture(gl.TEXTURE_2D, temporalHistoryTexture);
       else
-        gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);
+        gl.bindTexture(gl.TEXTURE_2D, sceneHdrFBO.texture);
       gl.activeTexture(gl.TEXTURE3);
       gl.bindTexture(gl.TEXTURE_2D, baseTexture_1); // fluid state: scene velocity for motion blur
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'velocityTex'), 3);
@@ -9835,6 +9888,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'motionBlurWrap'), guiControls.wrapHorizontally);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'bloomEnabled'), guiControls.bloomEnabled);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'toneMappingEnabled'), guiControls.filmicToneMapping);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'zoomSupersampleEnabled'), zoomSupersampleActive);
+      gl.uniform2f(getUniformLoc(postProcessingProgram, 'canvasTexelSize'), 1.0 / canvas.width, 1.0 / canvas.height);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'fxaaEnabled'), guiControls.fxaaEnabled);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'temporalAAEnabled'), guiControls.temporalAAEnabled);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'temporalHistoryValid'), temporalHistoryValid);
@@ -9843,7 +9898,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.uniform1f(getUniformLoc(postProcessingProgram, 'motionBlurStrength'), guiControls.motionBlurIntensity);
       // Neighborhood clamp and FXAA must step by the *source* (HDR) texel,
       // which is finer than one canvas pixel when HDR is supersampled.
-      gl.uniform2f(getUniformLoc(postProcessingProgram, 'outputTexelSize'), 1.0 / hdrFBO.width, 1.0 / hdrFBO.height);
+      gl.uniform2f(getUniformLoc(postProcessingProgram, 'outputTexelSize'), 1.0 / sceneHdrFBO.width, 1.0 / sceneHdrFBO.height);
       gl.uniform3f(getUniformLoc(postProcessingProgram, 'motionBlurView'), renderViewX, renderViewY, cam.curZoom);
       const mbPrev = motionBlurPreviousView || [renderViewX, renderViewY, cam.curZoom];
       gl.uniform3f(getUniformLoc(postProcessingProgram, 'motionBlurPrevView'), mbPrev[0], mbPrev[1], mbPrev[2]);
@@ -10559,7 +10614,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.95');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.96');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

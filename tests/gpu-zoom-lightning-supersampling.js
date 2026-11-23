@@ -1,0 +1,20 @@
+// Optional GPU test of the actual display resolve against subpixel HDR clipping.
+const fs=require('fs'),assert=require('assert'),{chromium}=require('playwright-core');
+(async()=>{
+ const s=fs.readFileSync('shaders/fragment/postProcessingShader.frag','utf8');
+ const code=s.slice(s.indexOf('const float hdrReadCeiling'),s.indexOf('\nvoid main()'));
+ const main=s.slice(s.indexOf('void main()'),s.indexOf('  // The five mappedColor taps'));
+ const bin=(await import(require.resolve('@sparticuz/chromium'))).default;
+ const b=await chromium.launch({executablePath:await bin.executablePath(),args:[...bin.args,'--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
+ try{let page=await b.newPage();const result=await page.evaluate(({code,main})=>{
+ const canvas=document.createElement('canvas');canvas.width=canvas.height=1;const gl=canvas.getContext('webgl2');if(!gl||!gl.getExtension('EXT_color_buffer_float')||!gl.getExtension('OES_texture_float_linear'))throw Error('float framebuffer missing');
+ const vs=`#version 300 es\nprecision highp float;out vec2 texCoord;void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);texCoord=p;gl_Position=vec4(p*2.-1.,0,1);}`;
+ const fs=`#version 300 es\nprecision highp float;in vec2 texCoord;out vec4 result;uniform sampler2D hdrTex,bloomTex;uniform bool bloomEnabled,toneMappingEnabled,zoomSupersampleEnabled;uniform float exposure;uniform vec2 canvasTexelSize;const vec3 ONE_OVER_GAMMA=vec3(1./2.2);`+code+'\n'+main+'result=vec4(outputCol,1.); }';
+ function compile(type,src){let a=gl.createShader(type);gl.shaderSource(a,src);gl.compileShader(a);if(!gl.getShaderParameter(a,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(a));return a}
+ const p=gl.createProgram();gl.attachShader(p,compile(gl.VERTEX_SHADER,vs));gl.attachShader(p,compile(gl.FRAGMENT_SHADER,fs));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(p));gl.useProgram(p);
+ function tex(unit,w,h,data){gl.activeTexture(gl.TEXTURE0+unit);let t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,w,h,0,gl.RGBA,gl.FLOAT,data);return t}
+ const hdr=tex(0,2,2,new Float32Array(16)), bloom=tex(1,1,1,new Float32Array([0,0,0,1])), out=tex(2,1,1,null);const fb=gl.createFramebuffer();gl.bindFramebuffer(gl.FRAMEBUFFER,fb);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,out,0);if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)throw Error('FBO');gl.viewport(0,0,1,1);gl.uniform1i(gl.getUniformLocation(p,'hdrTex'),0);gl.uniform1i(gl.getUniformLocation(p,'bloomTex'),1);gl.uniform1f(gl.getUniformLocation(p,'exposure'),1);gl.uniform2f(gl.getUniformLocation(p,'canvasTexelSize'),1,1);
+ function draw(values,enabled,bloomOn){gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,hdr);let data=new Float32Array(16);for(let i=0;i<4;i++){data[i*4]=data[i*4+1]=data[i*4+2]=values[i];data[i*4+3]=1;}gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,2,2,gl.RGBA,gl.FLOAT,data);gl.uniform1i(gl.getUniformLocation(p,'zoomSupersampleEnabled'),enabled);gl.uniform1i(gl.getUniformLocation(p,'bloomEnabled'),bloomOn);gl.drawArrays(gl.TRIANGLES,0,3);let x=new Float32Array(4);gl.readPixels(0,0,1,1,gl.RGBA,gl.FLOAT,x);return x[0]}
+ return {ordinary:draw([1000,0,0,0],0,0),quarter:draw([1000,0,0,0],1,0),half:draw([1000,1000,0,0],1,0),full:draw([1000,1000,1000,1000],1,0),blank:draw([0,0,0,0],1,0),error:gl.getError()};
+ },{code,main});assert.equal(result.error,0);for(const [k,value] of Object.entries({ordinary:1,quarter:.25,half:.5,full:1,blank:0}))assert(Math.abs(result[k]-value)<1e-5,JSON.stringify(result));console.log('GPU: display-space resolve preserves quarter and half-pixel lightning coverage');}finally{await b.close()}
+})().catch(e=>{console.error(e);process.exit(1)});

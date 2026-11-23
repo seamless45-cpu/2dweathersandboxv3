@@ -76,14 +76,14 @@ check('postProcessingShader.frag declares hdrTex/bloomTex/historyTex/velocityTex
   /uniform sampler2D velocityTex;/.test(postShader));
 
 check('unit 1 always receives a texture: bloom pyramid when present, HDR fallback otherwise',
-  /gl\.activeTexture\(gl\.TEXTURE1\);\s*\n\s*if \(bloomFBOs\.length\)[^\n]*\n\s*gl\.bindTexture\(gl\.TEXTURE_2D, bloomFBOs\[0\]\.texture\);\s*\n\s*else\s*\n\s*gl\.bindTexture\(gl\.TEXTURE_2D, hdrFBO\.texture\);/.test(postPass));
+  /gl\.activeTexture\(gl\.TEXTURE1\);\s*\n\s*if \(bloomFBOs\.length\)[^\n]*\n\s*gl\.bindTexture\(gl\.TEXTURE_2D, bloomFBOs\[0\]\.texture\);\s*\n\s*else\s*\n\s*gl\.bindTexture\(gl\.TEXTURE_2D, sceneHdrFBO\.texture\);/.test(postPass));
 
 check('unit 2 always receives a texture: history when it exists, HDR fallback otherwise',
-  /gl\.activeTexture\(gl\.TEXTURE2\);\s*\n\s*if \(temporalHistoryTexture\)\s*\n\s*gl\.bindTexture\(gl\.TEXTURE_2D, temporalHistoryTexture\);\s*\n\s*else\s*\n\s*gl\.bindTexture\(gl\.TEXTURE_2D, hdrFBO\.texture\);/.test(postPass));
+  /gl\.activeTexture\(gl\.TEXTURE2\);\s*\n\s*if \(temporalHistoryTexture\)\s*\n\s*gl\.bindTexture\(gl\.TEXTURE_2D, temporalHistoryTexture\);\s*\n\s*else\s*\n\s*gl\.bindTexture\(gl\.TEXTURE_2D, sceneHdrFBO\.texture\);/.test(postPass));
 
 check('the HDR fallback (float texture) is bound before the canvas is cleared and drawn',
   (() => {
-    const fallback = postPass.indexOf('gl.bindTexture(gl.TEXTURE_2D, hdrFBO.texture);');
+    const fallback = postPass.indexOf('gl.bindTexture(gl.TEXTURE_2D, sceneHdrFBO.texture);');
     const canvasBound = postPass.indexOf('gl.bindFramebuffer(gl.FRAMEBUFFER, null); // null is canvas');
     return fallback >= 0 && canvasBound > fallback;
   })());
