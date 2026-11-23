@@ -77,13 +77,11 @@ check('a flash is not masked to the cloud it was born in',
   !/strikeLight \*= smoothstep\(0\.0, 3\.0, cloudDensity\);/.test(displayShader) &&
   /visibleLightning = displayLightningRadiance\(lightningBoltLight \/ \(1\. \+ cloudDensity \* 100\.0\)\);/.test(displayShader),
   'a channel that leaves one deck and crosses to the next is cloud-to-cloud lightning; the cloud filters the light, it does not cut the channel');
-check('a flash reads its own artwork, mip-filtered, over a slab of the sky at true aspect ratio',
-  /vec2 artwork = sampleLightningArtwork\(lightningNetworkTex, flashCoord, gradX, gradY\)\.rg;/.test(displayShader) &&
-  /const float networkTexAspect = networkTexRes\.x \/ networkTexRes\.y;/.test(displayShader) &&
-  /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader) &&
-  /texCoord\.x - pos\.x\) \/ flashSpan\.x/.test(displayShader) &&
-  /0\.5 \+ flashFlip \* \(texCoord\.y - pos\.y\) \/ flashSpan\.y/.test(displayShader),
-  'the network artwork must keep its 2:1 world aspect ratio via aspectRatios[0] instead of squashing vertically');
+check('IC and +IC project the original artwork onto compact cloud paths',
+  /float height = \(positive \? 0\.095 : 0\.075\) \* lightningHeightScale\(\);/.test(displayShader) &&
+  /float lengthWorld = height \* 2\.0;/.test(displayShader) &&
+  /adaptedUpstreamArtwork\(u, t\)/.test(displayShader) &&
+  /\(texCoord\.x - pos\.x\) \* aspectRatios\[0\] \/ lengthWorld/.test(displayShader));
 check('a flash lights the slab it lives in and a stroke lights the cloud under it',
   /if \(isFlash\) \{\s*\n\s*\/\/ A flash lights the whole slab/.test(displayShader) &&
   /vec2 flashDist = vec2\(\(lightningPos\.x - texCoord\.x\) \* aspectRatios\[0\], texCoord\.y - lightningPos\.y\);/.test(displayShader) &&

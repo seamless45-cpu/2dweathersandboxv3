@@ -50,12 +50,9 @@ check('planckBlackbody exists and is the Tanner Helland blackbody fit, unit blue
   /288\.1221695283 \* pow\(t - 60\.0, -0\.0755148492\)/.test(display) &&
   /rgb \/ max\(rgb\.b, 0\.35\)/.test(display));
 
-check('special classes retain their intrinsic intensity calculations before upstream colorization',
-  /upstreamColorize\(strikeChannel\)/.test(display) &&
-  /planckBlackbody\(18000\.0 \+ 6000\.0/.test(display) &&
-  /planckBlackbody\(11000\.0 \+ 4000\.0/.test(display) &&
-  /planckBlackbody\(\(isPositiveCC \? 12000\.0 : 22000\.0\)/.test(display) &&
-  /planckBlackbody\(14000\.0 \+ 4000\.0/.test(display));
+check('special classes retain their intensity gains and use upstream color',
+  /upstreamColorize\(strikeChannel\)/.test(display) && /positive \? 3600\.0 : 2400\.0/.test(display) &&
+  /const float ccBaseBrightness = 900\.0/.test(display) && /const float extBoltBrightness = 3000\.0/.test(display));
 
 check('superbolt and hyperbolt keep their pinned fictional hues (existing look off-limits)',
   /const vec3 superboltColor = vec3\(0\.332, 0\.469, 1\.0\);/.test(display) &&
@@ -85,13 +82,14 @@ check('ordinary CG retains the upstream artwork forks instead of extra procedura
   /textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.b/.test(display) &&
   !/ccEvalBranch\(pKm, anchor, bDir, bLen/.test(display));
 
-check('external positives fork per class budget: all families use zero or one fork',
-  /int extBranchCount = extBranchSeed < 0\.35 \? 1 : 0;/.test(display));
+check('external positives use the original artwork without added forks',
+  (() => {const body = display.slice(display.indexOf('vec3 displayExternalLightning('), display.indexOf('vec3 displayCloudToCloudLightning('));
+  return /adaptedUpstreamArtwork\(u, t\)/.test(body) && !/ccEvalBranch\(|extBranchGain/.test(body);})());
 
 
-check('CC fork budget is strike-seeded: -CC 3-4, +CC 0-1',
-  /float branchMax = isPositiveCC \? \(branchBudget < 0\.5 \? 1\.0 : 0\.0\)/.test(display) &&
-  /: \(3\.0 \+ floor\(branchBudget \* 2\.0\)\);/.test(display));
+check('both CC polarities use artwork forks rather than procedural forks',
+  (() => {const body = display.slice(display.indexOf('vec3 displayCloudToCloudLightning('), display.indexOf('float saturate'));
+  return /adaptedUpstreamArtwork\(u, t\)/.test(body) && !/ccEvalBranch\(|branchMax/.test(body);})());
 
 
 

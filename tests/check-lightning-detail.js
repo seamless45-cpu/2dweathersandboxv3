@@ -18,19 +18,16 @@ for (let y=0;y<256;y++) for (let x=0;x<512;x++) {
 }
 assert(energy > 0 && error/energy < .35, `scaled network geometry drifted: ${error/energy}`);
 const shader=fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','utf8');
-for (const name of ['displayFlash','displayPositiveFlash']) {
- const start=shader.indexOf('vec3 '+name+'('), end=shader.indexOf('\n}', start);
- const body=shader.slice(start,end);
- assert(body.includes('sampleLightningArtwork(lightningNetworkTex, flashCoord, gradX, gradY)'));
- assert(!body.includes('flashLateralJag') && !body.includes('ccEvalBranch'));
-}
+const adapted=shader.slice(shader.indexOf('vec3 displayAdaptedFlash('),shader.indexOf('vec3 displayFlash('));
+assert.match(adapted,/adaptedUpstreamArtwork\(u, t\)/);
+assert.doesNotMatch(adapted,/flashLateralJag|ccEvalBranch/);
 // Match the shader's analytic derivative against finite differences, away from
 // triangular-wave corners. The old sign and omitted octave produced ragged AA.
 assert.match(shader,/float sgn1 = fract\(x1\) < 0\.5 \? -4\.0 : 4\.0/);
 assert.match(shader,/0\.06 \* extTriWave\(x3\)/);
 assert.match(shader,/0\.06 \* sgn3 \* f3/);
 assert.match(shader,/jag\.x \* rootDerivative/);
-assert.match(shader,/spineDisp\.x \* PI \* cos\(PI \* t\)/);
+assert.match(shader,/adaptedUpstreamArtwork\(u, t\)/);
 const fract=x=>x-Math.floor(x), tri=x=>4*Math.abs(fract(x)-.5)-1;
 const fsx=[2.3,6.1,14.8], weights=[.58,.28,.06], phases=[.4,.4*1.73+.31,.4*2.91+.67];
 const value=x=>fsx.reduce((sum,f,i)=>sum+weights[i]*tri(x*f+phases[i]),0);

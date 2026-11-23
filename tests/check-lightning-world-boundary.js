@@ -42,8 +42,7 @@ check('display keeps unwrapped tile coordinates and uses a half-open canonical t
   /return texCoord\.x >= 0\.0 && texCoord\.x < 1\.0;/.test(display));
 const variants = [
   ['CG and artificial CG', 'displayLightning', 'displayFlash'],
-  ['negative intra-cloud', 'displayFlash', 'displayPositiveFlash'],
-  ['positive intra-cloud', 'displayPositiveFlash', 'evalExtArc'],
+  ['both intra-cloud polarities', 'displayAdaptedFlash', 'displayFlash'],
   ['external positive CG and superbolt', 'displayExternalLightning', 'displayCloudToCloudLightning'],
   ['both cloud-to-cloud polarities', 'displayCloudToCloudLightning', 'saturate'],
 ];
@@ -53,10 +52,13 @@ for (const [label, name, next] of variants) {
     /^vec3 [^{]+\{\s*if \(!inLightningWorldTile\(\)\)\s*return vec3\(0\.0\);/.test(body) &&
     !/fract\(texCoord\.x\)|mod\(texCoord\.x/.test(body) && /texCoord\.x - (?:pos|groundPos|targetPos|origin|data)\.x/.test(body));
 }
+check('both IC entry points delegate to the clipped shared renderer',
+  /displayAdaptedFlash\(pos, lightningTime, currentLightningIntensity, false\)/.test(display) &&
+  /displayAdaptedFlash\(pos, lightningTime, currentLightningIntensity, true\)/.test(display));
 const events = chunk(display, 'vec3 lightningBoltLight = vec3(0.0)', 'vec3 visibleLightning = displayLightningRadiance(lightningBoltLight');
 check('all channel dispatch and associated illumination are inside the clipped event loop',
   /for \(int slot = 0; slot < LIGHTNING_SLOTS; slot\+\+\) \{\s*if \(!inLightningWorldTile\(\)\)\s*break;/.test(events) &&
-  variants.every(([, name]) => events.includes(name + '(')) &&
+  ['displayLightning', 'displayFlash', 'displayPositiveFlash', 'displayExternalLightning', 'displayCloudToCloudLightning'].every(name => events.includes(name + '(')) &&
   !/fract\(texCoord\.x\)|mod\(texCoord\.x/.test(events) && events.includes('onLight +='));
 check('rod capture flashes are clipped but ordinary rod and terrain wrapping remain',
   /abs\(strikeX - rodPositions\[i\]\.x\)/.test(display) &&

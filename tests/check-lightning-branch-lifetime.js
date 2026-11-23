@@ -23,12 +23,12 @@ for (const [name, width, height] of [['generateLightningBolt', 500, 1000], ['gen
 }
 Math.random = random; restore();
 const shader = fs.readFileSync('shaders/fragment/realisticDisplayShader.frag', 'utf8');
-assert.match(shader, /1\.0 - smoothstep\(0\.68, 1\.10, time\)/);
-assert.equal((shader.match(/artworkBranchCoverage\(artwork\.g, true\)/g) || []).length, 2);
-assert.equal((shader.match(/artworkBranchCoverage\(artwork\.g, false\)/g) || []).length, 1);
-assert.match(shader, /branchCore \*= branchFade;/);
-// Ordinary CG now keeps the original generator’s baked forks.
-assert.match(shader, /extBranchGain \* intensityRaw \* 950\.0 \* branchFade/);
-const fade = t => { let x = Math.max(0, Math.min(1, (t - .68) / .42)); return 1 - x*x*(3-2*x); };
-assert.equal(fade(.65), 1); assert(fade(.9) > 0 && fade(.9) < 1); assert.equal(fade(1.1), 0);
-console.log('Trunk/fork artwork, sparse positive forks and branch lifetime checks passed');
+// Original forks are baked into the upstream tile; no separate procedural
+// branch fade is applied. All special paths use the shared original artwork.
+assert.match(shader, /textureLod\(lightningTex, vec2\(u, t\), 0\.0\)\.b - 0\.95/);
+for (const name of ['displayAdaptedFlash', 'displayExternalLightning', 'displayCloudToCloudLightning']) {
+  const start=shader.indexOf('vec3 '+name+'('), body=shader.slice(start,shader.indexOf('\n}',start));
+  assert.match(body,/adaptedUpstreamArtwork\(u, t\)/);
+  assert.doesNotMatch(body,/ccEvalBranch\(|extBranchGain/);
+}
+console.log('Generator fork data and original-artwork branch checks passed');

@@ -99,22 +99,13 @@ check('displayCloudToCloudLightning keeps +CC 50% brighter (1.5x) and avoids fwi
     displayShader.indexOf('float saturate'))),
   '+CC must scale channel + cloud glow by exactly 1.5x without conditional quad derivatives');
 
-check('reworked CC renders procedural fractal-displaced cubic spline with slope-corrected dendritic branches',
+check('CC projects upstream artwork onto its cubic path and retains cloud lighting',
   (() => {
-    const ccBody = displayShader.slice(
-      displayShader.indexOf('vec3 displayCloudToCloudLightning('),
-      displayShader.indexOf('float saturate')
-    );
-    return /vec2 evalCcCubic\(/.test(displayShader) &&
-      /vec2 ccFractalDisp\(/.test(displayShader) &&   // shared helpers, hoisted for the CG/IC/arc leaders too
-      /vec2 ccEvalBranch\(/.test(displayShader) &&
-      /inversesqrt\(1\.0 \+ clamp\(spineSlope \* spineSlope, 0\.0, 6\.25\)\)/.test(ccBody) &&
-      !/texture\w*\(\s*lightningTex/.test(ccBody) &&
-      /branchMax = isPositiveCC \? \(branchBudget < 0\.5 \? 1\.0 : 0\.0\)/.test(ccBody) &&
-      /!isPositiveCC && growth > 0\.5 && \(b == 1 \|\| b == 2\)/.test(ccBody) &&
-      /ccMidDist/.test(displayShader);
-  })(),
-  'CC must draw a procedural slope-corrected tortuous channel with 2-level -CC forks, sparse +CC forks, and 3-lobe cloud lighting');
+    const body = displayShader.slice(displayShader.indexOf('vec3 displayCloudToCloudLightning('), displayShader.indexOf('float saturate'));
+    return /evalCcCubic\(t, p0, p1, p2, p3\)/.test(body) && /evalCcCubicDeriv\(t, p0, p1, p2, p3\)/.test(body) &&
+      /adaptedUpstreamArtwork\(u, t\)/.test(body) && /cloudChannelStage\(lightningTime, t\)/.test(body) &&
+      !/ccEvalBranch\(|ccFractalDisp\(/.test(body) && /ccMidDist/.test(displayShader);
+  })());
 
 check('selectCloudToCloudTarget skips solid terrain walls and searches 4 storm decks while protecting nearby rod CG strikes',
   /if \(texture\(baseTex, vec2\(cx, cy\)\)\[TEMPERATURE\] >= 500\.0\)/.test(locationShader) &&
