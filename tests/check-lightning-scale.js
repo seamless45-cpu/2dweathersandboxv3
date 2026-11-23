@@ -48,20 +48,21 @@ check('at the 12 km reference the scale factor is exactly 1 (all default sizes p
   Math.abs((50.0 * 300 * 0.001) / 12.0 - 1.25) < 1e-9);      // 15 km world at same grid -> 1.25
 
 // ------------------------------------------------------------ IC / +IC spans
-check('intra-cloud flash span is a fixed 0.9 km (0.075 of the 12 km reference), scaled by hScale',
-  /float flashHeight = 0\.075 \* lightningHeightScale\(\);/.test(displayShader) &&
-  /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader));
+check('negative IC span retains a 0.9 km reference height',
+  /float height = \(positive \? 0\.095 : 0\.075\) \* lightningHeightScale\(\);/.test(displayShader) &&
+  /float lengthWorld = height \* 2\.0;/.test(displayShader));
 
-check('positive intra-cloud flash span is a fixed 1.14 km (0.095 of the 12 km reference), scaled by hScale',
-  /float flashHeight = 0\.095 \* lightningHeightScale\(\);/.test(displayShader));
+check('positive IC span retains a 1.14 km reference height',
+  /float height = \(positive \? 0\.095 : 0\.075\) \* lightningHeightScale\(\);/.test(displayShader) &&
+  /displayAdaptedFlash\(pos, lightningTime, currentLightningIntensity, true\)/.test(displayShader));
 
 // ------------------------------------------------------- external strikes
-check('external positive CG jag bounds are expressed at the 12 km reference and scaled',
-  /float jagScale = clamp\(min\(abs\(Hw\), V\) \* 0\.14, 0\.025 \* hScale, 0\.055 \* hScale\);/.test(displayShader));
+check('external positive CG uses its arc without extra procedural jag',
+  /vec2 c = evalExtArc\(t, Hw, V\)/.test(displayShader) && /adaptedUpstreamArtwork\(u, t\)/.test(displayShader));
 
-check('external positive CG artwork floor and lod scale with hScale',
+check('external positive CG artwork scale floor follows hScale',
   /float scaleLen = max\(V, 0\.25 \* hScale\);/.test(displayShader) &&
-  /actualLightningTexRes\.y \/ max\(length\(vec2\(Hw, V\)\), 0\.25 \* hScale\)\);/.test(displayShader));
+  /float u = 0\.5 \+ dPerp \/ \(scaleLen \* lightningTexAspect\);/.test(displayShader));
 
 // ------------------------------------------------------------ CC branches
 check('cloud-to-cloud fractal displacement floor is expressed at the 12 km reference',
@@ -76,13 +77,9 @@ check('cloud-to-cloud branch bounds (cull, masks, jag, core, halo) are expressed
   /float halo = exp\(-dist \/ max\(bw \* 3\.0, 0\.0040 \* hScale\)\) \* 0\.20 \* endMask;/.test(displayShader) &&
   /float hScale = lightningHeightScale\(\);\s*\n\s*vec2 bNorm/.test(displayShader));
 
-check('cloud-to-cloud spine core, halo, outer glow and sub-branch jag scale with hScale',
-  /float jagScale = clamp\(span \* 0\.068, 0\.015 \* hScale, 0\.052 \* hScale\);/.test(displayShader) &&
-  /float coreW = 0\.0018 \* hScale \* \(isPositiveCC \? 1\.28 : 1\.0\);/.test(displayShader) &&
-  /float mainHalo = exp\(-distMain \/ max\(coreW \* 3\.2, 0\.0045 \* hScale\)\) \* 0\.20 \* edgeFade;/.test(displayShader) &&
-  /float mainOuter = exp\(-distMain \/ max\(coreW \* 7\.5, 0\.011 \* hScale\)\) \* 0\.018 \* edgeFade;/.test(displayShader) &&
-  /float subJagScale = clamp\(bLen \* 0\.095, 0\.008 \* hScale, 0\.028 \* hScale\);/.test(displayShader) &&
-  /float hScale = lightningHeightScale\(\);\s*\n\s*float jagScale/.test(displayShader));
+check('cloud-to-cloud artwork width follows the length of its cubic path',
+  /float span = length\(p3 - p0\);/.test(displayShader) &&
+  /float u = 0\.5 \+ dPerp \/ \(span \* lightningTexAspect\);/.test(displayShader));
 
 // --------------------------------------------------- strike illumination lobes
 check('strike cloud lobes are scaled with hScale (IC slab, CG anchor, CC taps, CG leader, external origin)',

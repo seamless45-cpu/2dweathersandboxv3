@@ -35,7 +35,7 @@ assert.match(precip,/float pntSurface = pntSize \* pntSize/);
 assert.match(app,/gl\.pixelStorei\(gl\.UNPACK_ALIGNMENT, 1\);\s*gl\.texImage2D\([\s\S]*?artwork\.data\);\s*gl\.pixelStorei\(gl\.UNPACK_ALIGNMENT, 4\)/);
 assert.match(app,/width : 1250, height : 2500, logicalScale : 0\.5/);
 assert.match(worker,/width \/= logicalScale;\s*height \/= logicalScale/);
-assert.match(display,/vec2 actualLightningTexRes = vec2\(textureSize\(lightningTex, 0\)\)/);
+assert.match(display,/textureLod\(lightningTex, vec2\(u, t\), 0\.0\)\.b/);
 assert.match(app,/surfaceTextureMap-2048\.png/);
 // Count signs from the same interleaved layout, including both destinations.
 const particleData = new Float32Array([0,0,-2,0,1, 0,0,.1,0,1, 0,0,-4,0,1]);

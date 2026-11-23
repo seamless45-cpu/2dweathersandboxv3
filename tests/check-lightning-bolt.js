@@ -426,21 +426,14 @@ check('the curved network is fine and sparse, not a bloated white web',
 {
   const displayShader = fs.readFileSync(path.join(ROOT, 'shaders/fragment/realisticDisplayShader.frag'), 'utf8');
   const app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
-  const flashHeight = Number((displayShader.match(/float flashHeight = ([\d.]+) \* lightningHeightScale\(\);/) || [])[1]);
-  const threshold = Number((displayShader.match(/const float flashThreshold = ([\d.]+);/) || [])[1]);
-
-  check('displayFlash keeps compact world scale instead of filling huge stretches of sky',
-    Number.isFinite(flashHeight) && Math.abs(flashHeight * 12.0 - 0.9) < 1e-9,
-    'flashHeight ' + flashHeight + ' of the 12 km reference height (0.9 km, must not scale with sim setup)');
-
-  check('displayFlash keeps true 2:1 world aspect ratio so IC curves are not squashed',
-    /vec2 flashSpan = vec2\(flashHeight \* networkTexAspect \/ aspectRatios\[0\], flashHeight\);/.test(displayShader) &&
-    /const vec2 networkTexRes = vec2\(1024\.0, 512\.0\);/.test(displayShader),
-    'flashSpan must match the 512 x 256 artwork aspect ratio via aspectRatios[0]');
-
-  check('displayFlash keeps flashThreshold low enough that mipmapped fine curved branches stay continuous',
-    Number.isFinite(threshold) && threshold > 0 && threshold <= 0.05,
-    'flashThreshold ' + threshold + ' (high thresholds break thin curved branches into dots under mipmapping)');
+  check('IC retains compact, world-scaled spans for both polarities',
+    /float height = \(positive \? 0\.095 : 0\.075\) \* lightningHeightScale\(\);/.test(displayShader) &&
+    /float lengthWorld = height \* 2\.0;/.test(displayShader));
+  check('IC projects the original artwork in world coordinates',
+    /\(texCoord\.x - pos\.x\) \* aspectRatios\[0\] \/ lengthWorld/.test(displayShader) &&
+    /adaptedUpstreamArtwork\(u, t\)/.test(displayShader));
+  check('IC uses the upstream original threshold and base-level artwork',
+    /textureLod\(lightningTex, vec2\(u, t\), 0\.0\)\.b - 0\.95/.test(displayShader));
 
   check('app.js requests the IC network tile early even before iterNum >= 400 or on low tile budget',
     /if \(!lightningNetworkReady \|\| wantedLightningTexNum >= lightningTexturesReady\)/.test(app),

@@ -64,11 +64,10 @@ check('ordinary CG samples the original artwork without the added warp',
 
 /* ------------------------------------- external positive CG (+super/hyper) */
 
-check('external positive CG arc jag goes through the shared fractal, no hand-rolled octaves left',
-  /float jag = fractalLateralJag\(t, V \* cellHeight \* float\(resolution\.y\) \* 0\.001, seed, jagScale\) \* sin\(PI \* t\);/.test(shader) &&
-  !/0\.65 \* extTriWave\(t \* 3\.8/.test(shader) &&
-  !/0\.32 \* extTriWave\(t \* 9\.3/.test(shader) &&
-  !/0\.14 \* extTriWave\(t \* 21\.0/.test(shader));
+check('external positive CG follows its arc using the upstream artwork without added jag',
+  /vec2 c = evalExtArc\(t, Hw, V\)/.test(shader) &&
+  /adaptedUpstreamArtwork\(u, t\)/.test(shader) &&
+  !/float jag = fractalLateralJag\(t, V/.test(shader));
 
 /* --------------------------------------------------- GC leader spine */
 
@@ -78,9 +77,10 @@ check('external positive CG arc jag goes through the shared fractal, no hand-rol
 
 /* ----------------------------------------------- CC path itself intact */
 
-check('the CC reference channel retains its geometry with lower radiance',
-  /const float ccBaseBrightness = 900\.;/.test(shader) &&
-  /float normLen = max\(span, 0\.18 \* hScale\);/.test(shader));
+check('CC retains its cubic path and original artwork',
+  /const float ccBaseBrightness = 900\.0;/.test(shader) &&
+  /vec2 c = evalCcCubic\(t, p0, p1, p2, p3\)/.test(shader) &&
+  /adaptedUpstreamArtwork\(u, t\)/.test(shader));
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 if (failed) process.exitCode = 1;
