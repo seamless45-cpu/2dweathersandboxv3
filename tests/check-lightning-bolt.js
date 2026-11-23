@@ -431,9 +431,9 @@ check('the curved network is fine and sparse, not a bloated white web',
     /float lengthWorld = height \* 2\.0;/.test(displayShader));
   check('IC projects the original artwork in world coordinates',
     /\(texCoord\.x - pos\.x\) \* aspectRatios\[0\] \/ lengthWorld/.test(displayShader) &&
-    /adaptedUpstreamArtwork\(u, t\)/.test(displayShader));
-  check('IC uses the upstream original threshold and base-level artwork',
-    /textureLod\(lightningTex, vec2\(u, t\), 0\.0\)\.b - 0\.95/.test(displayShader));
+    /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(displayShader));
+  check('IC filters pre-thresholded upstream artwork',
+    /textureGrad\(lightningTex, vec2\(u, t\), gradX, gradY\)\.r/.test(displayShader));
 
   check('app.js requests the IC network tile early even before iterNum >= 400 or on low tile budget',
     /if \(!lightningNetworkReady \|\| wantedLightningTexNum >= lightningTexturesReady\)/.test(app),

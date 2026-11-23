@@ -80,7 +80,7 @@ check('a flash is not masked to the cloud it was born in',
 check('IC and +IC project the original artwork onto compact cloud paths',
   /float height = \(positive \? 0\.095 : 0\.075\) \* lightningHeightScale\(\);/.test(displayShader) &&
   /float lengthWorld = height \* 2\.0;/.test(displayShader) &&
-  /adaptedUpstreamArtwork\(u, t\)/.test(displayShader) &&
+  /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(displayShader) &&
   /\(texCoord\.x - pos\.x\) \* aspectRatios\[0\] \/ lengthWorld/.test(displayShader));
 check('a flash lights the slab it lives in and a stroke lights the cloud under it',
   /if \(isFlash\) \{\s*\n\s*\/\/ A flash lights the whole slab/.test(displayShader) &&

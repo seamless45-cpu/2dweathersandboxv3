@@ -58,7 +58,7 @@ check('positive IC span retains a 1.14 km reference height',
 
 // ------------------------------------------------------- external strikes
 check('external positive CG uses its arc without extra procedural jag',
-  /vec2 c = evalExtArc\(t, Hw, V\)/.test(displayShader) && /adaptedUpstreamArtwork\(u, t\)/.test(displayShader));
+  /vec2 c = evalExtArc\(t, Hw, V\)/.test(displayShader) && /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(displayShader));
 
 check('external positive CG artwork scale floor follows hScale',
   /float scaleLen = max\(V, 0\.25 \* hScale\);/.test(displayShader) &&

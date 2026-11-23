@@ -64,13 +64,13 @@ assert(cloudLeader + cloudRise * smooth(.40,.55,.55) > 100 * cloudLeader);
 for (const f of ['displayLightning','displayExternalLightning']) {
  const start=display.indexOf('vec3 '+f+'('), end=display.indexOf('\n}',start);
  if (f === 'displayExternalLightning') assert(display.slice(start,end).includes('groundChannelStage(lightningTime'));
- else assert(display.slice(start,end).includes('brightnessThreshold = 0.95'));
- if (f === 'displayExternalLightning') assert(display.slice(start,end).includes('adaptedUpstreamArtwork(u, t)'));
+ else assert(display.slice(start,end).includes('textureGrad(lightningTex, lightningTexCoord, gradX, gradY).r * 0.05'));
+ if (f === 'displayExternalLightning') assert(display.slice(start,end).includes('adaptedUpstreamArtwork(u, t, gradX, gradY)'));
 }
 for (const f of ['displayAdaptedFlash','displayCloudToCloudLightning']) {
  const start=display.indexOf('vec3 '+f+'('), end=display.indexOf('\n}',start);
  assert(display.slice(start,end).includes('cloudChannelStage(lightningTime'));
- assert(display.slice(start,end).includes('adaptedUpstreamArtwork(u, t)'));
+ assert(display.slice(start,end).includes('adaptedUpstreamArtwork(u, t, gradX, gradY)'));
 }
 for (const polarity of ['false','true']) assert(display.includes(`displayAdaptedFlash(pos, lightningTime, currentLightningIntensity, ${polarity})`));
 console.log('Motion reprojection and staged discharge tests passed');

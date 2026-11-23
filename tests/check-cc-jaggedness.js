@@ -66,7 +66,7 @@ check('ordinary CG samples the original artwork without the added warp',
 
 check('external positive CG follows its arc using the upstream artwork without added jag',
   /vec2 c = evalExtArc\(t, Hw, V\)/.test(shader) &&
-  /adaptedUpstreamArtwork\(u, t\)/.test(shader) &&
+  /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(shader) &&
   !/float jag = fractalLateralJag\(t, V/.test(shader));
 
 /* --------------------------------------------------- GC leader spine */
@@ -80,7 +80,7 @@ check('external positive CG follows its arc using the upstream artwork without a
 check('CC retains its cubic path and original artwork',
   /const float ccBaseBrightness = 900\.0;/.test(shader) &&
   /vec2 c = evalCcCubic\(t, p0, p1, p2, p3\)/.test(shader) &&
-  /adaptedUpstreamArtwork\(u, t\)/.test(shader));
+  /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(shader));
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 if (failed) process.exitCode = 1;

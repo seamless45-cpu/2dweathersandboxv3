@@ -496,23 +496,32 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   if (lightningTexCoord.x < 0.01 || lightningTexCoord.x > 1.01)
     return vec3(0.0);
 
-  // Niels747 uses the base artwork with linear filtering, not a mipmapped
-  // coverage approximation. The original threshold keeps faint forks from
-  // becoming bright, parallel-looking channels during the return stroke.
-  float pixVal = textureLod(lightningTex, lightningTexCoord, 0.0).b;
+  // Return-stroke coverage is thresholded before the mip chain is built.
+  // Filtering coverage (rather than thresholding already-filtered intensity)
+  // preserves the light of subpixel branches without artificially widening it.
   const float branchShowFactor = 2.5;
   const float leaderBrightness = 50000.0;
   const float mainBoltBrightness = 100000.0;
-  float brightnessThreshold = clamp(1.0 - lightningTime * branchShowFactor +
-                                    lightningTexCoord.y * branchShowFactor, 0.0, 1.0);
+  float pixVal;
   if (lightningTime > 1.0) {
-    brightnessThreshold = 0.95;
+    vec2 gradX = vec2(screenTexDx.x * scaleMult * aspectRatios[0] / lightningTexAspect,
+                      -screenTexDx.y * scaleMult);
+    vec2 gradY = vec2(screenTexDy.x * scaleMult * aspectRatios[0] / lightningTexAspect,
+                      -screenTexDy.y * scaleMult);
+    if (rodHit) {
+      float shearSlope = (originalBoltBottomU - 0.5) * 1.25 * pow(clamp(lightningTexCoord.y, 0.0, 1.0), 0.25);
+      gradX.x += shearSlope * gradX.y;
+      gradY.x += shearSlope * gradY.y;
+    }
+    pixVal = textureGrad(lightningTex, lightningTexCoord, gradX, gradY).r * 0.05;
     currentLightningIntensity *= mainBoltBrightness;
+    pixVal *= currentLightningIntensity;
   } else {
-    currentLightningIntensity = leaderBrightness;
+    // Keep the original raw source for the moving leader threshold.
+    float raw = textureLod(lightningTex, lightningTexCoord, 0.0).b;
+    float threshold = clamp(1.0 - lightningTime * branchShowFactor + lightningTexCoord.y * branchShowFactor, 0.0, 1.0);
+    pixVal = max(raw - threshold, 0.0) * leaderBrightness;
   }
-  pixVal = max(pixVal - brightnessThreshold, 0.0);
-  pixVal *= currentLightningIntensity;
 
   vec3 lightningCol = upstreamLightningColor;
 
@@ -524,12 +533,15 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
 // Project the original bolt tile onto a path. The blue channel is the
 // unpremultiplied Niels747 artwork; the endpoint shear keeps captured rods and
 // cloud-to-cloud targets attached to the generated bolt's actual lower tip.
-float adaptedUpstreamArtwork(float u, float t)
+float adaptedUpstreamArtwork(float u, float t, vec2 gradX, vec2 gradY)
 {
-  u += (originalBoltBottomU - 0.5) * clamp(t, 0.0, 1.0);
+  float shear = originalBoltBottomU - 0.5;
+  u += shear * clamp(t, 0.0, 1.0);
   if (u < 0.01 || u > 0.99 || t < 0.01 || t > 0.99)
     return 0.0;
-  return max(textureLod(lightningTex, vec2(u, t), 0.0).b - 0.95, 0.0) * 20.0;
+  gradX.x += shear * gradX.y;
+  gradY.x += shear * gradY.y;
+  return textureGrad(lightningTex, vec2(u, t), gradX, gradY).r;
 }
 
 // Rotate the vertical source tile into a short horizontal cloud channel.
@@ -543,7 +555,11 @@ vec3 displayAdaptedFlash(vec2 pos, float lightningTime, float currentLightningIn
   float direction = random2d(vec2(pos.y * 3.77, 1.23)) < 0.5 ? -1.0 : 1.0;
   float t = 0.5 + direction * (texCoord.x - pos.x) * aspectRatios[0] / lengthWorld;
   float u = 0.5 + (texCoord.y - pos.y) / (lengthWorld * lightningTexAspect);
-  float coverage = adaptedUpstreamArtwork(u, t);
+  vec2 gradX = vec2(screenTexDx.y / (lengthWorld * lightningTexAspect),
+                    direction * screenTexDx.x * aspectRatios[0] / lengthWorld);
+  vec2 gradY = vec2(screenTexDy.y / (lengthWorld * lightningTexAspect),
+                    direction * screenTexDy.x * aspectRatios[0] / lengthWorld);
+  float coverage = adaptedUpstreamArtwork(u, t, gradX, gradY);
   float stage = cloudChannelStage(lightningTime, abs(t - 0.5) * 2.0);
   return upstreamLightningColor * coverage * currentLightningIntensity * (positive ? 3600.0 : 2400.0) * stage;
 }
@@ -627,7 +643,12 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   float dPerp = dot(target - c, normDir);
   float scaleLen = max(V, 0.25 * hScale);
   float u = 0.5 + dPerp / (scaleLen * lightningTexAspect);
-  float pixVal = adaptedUpstreamArtwork(u, t);
+  vec2 pixelX = vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y);
+  vec2 pixelY = vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y);
+  float alongScale = max(dLen, 1e-4);
+  vec2 gradX = vec2(dot(pixelX, normDir) / (scaleLen * lightningTexAspect), dot(pixelX, tanDir) / alongScale);
+  vec2 gradY = vec2(dot(pixelY, normDir) / (scaleLen * lightningTexAspect), dot(pixelY, tanDir) / alongScale);
+  float pixVal = adaptedUpstreamArtwork(u, t, gradX, gradY);
   const float extBoltBrightness = 3000.0;
   return max(pixVal * currentLightningIntensity * extBoltBrightness *
              groundChannelStage(lightningTime, t) * lightningColor, vec3(0.0));
@@ -698,7 +719,12 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
 
   float dPerp = dot(target - c, normDir);
   float u = 0.5 + dPerp / (span * lightningTexAspect);
-  float pixVal = adaptedUpstreamArtwork(u, t);
+  vec2 pixelX = vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y);
+  vec2 pixelY = vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y);
+  float alongScale = max(dLen, 1e-4);
+  vec2 gradX = vec2(dot(pixelX, normDir) / (span * lightningTexAspect), dot(pixelX, tanDir) / alongScale);
+  vec2 gradY = vec2(dot(pixelY, normDir) / (span * lightningTexAspect), dot(pixelY, tanDir) / alongScale);
+  float pixVal = adaptedUpstreamArtwork(u, t, gradX, gradY);
   const float ccBaseBrightness = 900.0;
   return upstreamLightningColor * pixVal * cloudChannelStage(lightningTime, t) * ccCurve * ccBaseBrightness;
 }

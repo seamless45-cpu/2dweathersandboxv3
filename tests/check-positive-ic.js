@@ -88,7 +88,7 @@ check('positive IC keeps its wider span and 50% brighter channel and illuminatio
 
 check('negative IC uses the narrower, lower-gain original-artwork path',
   /displayAdaptedFlash\(pos, lightningTime, currentLightningIntensity, false\)/.test(displayShader) &&
-  /positive \? 3600\.0 : 2400\.0/.test(displayShader) && /adaptedUpstreamArtwork\(u, t\)/.test(displayShader));
+  /positive \? 3600\.0 : 2400\.0/.test(displayShader) && /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(displayShader));
 
 check('app.js handles +IC metaType >= 3.5 before CC routing using origin coordinates and cc*.mp3 audio',
   /if \(metaType >= 3\.5\) \{[\s\S]*soundSystem\.soundThunder\(targetX, originY, Math\.min\(Math\.pow\(strikeIntensity, 2\.0\), 1\.0\)\);[\s\S]*\} else if \(metaType >= 1\.5\)/.test(appSource),

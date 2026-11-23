@@ -84,12 +84,12 @@ check('ordinary CG retains the upstream artwork forks instead of extra procedura
 
 check('external positives use the original artwork without added forks',
   (() => {const body = display.slice(display.indexOf('vec3 displayExternalLightning('), display.indexOf('vec3 displayCloudToCloudLightning('));
-  return /adaptedUpstreamArtwork\(u, t\)/.test(body) && !/ccEvalBranch\(|extBranchGain/.test(body);})());
+  return /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(body) && !/ccEvalBranch\(|extBranchGain/.test(body);})());
 
 
 check('both CC polarities use artwork forks rather than procedural forks',
   (() => {const body = display.slice(display.indexOf('vec3 displayCloudToCloudLightning('), display.indexOf('float saturate'));
-  return /adaptedUpstreamArtwork\(u, t\)/.test(body) && !/ccEvalBranch\(|branchMax/.test(body);})());
+  return /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(body) && !/ccEvalBranch\(|branchMax/.test(body);})());
 
 
 

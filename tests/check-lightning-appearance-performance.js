@@ -15,11 +15,11 @@ assert.doesNotMatch(app, /guiControls\.motionBlurEnabled = (?:true|false);/);
 const adaptedStart = shader.indexOf('vec3 displayAdaptedFlash(');
 const adapted = shader.slice(adaptedStart, shader.indexOf('\n}', adaptedStart));
 assert.match(adapted, /if \(!inLightningWorldTile\(\)\) return vec3\(0\.0\)/);
-assert.match(adapted, /adaptedUpstreamArtwork\(u, t\)/);
+assert.match(adapted, /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/);
 for (const positive of ['false', 'true'])
   assert(shader.includes(`displayAdaptedFlash(pos, lightningTime, currentLightningIntensity, ${positive})`));
 const artStart = shader.indexOf('float adaptedUpstreamArtwork(');
 const art = shader.slice(artStart, shader.indexOf('\n}', artStart));
-assert(art.indexOf('if (u < 0.01') < art.indexOf('textureLod('));
+assert(art.indexOf('if (u < 0.01') < art.indexOf('textureGrad('));
 assert.doesNotMatch(shader, /drawUpperAtmosphereLightning|drawAnvilCrawler|displayGroundToCloud/);
 console.log('Lightning appearance, performance and defaults regression checks passed');
