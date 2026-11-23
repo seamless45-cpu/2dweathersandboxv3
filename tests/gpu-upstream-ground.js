@@ -4,7 +4,7 @@
 const fs=require('fs'), assert=require('assert'), {chromium}=require('playwright-core');
 (async()=>{
  const source=fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','utf8');
- const cg=source.slice(source.indexOf('vec3 displayLightning('),source.indexOf('\n/*\n * The intra-cloud channel',source.indexOf('vec3 displayLightning(')));
+ const cg=source.slice(source.indexOf('vec3 displayLightning('),source.indexOf('\n// Project the original bolt tile',source.indexOf('vec3 displayLightning(')));
  const colorize=source.slice(source.indexOf('vec3 upstreamColorize('),source.indexOf('\n}',source.indexOf('vec3 upstreamColorize('))+2);
  const loc=fs.readFileSync('shaders/fragment/lightningLocationShader.frag','utf8');
  const guard=loc.slice(loc.indexOf('bool sameNaturalStrike('),loc.indexOf('\n}',loc.indexOf('bool sameNaturalStrike('))+2);

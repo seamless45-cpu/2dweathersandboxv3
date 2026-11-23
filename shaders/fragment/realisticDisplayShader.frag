@@ -521,126 +521,39 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   return outputColor;
 }
 
-/*
- * The intra-cloud channel, and it is a different picture from the bolt because it
- * is a different thing.
- *
- * A stroke is one channel going one way; a flash is a compact network of curved
- * leaders spreading outward around the strike point, forking into fine curved
- * tendrils inside the cloud. So a flash reads its own artwork tile (512 x 256,
- * 2:1, see generateLightningNetwork in lightningGenerator.js).
- *
- * Where it goes: 0.9 km tall, fixed in world units (lightningHeightScale());
- * the width follows the 512 x 256 (2:1) artwork tile's true world aspect ratio
- * (~1.8 km) so curved tendrils stay compact inside a convective cell instead
- * of stretching into a large horizontal bar across the sky.
- *
- * The threshold is 0.02 so mip-filtered curved secondary and tertiary tendrils
- * remain continuous and crisp at any zoom without bloating into thick ribbons.
- */
-vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity)
+// Project the original bolt tile onto a path. The blue channel is the
+// unpremultiplied Niels747 artwork; the endpoint shear keeps captured rods and
+// cloud-to-cloud targets attached to the generated bolt's actual lower tip.
+float adaptedUpstreamArtwork(float u, float t)
 {
-  if (!inLightningWorldTile())
-    return vec3(0.0);
-  const vec2 networkTexRes = vec2(1024.0, 512.0);
-  const float networkTexAspect = networkTexRes.x / networkTexRes.y; // 2.0
-  float flashHeight = 0.075 * lightningHeightScale();                // 0.9 km tall, fixed world size at any sim resolution / height
-  vec2 flashSpan = vec2(flashHeight * networkTexAspect / aspectRatios[0], flashHeight);
-  const float flashThreshold = 0.02;             // preserve thin mip-filtered curved branches and forks
-
-  const float mainBoltBrightness = 2400.;
-
-  float flashDir = random2d(vec2(pos.y * 3.77, 1.23)) < 0.5 ? -1. : 1.;
-  float flashFlip = random2d(vec2(pos.x * 5.11, 7.77)) < 0.5 ? -1. : 1.;
-
-  vec2 flashCoord = vec2(0.5 + flashDir * (texCoord.x - pos.x) / flashSpan.x,
-                         0.5 + flashFlip * (texCoord.y - pos.y) / flashSpan.y);
-
-  // The vertical artwork coordinate is unchanged by lateral distortion.
-  if (flashCoord.y < 0.004 || flashCoord.y > 0.996)
-    return vec3(0.0);
-
-  // Sample the connected artwork directly. A second high-frequency warp
-  // fractured its thin branches and made the network appear ragged.
-
-  if (flashCoord.x < 0.004 || flashCoord.x > 0.996 || flashCoord.y < 0.004 || flashCoord.y > 0.996)
-    return vec3(0);
-
-  vec2 gradX = vec2(flashDir * screenTexDx.x / flashSpan.x,
-                    flashFlip * screenTexDx.y / flashSpan.y);
-  vec2 gradY = vec2(flashDir * screenTexDy.x / flashSpan.x,
-                    flashFlip * screenTexDy.y / flashSpan.y);
-  vec2 artwork = sampleLightningArtwork(lightningNetworkTex, flashCoord, gradX, gradY).rg;
-  float pixVal = lightningCoverage(artwork.r, flashThreshold) +
-                 artworkBranchCoverage(artwork.g, false) * dischargeBranchFade(lightningTime);
-
-  const float brightnessThreshold = flashThreshold;
-  currentLightningIntensity *= mainBoltBrightness;
-
-  pixVal *= (1.0 - brightnessThreshold);
-  pixVal *= currentLightningIntensity;
-  pixVal *= cloudChannelStage(lightningTime, clamp(length(flashCoord - vec2(0.5)) * 1.4, 0.0, 1.0));
-
-  // Cloud flashes use a cooler apparent channel than ground return strokes.
-  vec3 lightningCol = planckBlackbody(18000.0 + 6000.0 * (random2d(vec2(pos.y * 3.9, pos.x * 7.3)) - 0.5));
-
-  vec3 outputColor = max(pixVal * lightningCol, vec3(0));
-
-  return outputColor;
+  u += (originalBoltBottomU - 0.5) * clamp(t, 0.0, 1.0);
+  if (u < 0.01 || u > 0.99 || t < 0.01 || t > 0.99)
+    return 0.0;
+  return max(textureLod(lightningTex, vec2(u, t), 0.0).b - 0.95, 0.0) * 20.0;
 }
 
-// Positive intra-cloud (+IC) anvil/upper-deck flash: warmer hot white-peach
-// polarity, broader anvil spread, cleaner primary leaders, and 50% brighter
-// peak radiance than negative IC flashes.
+// Rotate the vertical source tile into a short horizontal cloud channel.
+// Both polarities share the original artwork but preserve their respective
+// spans, intensity and cloud-channel animation.
+vec3 displayAdaptedFlash(vec2 pos, float lightningTime, float currentLightningIntensity, bool positive)
+{
+  if (!inLightningWorldTile()) return vec3(0.0);
+  float height = (positive ? 0.095 : 0.075) * lightningHeightScale();
+  float lengthWorld = height * 2.0;
+  float direction = random2d(vec2(pos.y * 3.77, 1.23)) < 0.5 ? -1.0 : 1.0;
+  float t = 0.5 + direction * (texCoord.x - pos.x) * aspectRatios[0] / lengthWorld;
+  float u = 0.5 + (texCoord.y - pos.y) / (lengthWorld * lightningTexAspect);
+  float coverage = adaptedUpstreamArtwork(u, t);
+  float stage = cloudChannelStage(lightningTime, abs(t - 0.5) * 2.0);
+  return upstreamLightningColor * coverage * currentLightningIntensity * (positive ? 3600.0 : 2400.0) * stage;
+}
+vec3 displayFlash(vec2 pos, float lightningTime, float currentLightningIntensity)
+{
+  return displayAdaptedFlash(pos, lightningTime, currentLightningIntensity, false);
+}
 vec3 displayPositiveFlash(vec2 pos, float lightningTime, float currentLightningIntensity)
 {
-  if (!inLightningWorldTile())
-    return vec3(0.0);
-  const vec2 networkTexRes = vec2(1024.0, 512.0);
-  const float networkTexAspect = networkTexRes.x / networkTexRes.y; // 2.0
-  float flashHeight = 0.095 * lightningHeightScale();                // 1.14 km tall, fixed world size at any sim resolution / height
-  vec2 flashSpan = vec2(flashHeight * networkTexAspect / aspectRatios[0], flashHeight);
-  const float flashThreshold = 0.01;
-
-  const float mainBoltBrightness = 3600.;
-
-  float flashDir = random2d(vec2(pos.y * 4.91, 2.37)) < 0.5 ? -1. : 1.;
-  float flashFlip = random2d(vec2(pos.x * 6.73, 8.91)) < 0.5 ? -1. : 1.;
-
-  vec2 flashCoord = vec2(0.5 + flashDir * (texCoord.x - pos.x) / flashSpan.x,
-                         0.5 + flashFlip * (texCoord.y - pos.y) / flashSpan.y);
-
-  // The vertical artwork coordinate is unchanged by lateral distortion.
-  if (flashCoord.y < 0.004 || flashCoord.y > 0.996)
-    return vec3(0.0);
-
-  // Sample the connected artwork directly. A second high-frequency warp
-  // fractured its thin branches and made the network appear ragged.
-
-  if (flashCoord.x < 0.004 || flashCoord.x > 0.996 || flashCoord.y < 0.004 || flashCoord.y > 0.996)
-    return vec3(0);
-
-  vec2 gradX = vec2(flashDir * screenTexDx.x / flashSpan.x,
-                    flashFlip * screenTexDx.y / flashSpan.y);
-  vec2 gradY = vec2(flashDir * screenTexDy.x / flashSpan.x,
-                    flashFlip * screenTexDy.y / flashSpan.y);
-  vec2 artwork = sampleLightningArtwork(lightningNetworkTex, flashCoord, gradX, gradY).rg;
-  float pixVal = lightningCoverage(artwork.r, flashThreshold) +
-                 artworkBranchCoverage(artwork.g, true) * dischargeBranchFade(lightningTime);
-
-  const float brightnessThreshold = flashThreshold;
-  currentLightningIntensity *= mainBoltBrightness;
-
-  pixVal *= (1.0 - brightnessThreshold);
-  pixVal *= currentLightningIntensity;
-  pixVal *= cloudChannelStage(lightningTime, clamp(length(flashCoord - vec2(0.5)) * 1.4, 0.0, 1.0));
-
-  // Positive IC leaders use a warmer apparent spectrum through the anvil.
-  vec3 positiveIcCol = planckBlackbody(11000.0 + 4000.0 * (random2d(vec2(pos.y * 5.9, pos.x * 3.3)) - 0.5));
-
-  vec3 positiveIcOut = max(pixVal * positiveIcCol, vec3(0));
-
-  return positiveIcOut;
+  return displayAdaptedFlash(pos, lightningTime, currentLightningIntensity, true);
 }
 
 vec2 evalExtArc(float t, float Hw, float V)
@@ -712,89 +625,16 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   vec2 normDir = vec2(-tanDir.y, tanDir.x);
 
   float dPerp = dot(target - c, normDir);
-  float seed = random2d(vec2(originX * 19.3, groundPos.y * 23.7)) * 4.0 + 0.5;
-  float jagScale = clamp(min(abs(Hw), V) * 0.14, 0.025 * hScale, 0.055 * hScale);
-  // CC-family fractal displacement, anchored at the cloud and ground ends, so
-  // the arc buckles the same way as the cloud-to-cloud channel instead of a
-  // smooth bend with frayed edges.
-  float jag = fractalLateralJag(t, V * cellHeight * float(resolution.y) * 0.001, seed, jagScale) * sin(PI * t);
-  dPerp += jag;
-
   float scaleLen = max(V, 0.25 * hScale);
   float u = 0.5 + dPerp / (scaleLen * lightningTexAspect);
-  float v = t;
-  if (v < 0.005 || v > 0.998 || u < 0.01 || u > 0.99)
-    return vec3(0.0);
-
-  // Seeded side leaders, different budgets per class of strike: ordinary
-  // external positives fork 1-2 times, superbolts 2-3, hyperbolts 3-4. Each is
-  // a short torturous daughter channel off the main arc.
-  float branchPixelT = max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)),
-                         length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y)));
-  float intensityRaw = currentLightningIntensity; // un-scaled by the artwork gain
-  float extBranchSeed = random2d(vec2(groundPos.y * 8.3, originX * 6.1));
-  float branchFade = dischargeBranchFade(branchTime);
-  int extBranchCount = extBranchSeed < 0.35 ? 1 : 0;
-  float extBranchGain = 0.0;
-  for (int bi = 0; bi < 4; bi++) {
-    if (bi >= extBranchCount || branchFade <= 0.0)
-      break;
-    float fi = float(bi);
-    float br1 = random2d(vec2(groundPos.x * 7.7 + fi * 3.1, originX * 4.9 + fi * 2.7));
-    float br2 = random2d(vec2(groundPos.x * 11.3 + fi * 5.7, originX * 8.9 + fi * 1.3));
-    float bt = 0.24 + 0.52 * fract(0.19 + fi * 0.31 + br1 * 0.83);
-    vec2 arcC = evalExtArc(bt, Hw, V);
-    vec2 arcD = evalExtArcDeriv(bt, Hw, V);
-    float arcLen = length(arcD);
-    vec2 arcTan = arcLen > 1e-5 ? arcD / arcLen : vec2(0.0, -1.0);
-    float arcJagT = fractalLateralJag(bt, V * cellHeight * float(resolution.y) * 0.001,
-                                      random2d(vec2(originX * 19.3, groundPos.y * 23.7)) * 4.0 + 0.5,
-                                      clamp(min(abs(Hw), V) * 0.14, 0.025 * hScale, 0.055 * hScale)) * sin(PI * bt);
-    vec2 bStart = vec2(arcC.x + (-arcTan.y) * arcJagT, arcC.y + (arcTan.x) * arcJagT);
-    float sideSign = mod(fi, 2.0) < 1.0 ? -1.0 : 1.0;
-    if (br2 < 0.5)
-      sideSign = -sideSign;
-    vec2 bDir = ccRotate(arcTan, sideSign * mix(0.52, 0.88, br1));
-    float bLen = scaleLen * mix(0.10, 0.21, br2);
-    float growth = dischargeBranchGrowth(lightningTime, bt);
-    if (growth <= 0.0) continue;
-    bLen *= growth;
-    float coreW = max(scaleLen * 0.0034, 0.0016);
-    vec2 bVal = ccEvalBranch(target, bStart, bDir, bLen, sideSign, groundPos.x * 23.7 + fi * 7.3, coreW, mix(0.48, 0.66, br1), branchPixelT);
-    extBranchGain += (bVal.x * 1.15 + bVal.y * 0.34) * groundChannelStage(lightningTime, bt);
-  }
-
-  // Conservative projected footprint in artwork texels. The closest-point
-  // arc mapping is nonlinear, so estimate from the real HDR pixel footprint
-  // rather than evaluating derivatives inside nonuniform control flow.
-  vec2 pixelX = vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y);
-  vec2 pixelY = vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y);
-  float pixelWorld = max(length(pixelX), length(pixelY));
-  vec2 actualLightningTexRes = vec2(textureSize(lightningTex, 0));
-  float footprint = pixelWorld * max(actualLightningTexRes.x / (scaleLen * lightningTexAspect),
-                                     actualLightningTexRes.y / max(length(vec2(Hw, V)), 0.25 * hScale));
-  float lod = clamp(log2(max(footprint, 1.0)), 0.0, 12.0);
-  vec2 artwork = textureLod(lightningTex, vec2(u, v), lod).rg;
-  float pixVal = lightningCoverage(artwork.r, 0.004) +
-                 artworkBranchCoverage(artwork.g, true) * branchFade;
-
-  // Preserve the full-white peak and existing positive-CG fade and color.
-  const float extBoltBrightness = 60000.;
-  const float brightnessThreshold = 0.004;
-  float intensity = currentLightningIntensity * extBoltBrightness;
-
-  pixVal *= 0.05;
-  pixVal *= intensity;
-  pixVal *= groundChannelStage(lightningTime, t);
-
-  return max(pixVal * lightningColor + lightningColor * extBranchGain * intensityRaw * 950.0 * branchFade, vec3(0.0));
+  float pixVal = adaptedUpstreamArtwork(u, t);
+  const float extBoltBrightness = 3000.0;
+  return max(pixVal * currentLightningIntensity * extBoltBrightness *
+             groundChannelStage(lightningTime, t) * lightningColor, vec3(0.0));
 }
 
-// Reworked procedural cloud-to-cloud (CC) channel: draws a genuine tortuous,
-// slope-corrected fractured plasma leader between clouds with forward-diverging
-// dendritic branches (-CC forms rich 2-level forked bridges in electric violet;
-// +CC stays 50% brighter with a thicker incandescent white-peach trunk and sparse
-// high-current forks). Uses zero screen-space derivative calls.
+// Adapt the original bolt onto the existing cloud-to-cloud cubic path.
+// Both polarities retain their timing and brightness in the caller.
 vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiveCC,
                                   float lightningTime, float ccCurve)
 {
@@ -856,90 +696,11 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
   vec2 tanDir = dLen > 1e-5 ? dC / dLen : vec2(1.0, 0.0);
   vec2 normDir = vec2(-tanDir.y, tanDir.x);
 
-  float hScale = lightningHeightScale();
-  float jagScale = clamp(span * 0.068, 0.015 * hScale, 0.052 * hScale);
-  float jagPhase = seed * 7.0 + 0.5;
-  vec2 spineDisp = ccFractalDisp(t * span, span, jagPhase, jagScale);
-  float spineEnv = sin(PI * t);
-  float dPerp = dot(target - c, normDir) - spineDisp.x * spineEnv;
-  float spineSlope = spineDisp.y * spineEnv + spineDisp.x * PI * cos(PI * t) / max(span, 1e-4);
-  float distMain = abs(dPerp) * inversesqrt(1.0 + clamp(spineSlope * spineSlope, 0.0, 6.25));
-
-  float worldPix = max(length(vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y)),
-                       length(vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y)));
-  float coreW = 0.0018 * hScale * (isPositiveCC ? 1.28 : 1.0);
-  float edgeFade = smoothstep(0.0, 0.025, t) * (1.0 - smoothstep(0.975, 1.0, t));
-  // Footprint-filtered core (same Gaussian idiom as channelGlow /
-  // ccEvalBranch): a fixed world-space edge snaps to 0 or full coverage
-  // once the channel is narrower than a pixel. The filter integrates
-  // coverage over the actual render-target pixel instead.
-  float mainAA = max(worldPix, 1e-6);
-  float mainF2 = coreW * coreW + 0.5625 * mainAA * mainAA;
-  float mainInvF = inversesqrt(mainF2);
-  float mainCore = exp(-distMain * distMain * mainInvF * mainInvF)
-                 * clamp(coreW * mainInvF, 0.0, 1.0) * edgeFade;
-  float mainHalo = exp(-distMain / max(coreW * 3.2, 0.0045 * hScale)) * 0.20 * edgeFade;
-  float mainOuter = exp(-distMain / max(coreW * 7.5, 0.011 * hScale)) * 0.018 * edgeFade;
-  float mainSignal = (mainCore + mainHalo + mainOuter) * cloudChannelStage(lightningTime, t);
-
-  float branchCore = 0.0;
-  float branchSignal = 0.0;
-  float branchBudget = random2d(vec2(seed * 3.7, targetPos.y * 9.1) + 0.57);
-  float branchFade = dischargeBranchFade(lightningTime);
-  float branchMax = isPositiveCC ? (branchBudget < 0.5 ? 1.0 : 0.0) // +CC: 0-1
-                                 : (3.0 + floor(branchBudget * 2.0)); // -CC: 3-4
-  for (int b = 0; b < 4; b++) {
-    if (float(b) >= branchMax || branchFade <= 0.0)
-      break;
-    float br1 = random2d(vec2(seed * 13.7 + float(b) * 5.3, originPos.y * 43.1));
-    float br2 = random2d(vec2(targetPos.x * 29.9 + float(b) * 7.9, seed * 17.3));
-    float tb = clamp(0.22 + float(b) * 0.18 + (br1 - 0.5) * 0.05, 0.14, 0.86);
-
-    vec2 rc = evalCcCubic(tb, p0, p1, p2, p3);
-    vec2 rdc = evalCcCubicDeriv(tb, p0, p1, p2, p3);
-    float rlen = length(rdc);
-    vec2 rtan = rlen > 1e-5 ? rdc / rlen : vec2(1.0, 0.0);
-    vec2 rnorm = vec2(-rtan.y, rtan.x);
-    vec2 rdisp = ccFractalDisp(tb * span, span, jagPhase, jagScale);
-    vec2 bStart = rc + rnorm * (rdisp.x * sin(PI * tb));
-
-    float sideSign = ((b % 2) == 0 ? 1.0 : -1.0) * (s2 < 0.5 ? 1.0 : -1.0);
-    float forkAngle = sideSign * mix(0.42, 0.78, br2);
-    vec2 bDir = ccRotate(rtan, forkAngle);
-    float bLen = span * mix(0.20, 0.42, br1) * (isPositiveCC ? 0.78 : 1.0);
-    float bWeight = isPositiveCC ? 0.62 : mix(0.68, 0.88, br2);
-    float growth = dischargeBranchGrowth(lightningTime, tb);
-    if (growth <= 0.0) continue;
-    bLen *= growth;
-    vec2 bVal = ccEvalBranch(target, bStart, bDir, bLen, sideSign, seed + float(b) * 1.37, coreW, bWeight, worldPix);
-    branchCore = max(branchCore, bVal.x);
-    branchSignal = max(branchSignal, bVal.y);
-
-    if (!isPositiveCC && growth > 0.5 && (b == 1 || b == 2)) {
-      float subAlong = 0.44 * bLen;
-      float subArch = sideSign * 0.11 * bLen * sin(PI * 0.44);
-      float subJagScale = clamp(bLen * 0.095, 0.008 * hScale, 0.028 * hScale);
-      vec2 subJag = ccFractalDisp(subAlong, max(bLen, 0.12 * hScale), (seed + float(b) * 1.37) * 11.3, subJagScale);
-      vec2 bNorm = vec2(-bDir.y, bDir.x);
-      vec2 subStart = bStart + bDir * subAlong + bNorm * (subArch + subJag.x * 0.868);
-      vec2 subDir = ccRotate(bDir, -sideSign * mix(0.38, 0.68, br1));
-      vec2 subVal = ccEvalBranch(target, subStart, subDir, bLen * 0.50, -sideSign, seed + float(b) * 3.11,
-                                 coreW * 0.82, bWeight * 0.65, worldPix);
-      branchCore = max(branchCore, subVal.x);
-      branchSignal = max(branchSignal, subVal.y);
-    }
-  }
-
-  branchCore *= branchFade;
-  branchSignal *= branchFade;
-  float totalSignal = max(mainSignal, branchSignal) + 0.18 * min(mainSignal, branchSignal);
-
-  const float ccBaseBrightness = 900.;
-  vec3 auraTint = planckBlackbody((isPositiveCC ? 12000.0 : 22000.0) +
-                                  4000.0 * (random2d(vec2(targetPos.x * 3.1, originPos.y * 5.7)) - 0.5));
-  vec3 coreTint = mix(auraTint, vec3(1.0), 0.22);
-  vec3 ccCol = mix(auraTint, coreTint, clamp(mainCore * 0.85 + branchCore * 0.55, 0.0, 1.0));
-  return max(totalSignal * ccCurve * ccBaseBrightness * ccCol, vec3(0.0));
+  float dPerp = dot(target - c, normDir);
+  float u = 0.5 + dPerp / (span * lightningTexAspect);
+  float pixVal = adaptedUpstreamArtwork(u, t);
+  const float ccBaseBrightness = 900.0;
+  return upstreamLightningColor * pixVal * cloudChannelStage(lightningTime, t) * ccCurve * ccBaseBrightness;
 }
 
 
