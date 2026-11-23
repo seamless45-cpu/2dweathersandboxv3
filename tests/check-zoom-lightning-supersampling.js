@@ -21,6 +21,8 @@ guiControls.superSharpDetail=false;c.hdrRenderScale=2;assert.strictEqual(c.selec
 assert.equal(guiControls.hdrQuality,'100%');assert.equal(c.hdrRenderScale,1);
 assert.match(app,/sceneHdrFBO = selectZoomHdrFBO\(cam\.curZoom/);
 assert.match(app,/previousZoomSupersampleActive/);
+assert.match(app,/const zoomSupersampleActive = sceneHdrFBO\.width >= canvas\.width \* 2 && sceneHdrFBO\.height >= canvas\.height \* 2/);
+assert.doesNotMatch(app,/const zoomSupersampleActive = zoomHdrWanted/);
 assert.match(post,/if \(zoomSupersampleEnabled\)/);
 assert.match(post,/outputCol = 0\.25 \* \(mappedColor/);
 assert.match(post,/canvasTexelSize \* 0\.25/);
