@@ -1,6 +1,6 @@
 'use strict';
 // The worker must actually ship the upstream canvas pixels for ordinary CG,
-// while preserving the fork's original RG bytes for special variants.
+// with return coverage pre-thresholded in red and the raw leader in blue.
 const assert = require('assert');
 const fs = require('fs');
 const vm = require('vm');
@@ -33,7 +33,7 @@ for (const scale of [1, .5]) {
   assert.equal(bytes.length, width*height*3);
   let lit = 0;
   for(let i=0;i<width*height;i++) {
-    assert.equal(bytes[i*3],special.data[i*2]);
+    assert.equal(bytes[i*3],Math.round(Math.max(original.data[i*4] - 255 * .95, 0) * 20));
     assert.equal(bytes[i*3+1],special.data[i*2+1]);
     assert.equal(bytes[i*3+2],original.data[i*4]);
     if(bytes[i*3+2]) lit++;
@@ -41,4 +41,4 @@ for (const scale of [1, .5]) {
   assert(lit>height, 'original bolt was not drawn');
 }
 restore();
-console.log('Upstream bolt and special-variant worker packing passed at desktop and mobile scales');
+console.log('Upstream raw leader and filtered-coverage worker packing passed at desktop and mobile scales');

@@ -25,10 +25,10 @@ Math.random = random; restore();
 const shader = fs.readFileSync('shaders/fragment/realisticDisplayShader.frag', 'utf8');
 // Original forks are baked into the upstream tile; no separate procedural
 // branch fade is applied. All special paths use the shared original artwork.
-assert.match(shader, /textureLod\(lightningTex, vec2\(u, t\), 0\.0\)\.b - 0\.95/);
+assert.match(shader, /textureGrad\(lightningTex, vec2\(u, t\), gradX, gradY\)\.r/);
 for (const name of ['displayAdaptedFlash', 'displayExternalLightning', 'displayCloudToCloudLightning']) {
   const start=shader.indexOf('vec3 '+name+'('), body=shader.slice(start,shader.indexOf('\n}',start));
-  assert.match(body,/adaptedUpstreamArtwork\(u, t\)/);
+  assert.match(body,/adaptedUpstreamArtwork\(u, t, gradX, gradY\)/);
   assert.doesNotMatch(body,/ccEvalBranch\(|extBranchGain/);
 }
 console.log('Generator fork data and original-artwork branch checks passed');

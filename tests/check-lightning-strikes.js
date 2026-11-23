@@ -229,7 +229,7 @@ check('the slot count agrees between app.js, common.glsl and this test',
 
   check('ordinary CG uses the upstream leader and return-stroke transition',
     /if \(lightningTime > 1\.0\)/.test(displayShader) &&
-    /currentLightningIntensity = leaderBrightness;/.test(displayShader),
+    /max\(raw - threshold, 0\.0\) \* leaderBrightness/.test(displayShader),
     'the leader precedes the original return stroke');
 
   check('both IC and CG sample the curve directly from the strike trigger iteration',
@@ -268,7 +268,7 @@ check('the slot count agrees between app.js, common.glsl and this test',
     !/channelBrightness/.test(displayShader) && !/lightningCurvePeak/.test(displayShader),
     'the curve goes straight into the gain, as it did in the shipped shader');
   check('CG uses the upstream leader threshold and return-stroke cutoff',
-    /brightnessThreshold = 0\.95;/.test(cgSection) && /branchShowFactor = 2\.5;/.test(cgSection));
+    /textureGrad\(lightningTex, lightningTexCoord, gradX, gradY\)\.r \* 0\.05/.test(cgSection) && /branchShowFactor = 2\.5;/.test(cgSection));
 
   // the channel, iteration by iteration, from the strike's booking to one past its end
   const channelOverTime = (strike) => {

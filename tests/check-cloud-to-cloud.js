@@ -103,7 +103,7 @@ check('CC projects upstream artwork onto its cubic path and retains cloud lighti
   (() => {
     const body = displayShader.slice(displayShader.indexOf('vec3 displayCloudToCloudLightning('), displayShader.indexOf('float saturate'));
     return /evalCcCubic\(t, p0, p1, p2, p3\)/.test(body) && /evalCcCubicDeriv\(t, p0, p1, p2, p3\)/.test(body) &&
-      /adaptedUpstreamArtwork\(u, t\)/.test(body) && /cloudChannelStage\(lightningTime, t\)/.test(body) &&
+      /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(body) && /cloudChannelStage\(lightningTime, t\)/.test(body) &&
       !/ccEvalBranch\(|ccFractalDisp\(/.test(body) && /ccMidDist/.test(displayShader);
   })());
 

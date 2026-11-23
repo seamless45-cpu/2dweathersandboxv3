@@ -7329,8 +7329,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.94'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.94')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.95'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.95')
   ]);
 
   const [
@@ -8210,8 +8210,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   {
     lightningBoltBottomUs[i] = findBoltBottomU(artwork, 0);
     originalBoltBottomUs[i] = findBoltBottomU(artwork, 2);
-    // RGB packs the existing special-variant trunk and forks plus the original
-    // Niels747 grayscale bolt; the two kinds share one mipmapped texture.
+    // RGB: prefiltered upstream return coverage, legacy fork data, and raw
+    // upstream grayscale for the leader. No additional texture is allocated.
     gl.bindTexture(gl.TEXTURE_2D, lightningTextures[i]);
     // Use tight packing for any artwork width. Restore shared unpack state afterwards.
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
@@ -8302,7 +8302,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.94');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.95');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -10559,7 +10559,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.94');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.95');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

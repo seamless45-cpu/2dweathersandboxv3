@@ -255,7 +255,7 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
   const extB = extMatch ? Number(extMatch[1]) : NaN;
   check('displayExternalLightning retains normalized artwork brightness and smooth tail fade',
     Number.isFinite(mainB) && Number.isFinite(extB) && extB === 3000 && mainB === 100000 &&
-    /adaptedUpstreamArtwork\(u, t\)/.test(displayShader) &&
+    /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(displayShader) &&
     /float extBaseIntensity = clamp\(mix\(1\.8, 3\.4,/.test(displayShader) &&
     /float extTailFade = pow\(smoothstep\(2\.924, 1\.15, tailT\), 2\.4\);/.test(displayShader) &&
     /float extCurve = currentLightningIntensity \* extIntensityGain \* extTailFade;/.test(displayShader),

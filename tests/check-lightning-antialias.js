@@ -45,9 +45,9 @@ check('branch core is footprint-filtered, not a fixed world-space smoothstep',
   /float f2 = bw \* bw \+ 0\.5625 \* aa \* aa;/.test(display) &&
   /float core = exp\(-dist \* dist \* invF \* invF\) \* clamp\(bw \* invF, 0\.0, 1\.0\) \* endMask;/.test(display));
 
-check('cloud-to-cloud samples the original base-level artwork on its cubic path',
-  /adaptedUpstreamArtwork\(u, t\)/.test(display) &&
-  /textureLod\(lightningTex, vec2\(u, t\), 0\.0\)\.b/.test(display));
+check('cloud-to-cloud filters the original artwork on its cubic path',
+  /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(display) &&
+  /textureGrad\(lightningTex, vec2\(u, t\), gradX, gradY\)\.r/.test(display));
 
 check('ccEvalBranch takes the pixel footprint as its last argument',
   /vec2 ccEvalBranch\(vec2 target, vec2 bStart, vec2 bDir, float bLen, float curveSign,\s*\n\s*float seed, float coreW, float weight, float pixelT\)/.test(display));

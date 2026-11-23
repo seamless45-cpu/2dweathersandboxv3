@@ -1,12 +1,11 @@
 /*
- * Lightning artwork worker. Ordinary ground strikes use the adapted Niels747
- * generator; the existing bolt artwork is retained for special variants, and
- * intra-cloud flashes retain their separate network. Bolt jobs pack the
- * special trunk/forks and original grayscale into RGB bytes; network jobs
- * transfer RG bytes. Only plain data crosses the worker boundary.
+ * Lightning artwork worker. Bolt jobs pack pre-thresholded upstream return
+ * coverage in red and the original grayscale leader artwork in blue. The
+ * existing legacy fork bytes remain in green. Network jobs transfer RG bytes.
+ * Only plain data crosses the worker boundary.
  */
 if (typeof importScripts === 'function')
-  importScripts('./upstreamLightningGenerator.js?v=2026-11-16.94');
+  importScripts('./upstreamLightningGenerator.js?v=2026-11-16.95');
 
 onmessage = (event) => {
   const msg = event.data || {};
@@ -16,12 +15,13 @@ onmessage = (event) => {
   const height = Math.max(32, Math.round(msg.height || fallback.height));
   const artwork = network ? generateLightningNetwork(width, height) : generateLightningBolt(width, height, msg.logicalScale || 1);
   if (!network) {
-    // Preserve the existing special-variant artwork in RG; blue carries the
-    // original Niels747 grayscale bolt, in the same mipmapped texture.
+    // Red carries pre-thresholded original return-stroke coverage so mipmaps
+    // average the narrow channel rather than averaging before the 0.95 cutoff.
+    // Blue retains the original raw intensity needed by the leader animation.
     const original = generateUpstreamLightningBolt(width, height, msg.logicalScale || 1).data;
     const packed = new Uint8Array(width * height * 3);
     for (let i = 0; i < width * height; i++) {
-      packed[i * 3] = artwork.data[i * 2];
+      packed[i * 3] = Math.round(Math.max(original[i * 4] - 255 * 0.95, 0) * 20);
       packed[i * 3 + 1] = artwork.data[i * 2 + 1];
       // Upstream uploads the ImageData RGB without premultiplying alpha and
       // samples its red channel. Preserve that exact intensity in our blue slot.
