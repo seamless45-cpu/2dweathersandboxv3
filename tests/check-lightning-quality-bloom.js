@@ -17,7 +17,7 @@ assert.match(post, /if \(bloomEnabled\)/);
 assert.match(scene, /textureLod\(lightningTex, lightningTexCoord, 0\.0\)/);
 assert.match(scene, /textureGrad\(lightningTex, vec2\(u, t\), gradX, gradY\)\.r/);
 assert.match(scene, /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/);
-assert.match(app, /width : mobileArtwork \? 1024 : 2048, height : mobileArtwork \? 512 : 1024/);
+assert.match(app, /configureLightningAnisotropy\(gl\)/);
 assert.match(app, /gl\.clearBufferfv\(gl\.COLOR, 1, clearLightningBloom\)/);
 assert.match(app, /lightningBloomEnabled'\), hasLightningBloom/);
 // Actual optional-attachment implementation exercised with a stateful GL fake:

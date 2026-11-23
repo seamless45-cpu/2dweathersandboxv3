@@ -1,11 +1,8 @@
-/*
- * Lightning artwork worker. Bolt jobs pack pre-thresholded upstream return
- * coverage in red and the original grayscale leader artwork in blue. The
- * existing legacy fork bytes remain in green. Network jobs transfer RG bytes.
- * Only plain data crosses the worker boundary.
- */
+/* Lightning worker: R = pre-thresholded return coverage, G = original raw
+ * leader intensity. Both come from Niels747's artwork; no unused second bolt
+ * is generated. The legacy network API remains for offline compatibility. */
 if (typeof importScripts === 'function')
-  importScripts('./upstreamLightningGenerator.js?v=2026-11-16.96');
+  importScripts('./upstreamLightningGenerator.js?v=2026-11-16.97');
 
 onmessage = (event) => {
   const msg = event.data || {};
@@ -13,26 +10,20 @@ onmessage = (event) => {
   const fallback = network ? IC_ARTWORK_SIZE : ARTWORK_SIZE;
   const width = Math.max(32, Math.round(msg.width || fallback.width));
   const height = Math.max(32, Math.round(msg.height || fallback.height));
-  const artwork = network ? generateLightningNetwork(width, height) : generateLightningBolt(width, height, msg.logicalScale || 1);
-  if (!network) {
-    // Red carries pre-thresholded original return-stroke coverage so mipmaps
-    // average the narrow channel rather than averaging before the 0.95 cutoff.
-    // Blue retains the original raw intensity needed by the leader animation.
-    const original = generateUpstreamLightningBolt(width, height, msg.logicalScale || 1).data;
-    const packed = new Uint8Array(width * height * 3);
-    for (let i = 0; i < width * height; i++) {
-      packed[i * 3] = Math.round(Math.max(original[i * 4] - 255 * 0.95, 0) * 20);
-      packed[i * 3 + 1] = artwork.data[i * 2 + 1];
-      // Upstream uploads the ImageData RGB without premultiplying alpha and
-      // samples its red channel. Preserve that exact intensity in our blue slot.
-      packed[i * 3 + 2] = original[i * 4];
-    }
-    artwork.data = packed;
+  if (network) {
+    const artwork = generateLightningNetwork(width, height);
+    postMessage({width : artwork.width, height : artwork.height, data : artwork.data}, [artwork.data.buffer]);
+    return;
   }
-  postMessage({width : artwork.width, height : artwork.height, data : artwork.data},
-              [artwork.data.buffer]);
+  const original = generateUpstreamLightningBolt(width, height, msg.logicalScale || 1).data;
+  const packed = new Uint8Array(width * height * 2);
+  for (let i = 0; i < width * height; i++) {
+    const raw = original[i * 4];
+    packed[i * 2] = Math.round(Math.max(raw - 255 * 0.95, 0) * 20);
+    packed[i * 2 + 1] = raw;
+  }
+  postMessage({width : width, height : height, data : packed}, [packed.buffer]);
 };
-
 
 // Red stores established trunks, green stores forks. Two independently
 // mipmapped channels let the renderer extinguish branches without cutting

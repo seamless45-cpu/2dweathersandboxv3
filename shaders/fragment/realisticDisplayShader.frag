@@ -22,7 +22,6 @@ uniform sampler2D noiseTex;
 uniform sampler2D surfaceTextureMap;
 uniform sampler2D curlTex;
 uniform sampler2D lightningTex;        // the bolt: one channel, for a stroke
-uniform sampler2D lightningNetworkTex; // the network: for an intra-cloud flash
 uniform sampler2D lightningDataTex;
 
 uniform sampler2D ambientLightTex;
@@ -67,7 +66,6 @@ uniform float rodTypes[MAX_LIGHTNING_RODS];
 uniform int rodCount;
 uniform float rodThickness;     // half width of the mast, in cells
 uniform float rodHeight;        // height of the mast, in cells
-uniform float lightningBottomU; // bottom trunk U coordinate of active bolt tile
 uniform float originalBoltBottomU; // original artwork ground contact for rod alignment
 
 #include "commonDisplay.glsl"
@@ -518,7 +516,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
     pixVal *= currentLightningIntensity;
   } else {
     // Keep the original raw source for the moving leader threshold.
-    float raw = textureLod(lightningTex, lightningTexCoord, 0.0).b;
+    float raw = textureLod(lightningTex, lightningTexCoord, 0.0).g;
     float threshold = clamp(1.0 - lightningTime * branchShowFactor + lightningTexCoord.y * branchShowFactor, 0.0, 1.0);
     pixVal = max(raw - threshold, 0.0) * leaderBrightness;
   }
@@ -530,7 +528,7 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   return outputColor;
 }
 
-// Project the original bolt tile onto a path. The blue channel is the
+// Project the original bolt tile onto a path. The green channel stores the
 // unpremultiplied Niels747 artwork; the endpoint shear keeps captured rods and
 // cloud-to-cloud targets attached to the generated bolt's actual lower tip.
 float adaptedUpstreamArtwork(float u, float t, vec2 gradX, vec2 gradY)

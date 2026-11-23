@@ -1,6 +1,6 @@
 'use strict';
 // The worker must actually ship the upstream canvas pixels for ordinary CG,
-// with return coverage pre-thresholded in red and the raw leader in blue.
+// with return coverage pre-thresholded in red and the raw leader in green.
 const assert = require('assert');
 const fs = require('fs');
 const vm = require('vm');
@@ -25,18 +25,18 @@ function context(seed) {
 for (const scale of [1, .5]) {
   const width=200, height=400;
   const expected = context(42);
-  const special = expected.generateLightningBolt(width, height, scale);
   const original = expected.generateUpstreamLightningBolt(width, height, scale);
   const actual = context(42);
+  actual.generateLightningBolt = () => { throw Error('legacy bolt must not be generated'); };
+  actual.generateLightningNetwork = () => { throw Error('network must not be generated for a bolt'); };
   actual.onmessage({data:{width,height,logicalScale:scale}});
   const bytes = actual.result.data;
-  assert.equal(bytes.length, width*height*3);
+  assert.equal(bytes.length, width*height*2);
   let lit = 0;
   for(let i=0;i<width*height;i++) {
-    assert.equal(bytes[i*3],Math.round(Math.max(original.data[i*4] - 255 * .95, 0) * 20));
-    assert.equal(bytes[i*3+1],special.data[i*2+1]);
-    assert.equal(bytes[i*3+2],original.data[i*4]);
-    if(bytes[i*3+2]) lit++;
+    assert.equal(bytes[i*2],Math.round(Math.max(original.data[i*4] - 255 * .95, 0) * 20));
+    assert.equal(bytes[i*2+1],original.data[i*4]);
+    if(bytes[i*2+1]) lit++;
   }
   assert(lit>height, 'original bolt was not drawn');
 }

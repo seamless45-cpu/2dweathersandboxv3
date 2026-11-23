@@ -5,7 +5,7 @@ const display = fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','
 const common = fs.readFileSync('shaders/common.glsl','utf8');
 const location = fs.readFileSync('shaders/fragment/lightningLocationShader.frag','utf8');
 const ground = display.slice(display.indexOf('vec3 displayLightning('),display.indexOf('vec3 displayFlash('));
-assert.match(ground,/textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.b/);
+assert.match(ground,/textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.g/);
 assert.match(ground,/const float branchShowFactor = 2\.5/);
 assert.match(ground,/const float leaderBrightness = 50000\.0/);
 assert.match(ground,/const float mainBoltBrightness = 100000\.0/);
