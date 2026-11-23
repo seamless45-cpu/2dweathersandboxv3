@@ -60,11 +60,11 @@ check('createHdrFBO still sizes the target from canvas * scale (existing mechani
   /const height = Math\.max\(1, Math\.floor\(canvas\.height \* scale\)\);/.test(appSource));
 
 check('post pass steps by the HDR source texel, not the canvas pixel',
-  /gl\.uniform2f\(getUniformLoc\(postProcessingProgram, 'outputTexelSize'\), 1\.0 \/ hdrFBO\.width, 1\.0 \/ hdrFBO\.height\);/.test(appSource) &&
+  /gl\.uniform2f\(getUniformLoc\(postProcessingProgram, 'outputTexelSize'\), 1\.0 \/ sceneHdrFBO\.width, 1\.0 \/ sceneHdrFBO\.height\);/.test(appSource) &&
   !/'outputTexelSize'\), 1\.0 \/ canvas\.width/.test(appSource));
 
 check('HDR viewport follows the FBO size, not the canvas',
-  /gl\.viewport\(0, 0, hdrFBO\.width, hdrFBO\.height\);/.test(appSource));
+  /gl\.viewport\(0, 0, sceneHdrFBO\.width, sceneHdrFBO\.height\);/.test(appSource));
 
 check('TAA/motion-blur history is allocated lazily, not unconditionally at load or resize',
   !/  createHdrFBO\(\);\n\n  createBloomFBOs\(\);\n  createTemporalHistoryTexture\(\);/.test(appSource) &&

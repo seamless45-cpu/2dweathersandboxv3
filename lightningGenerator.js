@@ -5,7 +5,7 @@
  * Only plain data crosses the worker boundary.
  */
 if (typeof importScripts === 'function')
-  importScripts('./upstreamLightningGenerator.js?v=2026-11-16.95');
+  importScripts('./upstreamLightningGenerator.js?v=2026-11-16.96');
 
 onmessage = (event) => {
   const msg = event.data || {};

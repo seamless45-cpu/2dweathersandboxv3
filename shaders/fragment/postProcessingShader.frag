@@ -19,6 +19,8 @@ uniform sampler2D hdrTex;
 uniform sampler2D bloomTex;
 uniform sampler2D historyTex;
 uniform vec2 outputTexelSize;
+uniform vec2 canvasTexelSize;
+uniform bool zoomSupersampleEnabled;
 uniform bool bloomEnabled;
 uniform bool toneMappingEnabled;
 uniform bool fxaaEnabled;
@@ -90,7 +92,18 @@ vec3 mappedColor(vec2 uv)
 
 void main()
 {
-  vec3 outputCol = mappedColor(texCoord);
+  vec3 outputCol;
+  if (zoomSupersampleEnabled) {
+    // Resolve display-mapped samples, not HDR averages: clipping HDR first
+    // turns subpixel lightning into fully white square pixels.
+    vec2 offset = canvasTexelSize * 0.25;
+    outputCol = 0.25 * (mappedColor(texCoord + vec2(-offset.x, -offset.y)) +
+                        mappedColor(texCoord + vec2( offset.x, -offset.y)) +
+                        mappedColor(texCoord + vec2(-offset.x,  offset.y)) +
+                        mappedColor(texCoord + vec2( offset.x,  offset.y)));
+  } else {
+    outputCol = mappedColor(texCoord);
+  }
   // The five mappedColor taps that clamp history are shared by temporal AA and
   // the motion blur below (history there is clamped to the same box), so they
   // are only fetched when at least one of the two feedback effects needs them.
