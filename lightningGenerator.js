@@ -6,7 +6,7 @@
  * transfer RG bytes. Only plain data crosses the worker boundary.
  */
 if (typeof importScripts === 'function')
-  importScripts('./upstreamLightningGenerator.js?v=2026-11-16.93');
+  importScripts('./upstreamLightningGenerator.js?v=2026-11-16.94');
 
 onmessage = (event) => {
   const msg = event.data || {};

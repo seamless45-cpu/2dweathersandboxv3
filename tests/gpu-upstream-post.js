@@ -1,0 +1,20 @@
+// Optional GPU parity test: npm install --no-save playwright-core @sparticuz/chromium
+const fs=require('fs'), assert=require('assert'), {chromium}=require('playwright-core');
+(async()=>{
+ const src=fs.readFileSync('shaders/fragment/postProcessingShader.frag','utf8');
+ const read=(start,end)=>src.slice(src.indexOf(start),src.indexOf(end,src.indexOf(start)));
+ const code=read('const float hdrReadCeiling', '\nvoid main()');
+ const bin=(await import(require.resolve('@sparticuz/chromium'))).default;
+ const browser=await chromium.launch({executablePath:await bin.executablePath(),args:[...bin.args,'--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
+ try {const page=await browser.newPage(); const cases=await page.evaluate((code)=>{
+ const canvas=document.createElement('canvas');canvas.width=canvas.height=1;const gl=canvas.getContext('webgl2');if(!gl||!gl.getExtension('EXT_color_buffer_float'))throw Error('float framebuffer unavailable');
+ const vert=`#version 300 es\nprecision highp float;void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);gl_Position=vec4(p*2.-1.,0,1);}`;
+ const frag=`#version 300 es\nprecision highp float;uniform sampler2D hdrTex,bloomTex;uniform float exposure;uniform bool bloomEnabled,toneMappingEnabled;const vec3 ONE_OVER_GAMMA=vec3(1./2.2);out vec4 outColor;`+code+`\nvoid main(){outColor=vec4(mappedColor(vec2(.5)),1.);}`;
+ function sh(type,src){let x=gl.createShader(type);gl.shaderSource(x,src);gl.compileShader(x);if(!gl.getShaderParameter(x,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(x));return x}
+ let p=gl.createProgram();gl.attachShader(p,sh(gl.VERTEX_SHADER,vert));gl.attachShader(p,sh(gl.FRAGMENT_SHADER,frag));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(p));gl.useProgram(p);
+ function texture(unit){gl.activeTexture(gl.TEXTURE0+unit);let t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,1,1,0,gl.RGBA,gl.FLOAT,new Float32Array(4));return t}
+ let hdr=texture(0),bloom=texture(1),out=texture(2),fb=gl.createFramebuffer();gl.bindFramebuffer(gl.FRAMEBUFFER,fb);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,out,0);if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)throw Error('FBO');gl.uniform1i(gl.getUniformLocation(p,'hdrTex'),0);gl.uniform1i(gl.getUniformLocation(p,'bloomTex'),1);
+ const values=[{scene:[.7,.57,1],glow:[0,0,0],exposure:.2,bloom:0,filmic:0},{scene:[.7,.57,1],glow:[.1,.08,.15],exposure:2,bloom:1,filmic:0},{scene:[0,0,0],glow:[.2,.1,.3],exposure:1,bloom:1,filmic:0},{scene:[.7,.57,1],glow:[.1,.08,.15],exposure:2,bloom:1,filmic:1}];
+ for(const c of values){for(const [unit,t,val] of [[0,hdr,c.scene],[1,bloom,c.glow]]){gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(gl.TEXTURE_2D,t);gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,1,1,gl.RGBA,gl.FLOAT,new Float32Array([...val,1]))}gl.uniform1f(gl.getUniformLocation(p,'exposure'),c.exposure);gl.uniform1i(gl.getUniformLocation(p,'bloomEnabled'),c.bloom);gl.uniform1i(gl.getUniformLocation(p,'toneMappingEnabled'),c.filmic);gl.drawArrays(gl.TRIANGLES,0,3);const pix=new Float32Array(4);gl.readPixels(0,0,1,1,gl.RGBA,gl.FLOAT,pix);c.actual=[...pix.slice(0,3)]}return values;
+ },code);for(const c of cases){let v=c.scene.map((x,i)=>(x+(c.bloom?c.glow[i]*.99:0))*c.exposure);if(c.filmic){let p=Math.max(...v),m=Math.min(1,Math.max(0,p*(2.51*p+.03)/(p*(2.43*p+.59)+.14)));v=v.map(x=>x*m/Math.max(p,1e-6))}const expected=v.map(x=>Math.min(1,Math.pow(Math.max(x,0),1/2.2)));for(let i=0;i<3;i++)assert(Math.abs(c.actual[i]-expected[i])<1e-5,JSON.stringify({c,expected}));}console.log('GPU postprocessing matches upstream clipping and retains filmic mode');}finally{await browser.close()}
+})().catch(e=>{console.error(e);process.exit(1)});
