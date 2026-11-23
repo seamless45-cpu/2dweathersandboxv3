@@ -91,14 +91,12 @@ check('stroke uses explicit screen-space gradients and preserves its own bolt ar
   /textureLod\(lightningTex, lightningTexCoord, 0\.0\)/.test(displayShader) &&
   /screenTexDx = dFdx\(texCoord\)/.test(displayShader) &&
   !/flash \? texture/.test(displayShader));
-check('both network and bolt artwork have mip-filtered textures',
-  ['generateLightningTexture', 'generateLightningNetworkTexture'].every(name => {
-    const start = appSource.indexOf('function ' + name);
-    const end = appSource.indexOf('\n  }', start);
-    const section = appSource.slice(start, end);
+check('bolt artwork has mipmaps and bounded anisotropic filtering when supported',
+  (() => {const section=appSource.slice(appSource.indexOf('function generateLightningTexture'), appSource.indexOf('let lightningTexturesReady'));
     return /gl\.generateMipmap\(gl\.TEXTURE_2D\)/.test(section) &&
-      /gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR/.test(section);
-  }));
+      /gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR/.test(section) &&
+      /configureLightningAnisotropy\(gl\)/.test(section);
+  })());
 
 /*
  * One artwork.
@@ -306,7 +304,7 @@ check('rod snaps are gated to cloud-to-ground strikes and attract both normal -C
 const commonDisplay = fs.readFileSync(path.join(ROOT, 'shaders', 'commonDisplay.glsl'), 'utf8');
 check('captured CG channels terminate squarely on the rod tip and rod cursor preview is wired',
   /float findCapturedRodTipY\(float strikeX\)/.test(displayShader) &&
-  /uniform float lightningBottomU;/.test(displayShader) &&
+  /uniform float originalBoltBottomU;/.test(displayShader) &&
   /if \(rodHit && texCoord\.y < rodTipY\)/.test(displayShader) &&
   /float endY = rodTipY >= 0\.0 \? rodTipY : 0\.0;/.test(displayShader) &&
   /if \(cursor\.w >= 4\.\)/.test(commonDisplay) &&

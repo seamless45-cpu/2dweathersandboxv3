@@ -11,14 +11,14 @@ check('derivatives are captured before nonuniform rendering branches',
 check('IC and ground strikes filter coverage and retain raw leader and rod shear',
   /displayAdaptedFlash\(pos, lightningTime, currentLightningIntensity, false\)/.test(shader) &&
   /displayAdaptedFlash\(pos, lightningTime, currentLightningIntensity, true\)/.test(shader) &&
-  /textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.b/.test(shader) &&
+  /textureLod\(lightningTex, lightningTexCoord, 0\.0\)\.g/.test(shader) &&
   /textureGrad\(lightningTex, vec2\(u, t\), gradX, gradY\)\.r/.test(shader) &&
   /originalBoltBottomU - 0\.5/.test(shader));
 check('external and CC paths sample adapted original artwork rather than procedural cores',
   /vec2 c = evalExtArc\(t, Hw, V\)/.test(shader) && /vec2 c = evalCcCubic\(t, p0, p1, p2, p3\)/.test(shader) &&
   (shader.match(/adaptedUpstreamArtwork\(u, t, gradX, gradY\)/g) || []).length === 3);
-check('mipmapped RGB8 bolt allocation is initialized safely before upload',
-  /gl\.texImage2D\(gl\.TEXTURE_2D, 0, gl\.RGB8, 1, 1, 0, gl\.RGB, gl\.UNSIGNED_BYTE, emptyLightningTexturePixel\);\s*gl\.texParameteri\(gl\.TEXTURE_2D, gl\.TEXTURE_MIN_FILTER, gl\.LINEAR\)/.test(app) &&
+check('mipmapped RG8 bolt allocation is initialized safely before upload',
+  /gl\.texImage2D\(gl\.TEXTURE_2D, 0, gl\.RG8, 1, 1, 0, gl\.RG, gl\.UNSIGNED_BYTE, emptyLightningTexturePixel\);\s*gl\.texParameteri\(gl\.TEXTURE_2D, gl\.TEXTURE_MIN_FILTER, gl\.LINEAR\)/.test(app) &&
   /gl\.generateMipmap\(gl\.TEXTURE_2D\);\s*gl\.texParameteri\(gl\.TEXTURE_2D, gl\.TEXTURE_MIN_FILTER, gl\.LINEAR_MIPMAP_LINEAR\)/.test(app));
 // Threshold before mip filtering: faint source values remain excluded, but
 // subpixel coverage contributes instead of being removed after averaging.

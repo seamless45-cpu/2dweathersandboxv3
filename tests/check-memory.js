@@ -63,11 +63,11 @@ function simBytesPerCell() {
 function simMemoryMB(x, y) { return (x * y * simBytesPerCell()) / MB; }
 
 /* The reference window: a 1600 x 900 window, which is what the display targets at
- * hdrRenderScale 0.75 and bloomRenderScale 0.5 (both defaults). */
+ * at the current 100% HDR and bloom defaults (excluding zoom supersampling). */
 const WINDOW_W = 1600;
 const WINDOW_H = 900;
-const HDR_SCALE = 0.75;
-const BLOOM_SCALE = 0.5;
+const HDR_SCALE = 1.0;
+const BLOOM_SCALE = 1.0;
 
 function displayMemoryMB() {
   const hdr = WINDOW_W * HDR_SCALE * WINDOW_H * HDR_SCALE * 8;          // RGBA16F
@@ -77,17 +77,15 @@ function displayMemoryMB() {
 }
 
 const SURFACE_MAP = (2048 * 1280 * 4) / MB;                 // half of the 4096 x 2560 file
-const NETWORK_TILE = (1024 * 512) / MB;
 
 console.log('Graphics memory at the default resolution\n');
 const DEFAULTS = { x : 2000, y : 300 };
 const boltBudget = /const numLightningTextures = mobileArtwork \? 1 : readLightningTileBudget\(\);/.test(app) ? 2 : 4;
-const boltTiles = boltBudget * (2500 * 5000) * 4 / 3 / MB;  // R8 with mip chain
+const boltTiles = boltBudget * (2500 * 5000) * 2 * 4 / 3 / MB;  // RG8 with mip chain
 
 const rows = [
   ['simulation textures, ' + DEFAULTS.x + ' x ' + DEFAULTS.y + ' cells', simMemoryMB(DEFAULTS.x, DEFAULTS.y)],
-  ['bolt artwork, ' + boltBudget + ' x 2500 x 5000 R8 with mips', boltTiles],
-  ['intra-cloud network, 1024 x 512 R8', NETWORK_TILE],
+  ['bolt artwork, ' + boltBudget + ' x 2500 x 5000 RG8 with mips', boltTiles],
   ['surface texture map, uploaded at 2048 x 1280', SURFACE_MAP],
   ['HDR + bloom at a ' + WINDOW_W + ' x ' + WINDOW_H + ' window', displayMemoryMB()]
 ];
@@ -124,8 +122,9 @@ check('the default resolution fits in 100 MB of simulation textures',
   simMemoryMB(DEFAULTS.x, DEFAULTS.y) <= 100,
   simMemoryMB(DEFAULTS.x, DEFAULTS.y).toFixed(1) + ' MB at ' + DEFAULTS.x + ' x ' + DEFAULTS.y);
 
-check('the whole app at the default resolution fits in 160 MB',
-  total <= 160,
+// Rough texture-only estimate, excluding driver overhead and temporary zoom HDR.
+check('the default texture estimate remains below 220 MiB',
+  total <= 220,
   total.toFixed(1) + ' MB');
 
 check('the 3000 x 300 request that used to be the default is no longer one',

@@ -271,7 +271,7 @@ check('and the trunk stays inside the sprite',
     !/close\(\)\s*\{\s*\}/.test(source),
     'the payload is built here, so nothing added to the generator can break the wire');
   check('the upload asks the driver for exactly the bytes it has',
-    /gl\.texImage2D\(gl\.TEXTURE_2D, 0, gl\.RGB8, artwork\.width, artwork\.height, 0, gl\.RGB, gl\.UNSIGNED_BYTE, artwork\.data\)/
+    /gl\.texImage2D\(gl\.TEXTURE_2D, 0, gl\.RG8, artwork\.width, artwork\.height, 0, gl\.RG, gl\.UNSIGNED_BYTE, artwork\.data\)/
       .test(app) && !/bitmap\.close\(\)/.test(app),
     'no RGBA bitmap in the upload path, so no RGBA temporary on the GPU');
   check('a lost context leaves a lighter next load behind',
@@ -284,11 +284,10 @@ check('and the trunk stays inside the sprite',
     /textureLod\(lightningTex, lightningTexCoord, 0\.0\)/
       .test(fs.readFileSync(path.join(ROOT, 'shaders/fragment/realisticDisplayShader.frag'), 'utf8')),
     'mipmap cost is about one third of the base R8 tile');
-  check('the flash network is one small tile, asked for after the first bolt',
-    /kind : 'network'/.test(workerBlock) &&
-    /kind : 'network', width : mobileArtwork \? 1024 : 2048, height : mobileArtwork \? 512 : 1024/.test(workerBlock) &&
-    /if \(lightningTexturesReady < 1\)\s*\n\s*return \{kind : 'bolt', index : 0\};\s*\n\s*if \(!lightningNetworkReady\)/.test(workerBlock),
-    'both kinds need a picture early, and the compact network is ~128 KB, not twelve MB');
+  check('all lightning variants share the bolt without a separate network job',
+    /if \(lightningTexturesReady < numLightningTextures\)/.test(workerBlock) &&
+    !/kind : 'network'/.test(workerBlock),
+    'unused network generation must not delay the next bolt');
   check('the display never samples a tile that has not been drawn yet',
     /const lightningTexNum = Math\.min\(wantedLightningTexNum, Math\.max\(lightningTexturesReady - 1, 0\)\);/.test(app),
     'a missing tile must not mean an invisible bolt');
@@ -435,9 +434,9 @@ check('the curved network is fine and sparse, not a bloated white web',
   check('IC filters pre-thresholded upstream artwork',
     /textureGrad\(lightningTex, vec2\(u, t\), gradX, gradY\)\.r/.test(displayShader));
 
-  check('app.js requests the IC network tile early even before iterNum >= 400 or on low tile budget',
-    /if \(!lightningNetworkReady \|\| wantedLightningTexNum >= lightningTexturesReady\)/.test(app),
-    'waiting for wantedLightningTexNum >= lightningTexturesReady stalls IC network generation');
+  check('all IC variants use the already requested upstream bolt tile',
+    /if \(wantedLightningTexNum >= lightningTexturesReady\)/.test(app) &&
+    !/lightningNetworkReady/.test(app));
 }
 
 restoreCanvas();

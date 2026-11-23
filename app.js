@@ -1482,6 +1482,18 @@ function selectZoomHdrFBO(zoom, enabled)
   return zoomHdrFBO;
 }
 
+// Sharper mip filtering along oblique lightning paths where supported.
+// No setting changes or extra texture allocations; unsupported GPUs keep the
+// existing trilinear path. This is bounded to avoid unbounded sampling cost.
+function configureLightningAnisotropy(gl)
+{
+  const ext = gl.getExtension('EXT_texture_filter_anisotropic');
+  if (!ext) return;
+  const max = gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT);
+  if (Number.isFinite(max) && max > 1)
+    gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(max, 4));
+}
+
 // Optional HDR attachment used only for lightning's coloured bloom source.
 // If allocation or attachment fails, keep the original bloom and scene intact.
 function ensureLightningBloomTarget(enabled)
@@ -7375,8 +7387,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.96'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.96')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.97'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.97')
   ]);
 
   const [
@@ -7906,7 +7918,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   /*
    * How many bolt artworks to keep resident, and how the app decides.
    *
-   * One 2500 x 5000 RGB8 tile uses 37.5 MB for its base and roughly 50 MB
+   * One 2500 x 5000 RG8 tile uses 25 MB for its base and roughly 33.3 MB
    * including mips. Two provide variety while limiting GPU memory pressure.
    * If a graphics context is lost, the next load uses one tile instead.
    */
@@ -7926,7 +7938,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const mobileArtwork = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '') ||
                         (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const numLightningTextures = mobileArtwork ? 1 : readLightningTileBudget();
-  const lightningBoltBottomUs = new Float32Array(numLightningTextures).fill(0.5);
   const originalBoltBottomUs = new Float32Array(numLightningTextures).fill(0.5);
 
 
@@ -8241,7 +8252,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     for (let y = startRow; y < height; y++) {
       const rowOffset = y * width;
       for (let x = 0; x < width; x++) {
-        const val = data[(rowOffset + x) * 3 + channel];
+        const val = data[(rowOffset + x) * 2 + channel];
         if (val >= 200) {
           const w = val - 199;
           weightedSum += ((x + 0.5) / width) * w;
@@ -8254,36 +8265,19 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   function generateLightningTexture(i, artwork)
   {
-    lightningBoltBottomUs[i] = findBoltBottomU(artwork, 0);
-    originalBoltBottomUs[i] = findBoltBottomU(artwork, 2);
-    // RGB: prefiltered upstream return coverage, legacy fork data, and raw
-    // upstream grayscale for the leader. No additional texture is allocated.
+    originalBoltBottomUs[i] = findBoltBottomU(artwork, 1);
+    // RG: upstream return coverage and raw leader intensity; no legacy art.
     gl.bindTexture(gl.TEXTURE_2D, lightningTextures[i]);
     // Use tight packing for any artwork width. Restore shared unpack state afterwards.
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB8, artwork.width, artwork.height, 0, gl.RGB, gl.UNSIGNED_BYTE, artwork.data);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, artwork.width, artwork.height, 0, gl.RG, gl.UNSIGNED_BYTE, artwork.data);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
     // Mips filter thin channels to the actual HDR pixel footprint at each zoom.
-    // Mips cost about one third of the 37.5 MB RGB8 base tile per desktop bolt.
+    // The RG8 mip chain costs roughly 33.3 MB per desktop bolt.
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  }
-
-
-  function generateLightningNetworkTexture(artwork)
-  {
-    gl.bindTexture(gl.TEXTURE_2D, lightningNetworkTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, artwork.width, artwork.height, 0, gl.RG, gl.UNSIGNED_BYTE, artwork.data);
-    // The network's channels are two to three artwork pixels wide on a tile that
-    // lands about one texel per screen pixel, so it needs a mip chain for the same
-    // reason the bolt does: at any zoom out, a level-0 fetch of a fine channel is a
-    // dash, and a flash made of dashes is not a network.
-    gl.generateMipmap(gl.TEXTURE_2D);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    configureLightningAnisotropy(gl);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   }
@@ -8306,23 +8300,18 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
    * the artwork is still catching up.
    */
   let lightningTexturesReady = 0;        // tiles 0 .. ready-1 are filled
-  let lightningNetworkReady = false;     // the intra-cloud network tile is up
   let lightningTextureWorkerBusy = false;
   let lightningTextureLastStart = 0;
   let lightningTextureFailures = 0;
 
   /*
-   * Which piece of artwork to ask for next. The order matters: the first bolt tile
-   * and then the flash network, so that both kinds of strike have a picture before
-   * the rest of the bolt variants exist. Anything else would leave one kind
-   * invisible for the first few seconds of a storm.
+   * All variants share the original bolt tile. Generate one at a time, only
+   * as the simulation reaches it; no separate network job is needed.
    */
   function nextLightningJob()
   {
     if (lightningTexturesReady < 1)
       return {kind : 'bolt', index : 0};
-    if (!lightningNetworkReady)
-      return {kind : 'network'};
     if (lightningTexturesReady < numLightningTextures)
       return {kind : 'bolt', index : lightningTexturesReady};
     return null;
@@ -8348,19 +8337,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.96');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.97');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
     };
     lightningGeneratorWorker.onmessage = event => {
-      if (job.kind === 'network') {
-        generateLightningNetworkTexture(event.data);
-        lightningNetworkReady = true;
-      } else {
-        generateLightningTexture(job.index, event.data);
-        lightningTexturesReady = job.index + 1;
-      }
+      generateLightningTexture(job.index, event.data);
+      lightningTexturesReady = job.index + 1;
       stop();
     };
     // A worker that dies takes every lightning channel with it - there is nothing
@@ -8386,41 +8370,22 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       stop();
     };
 
-    if (job.kind === 'network') {
-      // Higher-resolution IC artwork on desktop; retain the compact mobile tile.
-      lightningGeneratorWorker.postMessage({kind : 'network', width : mobileArtwork ? 1024 : 2048, height : mobileArtwork ? 512 : 1024});
-    } else {
-      // The original tile: 2500 x 5000 at a 9 pixel channel. The fork this repo
-      // started from halved both and doubled the brightness gain (1250 x 2500 at
-      // 4.5 px); that keeps the relative width but loses half the texels, so the
-      // channel is softer and breaks up sooner when the camera pulls back.
-      if (mobileArtwork)
-        lightningGeneratorWorker.postMessage({width : 1250, height : 2500, logicalScale : 0.5});
-      else
-        lightningGeneratorWorker.postMessage({width : 2500, height : 5000}); // desktop artwork
-    }
+    if (mobileArtwork)
+      lightningGeneratorWorker.postMessage({width : 1250, height : 2500, logicalScale : 0.5});
+    else
+      lightningGeneratorWorker.postMessage({width : 2500, height : 5000});
   }
 
-  const emptyLightningTexturePixel = new Uint8Array([0, 0, 0]);
+  const emptyLightningTexturePixel = new Uint8Array([0, 0]);
   for (let i = 0; i < numLightningTextures; i++) {
     lightningTextures[i] = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, lightningTextures[i]);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB8, 1, 1, 0, gl.RGB, gl.UNSIGNED_BYTE, emptyLightningTexturePixel);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, 1, 1, 0, gl.RG, gl.UNSIGNED_BYTE, emptyLightningTexturePixel);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   }
-  // The intra-cloud network uses an R8 mipmapped tile, smaller than a CG tile.
-  const emptyLightningNetworkPixel = new Uint8Array([0, 0]);
-  const lightningNetworkTexture = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, lightningNetworkTexture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, 1, 1, 0, gl.RG, gl.UNSIGNED_BYTE, emptyLightningNetworkPixel);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-
   // Nothing is generated while the loading screen is up: the first tile is asked
   // for once the simulation is running (see the draw loop), and the rest after it
   // as the strike windows come round.
@@ -8436,8 +8401,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   setTimeout(() => {
     if (graphicsContextLost)
       return;
-    console.info(`Lightning: ${lightningTexturesReady} bolt tile(s), network ` +
-                 `${lightningNetworkReady ? 'ready' : 'missing'}` +
+    console.info(`Lightning: ${lightningTexturesReady} bolt tile(s)` +
                  (lightningTextureFailures ? `, ${lightningTextureFailures} worker failure(s)` : ''));
     if (lightningTexturesReady === 0)
       console.warn('Lightning: no artwork after twelve seconds, so no channel can be drawn.');
@@ -8647,7 +8611,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'surfaceTextureMap'), 5);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'curlTex'), 6);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningTex'), 7);
-  gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningNetworkTex'), 10);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningDataTex'), 8);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'ambientLightTex'), 9);
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'dryLapse'), dryLapse);
@@ -9760,16 +9723,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       // newest bolt we have instead of a blank placeholder, and the next tile is
       // requested here, off the critical path of the frame.
       const wantedLightningTexNum = Math.floor(iterNum / 400) % numLightningTextures;
-      if (!lightningNetworkReady || wantedLightningTexNum >= lightningTexturesReady)
+      if (wantedLightningTexNum >= lightningTexturesReady)
         startLightningTextureWorker();
       const lightningTexNum = Math.min(wantedLightningTexNum, Math.max(lightningTexturesReady - 1, 0));
 
       gl.activeTexture(gl.TEXTURE7);
       gl.bindTexture(gl.TEXTURE_2D, lightningTextures[lightningTexNum]);
-      gl.uniform1f(getUniformLoc(realisticDisplayProgram, 'lightningBottomU'), lightningBoltBottomUs[lightningTexNum]);
       gl.uniform1f(getUniformLoc(realisticDisplayProgram, 'originalBoltBottomU'), originalBoltBottomUs[lightningTexNum]);
-      gl.activeTexture(gl.TEXTURE10);
-      gl.bindTexture(gl.TEXTURE_2D, lightningNetworkTexture);
       gl.activeTexture(gl.TEXTURE8);
       gl.bindTexture(gl.TEXTURE_2D, lightningDataTextures[lightningDataSrc]);
 
@@ -10614,7 +10574,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.96');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.97');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
