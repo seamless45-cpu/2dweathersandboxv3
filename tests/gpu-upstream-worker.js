@@ -26,7 +26,7 @@ const anisotropy=app.slice(astart,app.indexOf('\n}',astart)+2);
       const configure=new Function('return ('+source+')')();
       function run(payload){return new Promise((ok,fail)=>{const w=new Worker('/lightningGenerator.js');w.onerror=e=>{w.terminate();fail(Error(e.message));};w.onmessage=e=>{w.terminate();ok(e.data);};w.postMessage(payload);});}
       let bolts=[];
-      for(const logicalScale of [1,.5]) {
+      for(const logicalScale of [1,.64,.5]) {
         const a=await run({width:200,height:400,logicalScale});
         const lit=[0,0]; for(let i=0;i<a.data.length;i++) if(a.data[i]>0) lit[i%2]++;
         const gl=document.createElement('canvas').getContext('webgl2');

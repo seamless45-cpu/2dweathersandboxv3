@@ -7387,8 +7387,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.97'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.97')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.98'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.98')
   ]);
 
   const [
@@ -8337,7 +8337,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.97');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.98');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8370,9 +8370,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       stop();
     };
 
-    if (mobileArtwork)
-      lightningGeneratorWorker.postMessage({width : 1250, height : 2500, logicalScale : 0.5});
-    else
+    if (mobileArtwork) {
+      // A modest source-resolution increase retains more of the original kinks.
+      // Older GPUs that cannot fit the taller tile keep the previous size.
+      if (gl.getParameter(gl.MAX_TEXTURE_SIZE) >= 3200)
+        lightningGeneratorWorker.postMessage({width : 1600, height : 3200, logicalScale : 0.64});
+      else
+        lightningGeneratorWorker.postMessage({width : 1250, height : 2500, logicalScale : 0.5});
+    } else
       lightningGeneratorWorker.postMessage({width : 2500, height : 5000});
   }
 
@@ -10574,7 +10579,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.97');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.98');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

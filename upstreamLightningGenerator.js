@@ -1,7 +1,7 @@
 // Adapted from niels747/2D-Weather-Sandbox lightningGenerator.js,
 // commit 0fe98cf10bc844a41e3c5cdb91b897dfe2080e5f (GPL-3.0).
-// Original path/brightness algorithm retained; worker protocol handled by lightningGenerator.js.
-function generateUpstreamLightningBolt(width, height, logicalScale = 1)
+// Original paths and brightness retained; a narrower stroke is used for the displayed channel.
+function generateUpstreamLightningBolt(width, height, logicalScale = 1, channelWidthScale = 0.7)
 {
   const pixelWidth = width, pixelHeight = height;
   width /= logicalScale;
@@ -33,7 +33,7 @@ function generateUpstreamLightningBolt(width, height, logicalScale = 1)
 
   ctx.moveTo(startX, startY);
 
-  ctx.lineWidth = lineWidth;
+  ctx.lineWidth = lineWidth * channelWidthScale;
 
   while (startY < height) {
 
@@ -56,7 +56,7 @@ function generateUpstreamLightningBolt(width, height, logicalScale = 1)
       drawBranch(nextX, nextY, targetAngle + (Math.random() - 0.5) * 2.5, lineWidth * 0.5 * Math.random());
       ctx.beginPath();
       ctx.moveTo(nextX, nextY); // move back to last position after drawing branch
-      ctx.lineWidth = lineWidth;
+      ctx.lineWidth = lineWidth * channelWidthScale;
     }
   }
   ctx.strokeStyle = genLightningColor(lineWidth);
@@ -72,7 +72,7 @@ function generateUpstreamLightningBolt(width, height, logicalScale = 1)
 
     ctx.beginPath();
     ctx.moveTo(startX, startY);
-    ctx.lineWidth = line_width;
+    ctx.lineWidth = line_width * channelWidthScale;
 
     while (startY < height) {
 
@@ -104,7 +104,7 @@ function generateUpstreamLightningBolt(width, height, logicalScale = 1)
 
         ctx.beginPath();
         ctx.moveTo(nextX, nextY); // move back to last position after drawing branch
-        ctx.lineWidth = line_width;
+        ctx.lineWidth = line_width * channelWidthScale;
       }
     }
     ctx.strokeStyle = genLightningColor(line_width);
