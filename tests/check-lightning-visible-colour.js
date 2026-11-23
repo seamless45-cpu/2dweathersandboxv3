@@ -11,7 +11,7 @@ assert.match(shader,/upstreamGroundLight \+= strikeChannel/);
 assert.match(shader,/lightningBoltLight \+= upstreamColorize\(strikeChannel\)/);
 assert.match(shader,/vec3 lightningIlluminationTint = vec3\(1\.0\)/);
 const post=fs.readFileSync('shaders/fragment/postProcessingShader.frag','utf8');
-assert.match(post,/color \/= max\(1\.0, peak\)/);
+assert.match(post,/return clamp\(pow\(max\(color, vec3\(0\.0\)\), ONE_OVER_GAMMA\), 0\.0, 1\.0\)/);
 // The common shoulder preserves the requested RGB ratio for each special
 // variant regardless of its intrinsic tint or brightness.
 for(const rgb of [[620,800,1000],[1000,55,35],[300,380,1000],[1,0,0]]) {

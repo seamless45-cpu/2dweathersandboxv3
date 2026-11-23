@@ -74,17 +74,18 @@ vec3 mappedColor(vec2 uv)
   color *= min(1.0, hdrReadCeiling / max(hdrPeak, 1e-6));
 
   color *= exposure;
-  // A scalar highlight shoulder avoids independent RGB clipping, preserving
-  // hot-channel hue. Bloom is extracted from HDR *before* this operation.
-  float peak = max(color.r, max(color.g, color.b));
   if (toneMappingEnabled) {
+    // Keep the optional filmic mode and its existing hue-preserving shoulder.
+    float peak = max(color.r, max(color.g, color.b));
     float mappedPeak = clamp((peak * (2.51 * peak + 0.03)) /
                              (peak * (2.43 * peak + 0.59) + 0.14), 0.0, 1.0);
     color *= mappedPeak / max(peak, 1e-6);
-  } else {
-    color /= max(1.0, peak);
   }
-  return pow(max(color, vec3(0.0)), ONE_OVER_GAMMA);
+  // Upstream applies exposure and gamma without a peak normalization. The
+  // normalized canvas then clips each component independently, making bright
+  // bolt cores white and leaving their dim bloom coloured. Clamp here as well
+  // so optional AA/history sampling sees the same display-range values.
+  return clamp(pow(max(color, vec3(0.0)), ONE_OVER_GAMMA), 0.0, 1.0);
 }
 
 void main()
