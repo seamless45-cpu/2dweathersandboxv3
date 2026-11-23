@@ -7387,8 +7387,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.98'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.98')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.99'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.99')
   ]);
 
   const [
@@ -8337,7 +8337,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.98');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.99');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9579,7 +9579,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     temporalPreviousDisplayMode = guiControls.displayMode;
 
     const sceneHdrFBO = selectZoomHdrFBO(cam.curZoom, guiControls.displayMode == 'DISP_REAL' && !SETUP_MODE);
-    const zoomSupersampleActive = zoomHdrWanted && sceneHdrFBO.width >= canvas.width * 2 && sceneHdrFBO.height >= canvas.height * 2;
+    // Resolve every actual 2x HDR target in display space, including the user-selected
+    // HDR scale. Averaging bright HDR samples before clipping makes thin channels
+    // fill a whole output pixel, regardless of the extra source resolution.
+    const zoomSupersampleActive = sceneHdrFBO.width >= canvas.width * 2 && sceneHdrFBO.height >= canvas.height * 2;
     if (zoomSupersampleActive !== previousZoomSupersampleActive) {
       temporalHistoryValid = false;
       motionBlurHistoryValid = false;
@@ -10579,7 +10582,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.98');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.99');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
