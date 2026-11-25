@@ -104,9 +104,7 @@ void main()
   } else {
     outputCol = mappedColor(texCoord);
   }
-  // The five mappedColor taps that clamp history are shared by temporal AA and
-  // the motion blur below (history there is clamped to the same box), so they
-  // are only fetched when at least one of the two feedback effects needs them.
+  // Only TAA needs a five-tap neighborhood to clamp its history.
   bool needsNeighborhood = temporalAAEnabled && temporalHistoryValid;
   vec3 neighborhoodMin = outputCol;
   vec3 neighborhoodMax = outputCol;
@@ -192,46 +190,36 @@ void main()
                             (previousWorld.y * 2.0 - 1.0 + motionBlurPrevView.y * sa) * motionBlurPrevView.z * ca / sa);
     vec2 flow = (previousNdc - ndc) * 0.5;
 
-    float flowLength = length(flow);
-    // Reject discontinuous camera jumps; static pixels naturally blend zero.
-    if (flowLength <= 1.5) {
-      float strength = clamp(motionBlurStrength / 350.0, 0.0, 1.0);
-      // The shutter stays open longer as the slider rises: one frame of motion
-      // at 0 %, ~2.1 frames at 100 %, five frames at 350 % - the difference
-      // between a faint one-frame smear and a real long exposure.
-      float exposureSpan = 1.0 + 4.0 * strength;
-      // The effect fades in with the motion instead of smearing a static image.
-      float flowGate = smoothstep(0.0, 0.002, flowLength);
-      const int TAPS = 24;
-      float weightSum = 0.0;
-      float coveredWeight = 0.0;
+    // A shutter gathers the current, unblurred frame along the measured motion
+    // vector. Never feed last frame's already-blurred result back into the blur:
+    // recursive history smears lightning and leaves trails after motion stops.
+    vec2 flowPixels = flow / max(canvasTexelSize, vec2(1e-8));
+    float flowLength = length(flowPixels);
+    float strength = clamp(motionBlurStrength / 350.0, 0.0, 1.0);
+    if (strength > 0.0 && flowLength > 0.1 && flowLength < 256.0) {
+      float shutter = 3.5 * strength;
+      vec2 trailPixels = flowPixels * shutter;
+      float trailLength = length(trailPixels);
+      // Bound the cost and footprint on teleports and very fast pans.
+      trailPixels *= min(1.0, 48.0 / max(trailLength, 1e-6));
+      vec2 trail = trailPixels * canvasTexelSize;
+      const int TAPS = 16;
       vec3 acc = vec3(0.0);
+      float coveredWeight = 0.0;
       for (int i = 0; i < TAPS; i++) {
-        // Midpoint samples avoid over-weighting the sharp endpoints. Current
-        // and history follow opposite directions to the same exposure time:
-        // flow points from the current pixel to its previous position.
         float t = (float(i) + 0.5) / float(TAPS);
-        float w = 0.7 + 0.3 * cos(2.0 * PI * (t - 0.5));
-        vec2 currentUV = texCoord - flow * (t * exposureSpan);
-        vec2 historyUV = texCoord + flow * ((1.0 - t) * exposureSpan);
-        bool currentInside = all(greaterThanEqual(currentUV, vec2(0.0))) && all(lessThanEqual(currentUV, vec2(1.0)));
-        bool historyInside = all(greaterThanEqual(historyUV, vec2(0.0))) && all(lessThanEqual(historyUV, vec2(1.0)));
-        vec3 currentTap = safeSample(mappedColor(clamp(currentUV, vec2(0.0), vec2(1.0))));
-        vec3 historyTap = safeSample(texture(historyTex, clamp(historyUV, vec2(0.0), vec2(1.0))).rgb);
-        // History contains last frame's postprocessed image, not a clean
-        // velocity buffer. Limit feedback per tap without clamping the entire
-        // moving trail to the destination pixel's static 5-tap neighbourhood.
-        historyTap = clamp(historyTap, max(currentTap - vec3(0.35), vec3(0.0)), min(currentTap + vec3(0.35), vec3(1.0)));
-        float currentWeight = currentInside ? w * (1.0 - t) : 0.0;
-        float historyWeight = historyInside ? w * t : 0.0;
-        acc += currentTap * currentWeight + historyTap * historyWeight;
-        weightSum += w;
-        coveredWeight += currentWeight + historyWeight;
+        vec2 sampleUV = texCoord - trail * t;
+        if (all(greaterThanEqual(sampleUV, vec2(0.0))) && all(lessThanEqual(sampleUV, vec2(1.0)))) {
+          acc += mappedColor(sampleUV);
+          coveredWeight += 1.0;
+        }
       }
-      vec3 blurred = acc / max(coveredWeight, 0.0001);
-      float coverage = weightSum > 0.0 ? coveredWeight / weightSum : 0.0;
-      float blend = 0.8 * strength * flowGate * coverage * coverage;
-      outputCol = mix(outputCol, blurred, blend);
+      if (coveredWeight > 0.0) {
+        vec3 blurred = acc / coveredWeight;
+        // Smoothly fade the effect below one display pixel of motion.
+        float blend = smoothstep(0.1, 1.0, length(trailPixels));
+        outputCol = mix(outputCol, blurred, blend);
+      }
     }
   }
 
