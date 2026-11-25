@@ -16,6 +16,9 @@ uniform vec2 texelSize;
 uniform float exposure;
 
 uniform sampler2D hdrTex;
+uniform sampler2D lightningCoverageTex;
+uniform sampler2D lightningBackgroundTex;
+uniform bool lightningCoverageEnabled;
 uniform sampler2D bloomTex;
 uniform sampler2D historyTex;
 uniform vec2 outputTexelSize;
@@ -66,28 +69,40 @@ vec3 safeSample(vec3 value)
   return clamp(value, vec3(0.0), vec3(hdrReadCeiling));
 }
 
-vec3 mappedColor(vec2 uv)
+vec3 mapRadiance(vec3 color)
 {
-  vec3 color = safeSample(texture(hdrTex, uv).rgb);
-  if (bloomEnabled) {
-    color += safeSample(texture(bloomTex, uv).rgb) * 0.990;
-  }
   float hdrPeak = max(color.r, max(color.g, color.b));
   color *= min(1.0, hdrReadCeiling / max(hdrPeak, 1e-6));
-
   color *= exposure;
   if (toneMappingEnabled) {
-    // Keep the optional filmic mode and its existing hue-preserving shoulder.
     float peak = max(color.r, max(color.g, color.b));
     float mappedPeak = clamp((peak * (2.51 * peak + 0.03)) /
                              (peak * (2.43 * peak + 0.59) + 0.14), 0.0, 1.0);
     color *= mappedPeak / max(peak, 1e-6);
   }
-  // Upstream applies exposure and gamma without a peak normalization. The
-  // normalized canvas then clips each component independently, making bright
-  // bolt cores white and leaving their dim bloom coloured. Clamp here as well
-  // so optional AA/history sampling sees the same display-range values.
   return clamp(pow(max(color, vec3(0.0)), ONE_OVER_GAMMA), 0.0, 1.0);
+}
+
+vec3 mappedColor(vec2 uv)
+{
+  vec3 scene = safeSample(texture(hdrTex, uv).rgb);
+  vec3 bloom = vec3(0.0);
+  if (bloomEnabled) {
+    bloom = safeSample(texture(bloomTex, uv).rgb) * 0.990;
+  }
+  if (lightningCoverageEnabled) {
+    float coverage = clamp(texture(lightningCoverageTex, uv).r, 0.0, 1.0);
+    if (coverage > 1e-6) {
+      // Resolve the bright covered part before averaging it with the uncovered
+      // background. Clipping an averaged HDR value would make even a tiny
+      // fraction of a bright channel a solid white pixel.
+      vec3 backgroundScene = safeSample(texture(lightningBackgroundTex, uv).rgb);
+      vec3 background = backgroundScene + bloom;
+      vec3 core = background + max(scene - backgroundScene, vec3(0.0)) / coverage;
+      return mix(mapRadiance(background), mapRadiance(core), coverage);
+    }
+  }
+  return mapRadiance(scene + bloom);
 }
 
 void main()

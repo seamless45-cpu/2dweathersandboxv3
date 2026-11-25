@@ -3,8 +3,8 @@ const assert=require('assert'),fs=require('fs');
 const post=fs.readFileSync('shaders/fragment/postProcessingShader.frag','utf8');
 const map=post.slice(post.indexOf('vec3 mappedColor(vec2 uv)'),post.indexOf('\nvoid main()'));
 assert.match(map,/if \(bloomEnabled\) \{/);
-assert(map.indexOf('texture(bloomTex, uv)') < map.indexOf('color *= exposure'));
-assert(map.indexOf('color *= exposure') < map.indexOf('return clamp(pow('));
+assert.match(map,/return mapRadiance\(scene \+ bloom\)/);
+assert.match(post,/color \*= exposure;[\s\S]*return clamp\(pow\(/);
 assert.doesNotMatch(map,/color \+= \(vec3\(1.0\) - color\) \* glow/);
 // Bloom is composited in HDR, then exposure and gamma are applied before the
 // canvas clips each component. Extremely bright backgrounds can still hide it.

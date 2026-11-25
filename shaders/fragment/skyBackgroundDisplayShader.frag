@@ -28,7 +28,8 @@ uniform vec2 planeDirectionAndGearPos;
 
 uniform vec3 planePos;
 
-out vec4 fragmentColor;
+layout(location = 0) out vec4 fragmentColor;
+layout(location = 2) out vec4 lightningBackgroundOutput;
 
 float light;
 
@@ -176,4 +177,5 @@ void main()
   finalColor += airplaneLights;
 
   fragmentColor = vec4(finalColor, 1.0);
+  lightningBackgroundOutput = fragmentColor;
 }

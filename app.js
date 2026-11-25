@@ -1239,6 +1239,10 @@ class FBO // wraps texture, frambuffer and info in one
     gl.deleteTexture(this.texture);
     if (this.lightningBloomTexture)
       gl.deleteTexture(this.lightningBloomTexture);
+    if (this.lightningCoverageTexture)
+      gl.deleteTexture(this.lightningCoverageTexture);
+    if (this.lightningBackgroundTexture)
+      gl.deleteTexture(this.lightningBackgroundTexture);
   }
 }
 
@@ -1492,6 +1496,49 @@ function configureLightningAnisotropy(gl)
   const max = gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT);
   if (Number.isFinite(max) && max > 1)
     gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(max, 4));
+}
+
+// Bolt-free HDR background and coverage planes let the display resolve
+// partial pixels after tone mapping. Shared bloom still reads the original HDR.
+function ensureLightningCoverageTarget(target)
+{
+  if (target.lightningCoverageTexture) return true;
+  if (target.lightningCoverageAttempted) return false;
+  target.lightningCoverageAttempted = true;
+  if (target.width * target.height * 10 > 64 * 1024 * 1024) {
+    console.warn('Lightning coverage targets exceed memory budget; using HDR fallback.');
+    return false;
+  }
+  const background = gl.createTexture(), coverage = gl.createTexture();
+  if (!background || !coverage) {
+    if (background) gl.deleteTexture(background);
+    if (coverage) gl.deleteTexture(coverage);
+    return false;
+  }
+  gl.activeTexture(gl.TEXTURE0);
+  for (const [texture, attachment, internalFormat, format] of [
+    [background, gl.COLOR_ATTACHMENT2, gl.RGBA16F, gl.RGBA],
+    [coverage, gl.COLOR_ATTACHMENT3, gl.R16F, gl.RED]
+  ]) {
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, target.width, target.height, 0, format, gl.HALF_FLOAT, null);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, attachment, gl.TEXTURE_2D, texture, 0);
+  }
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, null, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT3, gl.TEXTURE_2D, null, 0);
+    gl.deleteTexture(background);
+    gl.deleteTexture(coverage);
+    console.warn('Lightning coverage targets unavailable; using HDR fallback.');
+    return false;
+  }
+  target.lightningBackgroundTexture = background;
+  target.lightningCoverageTexture = coverage;
+  return true;
 }
 
 // Optional HDR attachment used only for lightning's coloured bloom source.
@@ -7387,8 +7434,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.100'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.100')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.101'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.101')
   ]);
 
   const [
@@ -8337,7 +8384,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.100');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.101');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9654,6 +9701,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       // Niels747 bloom reads the shared HDR scene directly, without a separate
       // lightning attachment or contact halo. Saved bloom settings are untouched.
       const hasLightningBloom = ensureLightningBloomTarget(false);
+      const hasLightningCoverage = ensureLightningCoverageTarget(sceneHdrFBO);
+      if (hasLightningCoverage) {
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE, gl.COLOR_ATTACHMENT2, gl.COLOR_ATTACHMENT3]);
+        gl.clearBufferfv(gl.COLOR, 2, clearLightningBloom);
+        gl.clearBufferfv(gl.COLOR, 3, clearLightningBloom);
+      }
       if (hasLightningBloom) {
         gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
         gl.clearBufferfv(gl.COLOR, 1, clearLightningBloom);
@@ -9696,7 +9749,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.uniform1f(getUniformLoc(skyBackgroundDisplayProgram, 'sunAngle'), (guiControls.sunAngle - 90.0) * degToRad);
       gl.uniform1i(getUniformLoc(skyBackgroundDisplayProgram, 'extremeAtmosphere'), guiControls.volumetricCloudLighting);
 
-      gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
+      gl.drawBuffers(hasLightningCoverage ? [gl.COLOR_ATTACHMENT0, gl.NONE, gl.COLOR_ATTACHMENT2] : [gl.COLOR_ATTACHMENT0]);
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to hdrFramebuffer
 
@@ -9745,11 +9798,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.bindTexture(gl.TEXTURE_2D, ambientLightFBOs[0].texture);
 
       uploadLightningRodUniforms(realisticDisplayProgram);
-      if (hasLightningBloom)
+      if (hasLightningCoverage)
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE, gl.COLOR_ATTACHMENT2, gl.COLOR_ATTACHMENT3]);
+      else if (hasLightningBloom)
         gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to hdr framebuffer
-      if (hasLightningBloom)
+      if (hasLightningBloom || hasLightningCoverage)
         gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
 
       gl.disable(gl.BLEND);
@@ -9851,6 +9906,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.activeTexture(gl.TEXTURE4);
       gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'motionBlurWallTex'), 4);
+      gl.activeTexture(gl.TEXTURE5);
+      gl.bindTexture(gl.TEXTURE_2D, hasLightningCoverage ? sceneHdrFBO.lightningCoverageTexture : sceneHdrFBO.texture);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'lightningCoverageTex'), 5);
+      gl.activeTexture(gl.TEXTURE6);
+      gl.bindTexture(gl.TEXTURE_2D, hasLightningCoverage ? sceneHdrFBO.lightningBackgroundTexture : sceneHdrFBO.texture);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'lightningBackgroundTex'), 6);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'lightningCoverageEnabled'), hasLightningCoverage);
       gl.uniform2f(getUniformLoc(postProcessingProgram, 'motionBlurResolution'), sim_res_x, sim_res_y);
       gl.uniform1f(getUniformLoc(postProcessingProgram, 'motionBlurIterPerFrame'), motionBlurSimulationSteps);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'motionBlurWrap'), guiControls.wrapHorizontally);
@@ -10582,7 +10644,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.100');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.101');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

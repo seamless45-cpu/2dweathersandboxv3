@@ -1,0 +1,13 @@
+'use strict';
+const assert=require('assert'),fs=require('fs'),vm=require('vm');
+const app=fs.readFileSync('app.js','utf8'),scene=fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','utf8'),post=fs.readFileSync('shaders/fragment/postProcessingShader.frag','utf8'),sky=fs.readFileSync('shaders/fragment/skyBackgroundDisplayShader.frag','utf8');
+const start=app.indexOf('function ensureLightningCoverageTarget('),end=app.indexOf('// Optional HDR attachment',start);
+let complete=true,allocations=0,deletions=0,attachments=[];
+const gl={TEXTURE0:0,TEXTURE_2D:1,TEXTURE_MIN_FILTER:2,TEXTURE_MAG_FILTER:3,TEXTURE_WRAP_S:4,TEXTURE_WRAP_T:5,LINEAR:6,CLAMP_TO_EDGE:7,COLOR_ATTACHMENT2:8,COLOR_ATTACHMENT3:9,RGBA16F:10,RGBA:11,R16F:12,RED:13,HALF_FLOAT:14,FRAMEBUFFER:15,FRAMEBUFFER_COMPLETE:16,createTexture(){allocations++;return {}},deleteTexture(){deletions++},activeTexture(){},bindTexture(){},texParameteri(){},texImage2D(){},framebufferTexture2D(a,b,c,d){attachments.push([b,!!d])},checkFramebufferStatus(){return complete?16:17}};
+const ctx={gl,console:{warn(){}}};vm.createContext(ctx);vm.runInContext(app.slice(start,end),ctx);
+let target={width:100,height:100};assert(ctx.ensureLightningCoverageTarget(target));assert(target.lightningBackgroundTexture&&target.lightningCoverageTexture);assert.equal(allocations,2);assert(ctx.ensureLightningCoverageTarget(target));assert.equal(allocations,2);
+let big={width:4000,height:4000};assert(!ctx.ensureLightningCoverageTarget(big));assert.equal(allocations,2);
+complete=false;let failed={width:100,height:100};assert(!ctx.ensureLightningCoverageTarget(failed));assert.equal(deletions,2);assert(!ctx.ensureLightningCoverageTarget(failed));assert.equal(allocations,4);assert(attachments.some(([id,on])=>id===gl.COLOR_ATTACHMENT2&&!on));assert(attachments.some(([id,on])=>id===gl.COLOR_ATTACHMENT3&&!on));
+assert.match(app,/deleteTexture\(this\.lightningCoverageTexture\)/);assert.match(app,/deleteTexture\(this\.lightningBackgroundTexture\)/);assert.match(app,/drawBuffers\(\[gl\.COLOR_ATTACHMENT0, gl\.NONE, gl\.COLOR_ATTACHMENT2, gl\.COLOR_ATTACHMENT3\]\)/);assert.match(app,/bindTexture\(gl\.TEXTURE_2D, sceneHdrFBO\.texture\);\s*gl\.bindFramebuffer\(gl\.FRAMEBUFFER, bloomFBOs\[0\]\.frameBuffer\)/);
+assert.match(sky,/lightningBackgroundOutput = fragmentColor/);assert.match(scene,/lightningBackgroundOutput = vec4\(sceneWithoutLightning, opacity\)/);assert.match(scene,/lightningCoverageOutput = vec4\(lightningPixelCoverage \* \(1\.0 - terrainOcclusion\)/);assert.match(post,/mix\(mapRadiance\(background\), mapRadiance\(core\), coverage\)/);
+console.log('Lightning coverage targets: allocation, fallback, cleanup and HDR bloom wiring passed');

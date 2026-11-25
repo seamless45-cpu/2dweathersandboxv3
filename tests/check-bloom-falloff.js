@@ -6,6 +6,6 @@ assert.match(bright,/texture\(hdrTex, texCoord\)\.rgb/);
 assert.match(bright,/outputCol \*= 0\.02/);
 assert.doesNotMatch(bright,/lightningBloomGain|brightSample/);
 const map=post.slice(post.indexOf('vec3 mappedColor(vec2 uv)'),post.indexOf('\nvoid main()'));
-assert.match(map,/color \+= safeSample\(texture\(bloomTex, uv\)\.rgb\) \* 0\.990/);
-assert(map.indexOf('texture(bloomTex, uv)')<map.indexOf('color *= exposure'));
+assert.match(map,/bloom = safeSample\(texture\(bloomTex, uv\)\.rgb\) \* 0\.990/);
+assert.match(map,/mapRadiance\(scene \+ bloom\)/);
 console.log('Upstream 2% HDR bloom and 0.990 composite checks passed');

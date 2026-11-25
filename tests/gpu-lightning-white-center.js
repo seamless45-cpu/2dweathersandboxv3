@@ -22,7 +22,7 @@ const { chromium } = require('playwright-core');
           texCoordXmY0=p;texCoordX0Ym=p;texCoordXpY0=p;texCoordX0Yp=p; gl_Position=vec4(p*2.-1.,0,1);}`;
       function shader(type, src) {const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw Error(gl.getShaderInfoLog(s));return s;}
       function program(src) {const p=gl.createProgram();gl.attachShader(p,shader(gl.VERTEX_SHADER,vertex));gl.attachShader(p,shader(gl.FRAGMENT_SHADER,src));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw Error(gl.getProgramInfoLog(p));return p;}
-      const current=program(source), old=program(source.replace('color += safeSample(texture(bloomTex, uv).rgb) * 0.990;',''));
+      const current=program(source), old=program(source.replace('bloom = safeSample(texture(bloomTex, uv).rgb) * 0.990;',''));
       function tex(unit, data, integer=false) {gl.activeTexture(gl.TEXTURE0+unit);const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,integer?gl.NEAREST:gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,integer?gl.NEAREST:gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,integer?gl.RGBA8I:gl.RGBA32F,32,32,0,integer?gl.RGBA_INTEGER:gl.RGBA,integer?gl.BYTE:gl.FLOAT,data);}
       function run(p, tint, background, enabled, hasSource) {
         const scene=new Float32Array(32*32*4), bloom=new Float32Array(scene.length), halo=new Float32Array(scene.length);

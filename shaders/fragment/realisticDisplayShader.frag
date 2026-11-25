@@ -56,6 +56,8 @@ uniform bool lightningBloomEnabled;
 
 layout(location = 0) out vec4 fragmentColor;
 layout(location = 1) out vec4 lightningBloomOutput;
+layout(location = 2) out vec4 lightningBackgroundOutput;
+layout(location = 3) out vec4 lightningCoverageOutput;
 
 #include "common.glsl"
 
@@ -79,6 +81,10 @@ float opacity = 1.0;
 
 vec3 emittedLight = vec3(0.); // pure light, like lightning
 vec3 lightningBloomLight = vec3(0.0); // chromatic source before core whitening
+// Coverage is tracked separately from HDR radiance for display compositing.
+float sampledStrikeCoverage = 0.0;
+float lightningPixelCoverage = 0.0;
+vec3 lightningEmission = vec3(0.0);
 
 float shadowLight;
 
@@ -512,12 +518,14 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
       gradY.x += shearSlope * gradY.y;
     }
     pixVal = textureGrad(lightningTex, lightningTexCoord, gradX, gradY).r * 0.05;
+    sampledStrikeCoverage = pixVal / 0.05;
     currentLightningIntensity *= mainBoltBrightness;
     pixVal *= currentLightningIntensity;
   } else {
     // Keep the original raw source for the moving leader threshold.
     float raw = textureLod(lightningTex, lightningTexCoord, 0.0).g;
     float threshold = clamp(1.0 - lightningTime * branchShowFactor + lightningTexCoord.y * branchShowFactor, 0.0, 1.0);
+    sampledStrikeCoverage = clamp((raw - threshold) / max(1.0 - threshold, 1e-5), 0.0, 1.0);
     pixVal = max(raw - threshold, 0.0) * leaderBrightness;
   }
 
@@ -539,7 +547,8 @@ float adaptedUpstreamArtwork(float u, float t, vec2 gradX, vec2 gradY)
     return 0.0;
   gradX.x += shear * gradX.y;
   gradY.x += shear * gradY.y;
-  return textureGrad(lightningTex, vec2(u, t), gradX, gradY).r;
+  sampledStrikeCoverage = textureGrad(lightningTex, vec2(u, t), gradX, gradY).r;
+  return sampledStrikeCoverage;
 }
 
 // Rotate the vertical source tile into a short horizontal cloud channel.
@@ -922,6 +931,7 @@ vec4 computeAirColor(vec2 bndFragCoord)
     // letting that accelerated tail extinguish it before attachment.
     if (isHyperbolt)
       extCurve = max(extCurve, firstReturnIntensity(lightningTime, lightningData[INTENSITY], 0.10, 0.26) * extIntensityGain);
+    sampledStrikeCoverage = 0.0;
     vec3 strikeChannel = vec3(0.0);
     if (isExternalPositive) {
       strikeChannel += displayExternalLightning(lightningPos, lightningMeta.x, effectiveLightningTime, extCurve,
@@ -945,6 +955,8 @@ vec4 computeAirColor(vec2 bndFragCoord)
     // Ordinary CG already carries the exact upstream RGB. Other variants
     // retain their geometry and radiance while adopting that same colour.
     float strikePeak = max(strikeChannel.r, max(strikeChannel.g, strikeChannel.b));
+    if (strikePeak > 0.0)
+      lightningPixelCoverage = min(1.0, lightningPixelCoverage + sampledStrikeCoverage);
     if (ordinaryCG)
       upstreamGroundLight += strikeChannel;
     else
@@ -993,6 +1005,7 @@ vec4 computeAirColor(vec2 bndFragCoord)
   }
 
   vec3 visibleLightning = displayLightningRadiance(lightningBoltLight / (1. + cloudDensity * 100.0));
+  lightningEmission = visibleLightning + upstreamGroundLight / (1. + cloudDensity * 100.0);
   emittedLight += visibleLightning + upstreamGroundLight / (1. + cloudDensity * 100.0);
   if (lightningBloomEnabled) {
     vec3 glowColor = displayLightningRadiance(lightningBloomLight / (1. + cloudDensity * 100.0));
@@ -1025,6 +1038,10 @@ void main()
   emittedLight = vec3(0.0);
   lightningBloomLight = vec3(0.0);
   lightningBloomOutput = vec4(0.0);
+  lightningBackgroundOutput = vec4(0.0);
+  lightningCoverageOutput = vec4(0.0);
+  lightningPixelCoverage = 0.0;
+  lightningEmission = vec3(0.0);
   onLight = vec3(0.0);
   rodGlow = vec3(0.0);
   // Precise per-pixel terrain coverage for the flash: how much solid geometry
@@ -1525,8 +1542,19 @@ void main()
   // Precise terrain collision: the accumulated flash is scaled by how much
   // solid ground stands in front of this fragment. The rod's own light is not
   // attenuated - the mast stands in front of the terrain.
+  vec3 sceneBeforeClamp = max(color * finalLight * opacity, 0.0)
+                           + emittedLight * (1.0 - terrainOcclusion) + rodGlow;
   fragmentColor = vec4(softHdrClamp(max(color * finalLight * opacity, 0.0)
                                     + emittedLight * (1.0 - terrainOcclusion) + rodGlow), opacity);
+  vec3 sceneWithLightning = fragmentColor.rgb;
+  // Keep a bolt-free HDR scene, blended over the same sky with the same
+  // opacity. Storing the background directly avoids catastrophic FP16
+  // cancellation from subtracting two nearly equal, very bright values.
+  vec3 sceneWithoutLightning = sceneWithLightning;
+  if (lightningPixelCoverage > 0.0 && terrainOcclusion < 1.0)
+    sceneWithoutLightning = softHdrClamp(max(sceneBeforeClamp - lightningEmission * (1.0 - terrainOcclusion), vec3(0.0)));
+  lightningBackgroundOutput = vec4(sceneWithoutLightning, opacity);
+  lightningCoverageOutput = vec4(lightningPixelCoverage * (1.0 - terrainOcclusion), 0.0, 0.0, 0.0);
 
   // Preserve a chromatic bloom source independently of the white-hot channel.
   // Alpha stores its peak so the bright pass can replace the core's white
@@ -1535,4 +1563,8 @@ void main()
   float bloomPeak = max(bloomSource.r, max(bloomSource.g, bloomSource.b));
   lightningBloomOutput = vec4(bloomSource, bloomPeak);
   drawCursor(cursor, view); // over everything else
+  if (any(notEqual(fragmentColor, vec4(sceneWithLightning, opacity)))) {
+    lightningBackgroundOutput = fragmentColor;
+    lightningCoverageOutput = vec4(0.0);
+  }
 }
