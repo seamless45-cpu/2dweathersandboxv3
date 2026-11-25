@@ -7,25 +7,9 @@
 // Accelerate Night no longer applies while it is on, and the sun position is
 // derived from the real date, not from accumulated simulation iterations.
 //
-// Motion Blur (2026-11-19), reworked again: two motion paths gathered on one
-// axis. Camera motion - the display mesh slides under a fixed uv window, so the
-// world point travels a screen-space path between frames (position and zoom,
-// shake included); radial zoom blurs for free. Scene motion - the fluid advects
-// the clouds, so the velocity field is sampled at the pixel's simulation
-// coordinate (cells per iteration -> uv per rendered frame -> canvas uv through
-// the view-transform derivative) and subtracted, letting a static camera over a
-// moving storm smear along the wind. The horizontal camera-wrap seam is folded
-// back into [-0.5, 0.5) uv so crossing the seam never smears the frame, and the
-// gather span scales with the strength slider (one frame of motion at 0 %,
-// ~2.1 frames at 100 %, five frames at 350 %) - sixteen raised-cosine taps
-// approximate the shutter integral. History taps are clamped to the five-tap
-// neighbourhood (no ghost drag through the recursive feedback) and taps that
-// fall outside the frame lose their weight, so edges soften instead of smearing.
-// Strength is 0-350 (%); 100 is a soft veil, 350 is a full long exposure.
-// History is the same canvas copy TAA uses; it is invalidated only in setup
-// mode and on display-mode switches, never by a camera move.
-//
-// Usage: node tests/check-realtime-cycle-motion-blur.js
+// Motion blur uses camera and fluid reprojection to gather the unblurred
+// current frame along a bounded screen-space shutter, without feeding its
+// previous output back into the blur. Saved settings and defaults are retained.
 
 'use strict';
 
@@ -112,39 +96,21 @@ check('post shader declares the motion blur uniforms (incl. the scene-velocity p
   /uniform float motionBlurIterPerFrame;/.test(postShader) &&
   /if \(motionBlurEnabled && motionBlurHistoryValid\) \{/.test(postShader));
 
-check('the trail reprojects world-space fluid through the previous camera and gathers 24 taps',
+check('motion blur reprojects camera and fluid motion and gathers the current frame without history feedback',
   /vec2 worldUV = vec2\(\(ndc\.x \/ zoom - motionBlurView\.x\)/.test(postShader) &&
   /if \(motionBlurWrap\)/.test(postShader) &&
   /texelFetch\(motionBlurWallTex, cell, 0\)\.y != 0/.test(postShader) &&
-  /velocity = texture\(velocityTex, sampleUV\)\.xy;/.test(postShader) &&
   /previousWorld = worldUV - velocity \* motionBlurIterPerFrame/.test(postShader) &&
-  /vec2 previousNdc = vec2/.test(postShader) &&
   /vec2 flow = \(previousNdc - ndc\) \* 0\.5;/.test(postShader) &&
-  /const int TAPS = 24;/.test(postShader) &&
-  /vec2 currentUV = texCoord - flow \* \(t \* exposureSpan\);/.test(postShader) &&
-  /vec3 blurred = acc \/ max\(coveredWeight, 0\.0001\);/.test(postShader));
+  /const int TAPS = 16;/.test(postShader) &&
+  /acc \+= mappedColor\(sampleUV\)/.test(postShader) &&
+  !/texture\(historyTex/.test(postShader.slice(postShader.indexOf('if (motionBlurEnabled && motionBlurHistoryValid)'))));
 
-check('the shutter length is bounded and folds only the wrapped camera seam',
-  /if \(motionBlurWrap\) \{[\s\S]*?previousWorld\.x -= floor\(viewDelta \* 0\.5 \+ 0\.5\);/.test(postShader) &&
-  /if \(flowLength <= 1\.5\)/.test(postShader) &&
-  /float exposureSpan = 1\.0 \+ 4\.0 \* strength;/.test(postShader) &&
-  /float flowGate = smoothstep\(0\.0, 0\.002, flowLength\);/.test(postShader));
-
-check('the strength slider opens the shutter: one frame of motion at 0 %, ~2.1 at 100 %, five at 350 %',
-  (() => {
-    const spanAt = (s) => 1.0 + 4.0 * Math.min(Math.max(s / 350, 0), 1);
-    return Math.abs(spanAt(0) - 1.0) < 1e-9 &&
-           Math.abs(spanAt(100) - (1.0 + 4.0 / 3.5)) < 1e-9 &&
-           Math.abs(spanAt(350) - 5.0) < 1e-9;
-  })() &&
-  /float exposureSpan = 1\.0 \+ 4\.0 \* strength;/.test(postShader) &&
-  /vec2 currentUV = texCoord - flow \* \(t \* exposureSpan\);/.test(postShader));
-
-check('TAA keeps five-tap clamping while blur bounds feedback per sample',
-  /const int TAPS = 24;/.test(postShader) &&
-  /neighborhoodMin = min\(neighborhoodMin, mappedColor\(texCoord - vec2\(outputTexelSize\.x, 0\.0\)\)\);/.test(postShader) &&
-  /bool needsNeighborhood = temporalAAEnabled && temporalHistoryValid;/.test(postShader) &&
-  /historyTap = clamp\(historyTap, max\(currentTap - vec3\(0\.35\)/.test(postShader));
+check('shutter and discontinuous motion are bounded in display pixels',
+  /flowLength < 256\.0/.test(postShader) &&
+  /48\.0 \/ max\(trailLength/.test(postShader) &&
+  /float shutter = 3\.5 \* strength/.test(postShader) &&
+  /smoothstep\(0\.1, 1\.0, length\(trailPixels\)\)/.test(postShader));
 
 check('motion blur applies to the final image, after both TAA and FXAA',
   postShader.indexOf('if (fxaaEnabled) {') < postShader.indexOf('if (motionBlurEnabled') &&
