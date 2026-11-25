@@ -12,7 +12,7 @@ assert.match(bright, /outputCol \*= 0\.02/);
 assert.match(post, /return clamp\(pow\(max\(color, vec3\(0\.0\)\), ONE_OVER_GAMMA\), 0\.0, 1\.0\)/);
 assert.match(post, /color \*= mappedPeak \/ max\(peak, 1e-6\)/);
 const mapped = post.slice(post.indexOf('vec3 mappedColor(vec2 uv)'));
-assert(mapped.indexOf('texture(bloomTex, uv)') < mapped.indexOf('float peak ='));
+assert.match(mapped,/mapRadiance\(scene \+ bloom\)/);
 const emit = c => c.map(v => v * 18 / (1 + Math.max(...c) * 18 / 24000));
 const previous = c => c.map(v => v * 6 / (1 + Math.max(...c) * 6 / 4000));
 for (const brightness of [0.1, 1, 10, 100, 1000, 100000]) {
