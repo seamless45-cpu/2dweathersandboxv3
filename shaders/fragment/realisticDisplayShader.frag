@@ -1402,9 +1402,13 @@ void main()
     bool isSuperRod = rodTypes[i] > 0.5;
     float thisRodHeight = rodHeight * (isSuperRod ? 1.8 : 1.0);
     float thisRodThickness = rodThickness * (isSuperRod ? 1.35 : 1.0);
-    float dxCells = (mod(texCoord.x - rod.x + 0.5, 1.0) - 0.5) * resolution.x; // wrapped horizontal offset in cells
-    float dyCells = (texCoord.y - rod.y) * resolution.y;                       // height above surface, in cells
-    if (dyCells < -1.5 || dyCells > thisRodHeight + rodCoronaReach || abs(dxCells) > max(thisRodThickness * 3.2, rodCoronaReach + 1.0))
+    float dyCells = (texCoord.y - rod.y) * resolution.y; // height above surface, in cells
+    // Most pixels are nowhere near the mast vertically. Skip wrap arithmetic
+    // and all subsequent rod shading/slot reads for those pixels.
+    if (dyCells < -1.5 || dyCells > thisRodHeight + rodCoronaReach)
+      continue;
+    float dxCells = (mod(texCoord.x - rod.x + 0.5, 1.0) - 0.5) * resolution.x;
+    if (abs(dxCells) > max(thisRodThickness * 3.2, rodCoronaReach + 1.0))
       continue;
 
     // A captured strike energizes only the canonical mast, never a repeated copy.
@@ -1416,7 +1420,11 @@ void main()
       if (strikeData[START_ITERNUM] <= 0.0 || abs(strikeData.x - rod.x) > 1e-5)
         continue;
       vec4 strikeMeta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
-      if (abs(strikeMeta.y - 5.0) < 0.25) continue; // legacy upward slot
+      // Only ground strokes can energize a mast; a cloud channel may happen
+      // to share its x coordinate without ever touching it.
+      if (strikeData[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY ||
+          (abs(strikeMeta.y) >= 0.25 && abs(strikeMeta.y - 1.0) >= 0.25))
+        continue;
       if (iterNum < strikeData[START_ITERNUM] || (artificialMeta(strikeMeta.z)
           ? iterNum >= lightningSlotEnd(strikeData, strikeMeta)
           : iterNum >= parentStrikeAnimEnd(strikeData, strikeMeta)))

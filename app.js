@@ -691,10 +691,20 @@ var guiControls;
 var windPushControlsVisibilityUpdater = function() {};
 var applySuperSharpDetail = function() {};
 
+// Same representative-intensity reach as the rod capture shader; the actual
+// strike-dependent radius can differ. Not a real-world safety boundary.
+function lightningRodPreviewRadius(isSuper)
+{
+  const strikingDistance = Math.min(1600, Math.max(600, 500 + 180 * 2.8));
+  const height = Math.min(clamp(720 / cellHeight, 8, 70) * cellHeight * (isSuper ? 1.8 : 1), strikingDistance);
+  const radius = Math.sqrt(Math.max(0, 2 * strikingDistance * height - height * height));
+  return Math.min(0.5, radius * (isSuper ? SUPER_LIGHTNING_ROD_REACH_MULT : 1) / Math.max(sim_height * sim_res_x / sim_res_y, 1));
+}
+
 function setBrushCursor(program, cursorType, cursorX, cursorY)
 {
   cursorX = guiControls.wrapHorizontally ? mod(cursorX, 1.0) : clamp(cursorX, 0.0, 1.0);
-  const cursorRadius = cursorType >= 4.0 ? Math.min(0.5, LIGHTNING_ROD_ATTRACT_RADIUS * (cursorType >= 5.0 ? SUPER_LIGHTNING_ROD_REACH_MULT : 1.0)) : guiControls.brushSize * 0.5;
+  const cursorRadius = cursorType >= 4.0 ? lightningRodPreviewRadius(cursorType >= 5.0) : guiControls.brushSize * 0.5;
   gl.uniform4f(getUniformLoc(program, 'cursor'), cursorX, cursorY, cursorRadius, cursorType);
   gl.uniform1f(getUniformLoc(program, 'wholeWidthBrushWidth'), guiControls.wholeWidthBrushWidth * 0.01);
   gl.uniform1f(getUniformLoc(program, 'windPushWidth'), guiControls.wholeWidthBrushWidth * 0.01);
@@ -2484,7 +2494,6 @@ let lightningRods = [];
 let lightningRodsVersion = 0;
 let lightningRodCaptures = 0;
 const MAX_LIGHTNING_RODS = 12;
-const LIGHTNING_ROD_ATTRACT_RADIUS = 0.11;
 const SUPER_LIGHTNING_ROD_REACH_MULT = 2.5;
 const lightningRodStatus = { placed : '0 / ' + MAX_LIGHTNING_RODS + ' (0 hits)' };
 
@@ -5636,7 +5645,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     const lightningRodInput = lightningRodController.domElement.querySelector('input');
     if (lightningRodInput) {
       lightningRodInput.readOnly = true;
-      lightningRodInput.title = 'Pick Lightning Rod or Super Lightning Rod and click ground; Shift-click or right-click either type to remove it. Super rods have 2.5 times the base attraction and can initiate upward lightning under storms.';
+      lightningRodInput.title = 'Pick Lightning Rod or Super Lightning Rod and click ground; Shift-click or right-click either type to remove it. Super rods have greater reach; the preview is approximate and varies with strike intensity.';
     }
     UI_folder.add({ clearLightningRods : function() {
                       lightningRods = [];
@@ -7008,7 +7017,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return false; // clicked the sky instead of the terrain
 
     const rodX = mod((cellX + 0.5) / sim_res_x, 1.0);
-    if (lightningRods.some(rod => Math.abs(mod(rod.x - rodX + 0.5, 1.0) - 0.5) * sim_res_x < 2))
+    if (lightningRods.some(rod => (guiControls.wrapHorizontally ? Math.abs(mod(rod.x - rodX + 0.5, 1.0) - 0.5) : Math.abs(rod.x - rodX)) * sim_res_x < 2))
       return false; // a rod already stands here
     if (lightningRods.length >= MAX_LIGHTNING_RODS)
       lightningRods.shift(); // the oldest mast makes way for the new one
@@ -7022,14 +7031,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   {
     if (!Number.isFinite(simXpos) || !Number.isFinite(simYpos) || lightningRods.length === 0)
       return false;
-    const wrappedX = mod(simXpos, 1.0);
+    const wrappedX = guiControls.wrapHorizontally ? mod(simXpos, 1.0) : clamp(simXpos, 0.0, 1.0);
     const maxHorizDist = Math.max(12.0 / sim_res_x, 0.015);
     const rodWorldHeight = clamp(720.0 / cellHeight, 8.0, 70.0) / sim_res_y;
     let bestIdx = -1;
     let bestDx = Infinity;
     for (let i = 0; i < lightningRods.length; i++) {
       const rod = lightningRods[i];
-      const dx = Math.abs(mod(wrappedX - rod.x + 0.5, 1.0) - 0.5);
+      const dx = guiControls.wrapHorizontally ? Math.abs(mod(wrappedX - rod.x + 0.5, 1.0) - 0.5) : Math.abs(wrappedX - rod.x);
       if (dx > maxHorizDist)
         continue;
       if (simYpos < rod.y - 0.03 || simYpos > rod.y + rodWorldHeight * (rod.isSuper ? 1.8 : 1.0) + 0.05)
@@ -7434,8 +7443,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.101'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.101')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.102'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.102')
   ]);
 
   const [
@@ -8384,7 +8393,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.101');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.102');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8737,7 +8746,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const rodUploadedVersion = new WeakMap();
   const rodThickness = clamp(sim_res_x * 0.0022, 2.2, 24.0); // half width, in cells
   const rodHeight = clamp(720.0 / cellHeight, 8.0, 70.0);    // mast height, in cells
-  const rodAttractRadius = LIGHTNING_ROD_ATTRACT_RADIUS;     // reach, normalized sim width
 
   function lightningRodUniforms(program)
   {
@@ -8748,8 +8756,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         types : gl.getUniformLocation(program, 'rodTypes[0]'),
         count : gl.getUniformLocation(program, 'rodCount'),
         thickness : gl.getUniformLocation(program, 'rodThickness'),
-        height : gl.getUniformLocation(program, 'rodHeight'),
-        attractRadius : gl.getUniformLocation(program, 'rodAttractRadius')
+        height : gl.getUniformLocation(program, 'rodHeight')
       };
       rodUniformLocations.set(program, locations);
     }
@@ -8780,8 +8787,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.uniform1f(locations.thickness, rodThickness);
     if (locations.height != null)
       gl.uniform1f(locations.height, rodHeight);
-    if (locations.attractRadius != null)
-      gl.uniform1f(locations.attractRadius, rodAttractRadius);
     rodUploadedVersion.set(program, lightningRodsVersion);
   }
 
@@ -9352,7 +9357,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
                   manualLightningActiveUntil = iterNum + 504;
                   const offset = acceptedSlot * 4;
                   const targetX = manualSlotReadback[offset];
-                  if (lightningRods.some(rod => Math.abs(targetX - rod.x) < 1e-4)) {
+                  const manualGroundStrike = ['ordinary_cg', 'positive_cg', 'superbolt', 'hyperbolt'].includes(manualStrike.variant);
+                  if (manualGroundStrike && lightningRods.some(rod => Math.abs(targetX - rod.x) < 1e-4)) {
                     lightningRodCaptures++;
                     countedSlotStartIter[acceptedSlot] = iterNum;
                     updateLightningRodStatus();
@@ -10644,7 +10650,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.101');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.102');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

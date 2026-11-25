@@ -107,11 +107,11 @@ check('CC projects upstream artwork onto its cubic path and retains cloud lighti
       !/ccEvalBranch\(|ccFractalDisp\(/.test(body) && /ccMidDist/.test(displayShader);
   })());
 
-check('selectCloudToCloudTarget skips solid terrain walls and searches 4 storm decks while protecting nearby rod CG strikes',
+check('selectCloudToCloudTarget skips terrain, searches four decks only after the CC roll, and rods do not divert CC',
   /if \(texture\(baseTex, vec2\(cx, cy\)\)\[TEMPERATURE\] >= 500\.0\)/.test(locationShader) &&
   /float yList\[4\];/.test(locationShader) &&
-  /hasNearbyLightningRod\(originX, incoming\[INTENSITY\]\)/.test(locationShader),
-  'CC targeting must skip wall terrain, cover anvil altitude, and not divert CG triggers inside a rod reach');
+  /bool tryCC = incoming\.y >= 0\.08 && ccRoll < ccShare;/.test(locationShader) && !/hasNearbyLightningRod/.test(locationShader),
+  'CC targeting must skip wall terrain, avoid unnecessary deck scans, and remain independent of rods');
 
 check('app.js reads both rows of lightningDataTextures for CC midpoint cc*.mp3 thunder',
   /new Float32Array\(numLightningSlots \* 2 \* 4\)/.test(appSource) &&

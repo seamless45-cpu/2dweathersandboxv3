@@ -297,7 +297,6 @@ check('rod snaps are gated to cloud-to-ground strikes and attract both normal -C
   locationShader.includes('strike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY') &&
   /float lightningHorizontalDist\(/.test(locationShader) &&
   /float rodEffectiveRadius\(/.test(locationShader) &&
-  /bool hasNearbyLightningRod\(/.test(locationShader) &&
   /extStrike = attractToRodWithinRange\(extStrike, originX, minRangeMeters, maxRangeMeters\);/.test(locationShader) &&
   /vec4 normalStrike = attractToRod\(incoming\);/.test(locationShader));
 
@@ -357,25 +356,24 @@ function random2d(x, y) {
 
 /* --------------------------------------------------- attractToRod port */
 
-const ROD_ATTRACT_RADIUS = 0.11; // matches LIGHTNING_ROD_ATTRACT_RADIUS in app.js
 const DEFAULT_ROD_HEIGHT_CELLS = 18.0;
 const DEFAULT_SIM_HEIGHT_CELLS = 300.0;
+const DEFAULT_SIM_HEIGHT_METERS = 12000.0;
+const DEFAULT_WORLD_WIDTH_METERS = 48000.0;
 const START_ITERNUM = 2;
 const INTENSITY = 3;
-
 const lightningHorizontalDist = (a, b) => Math.abs(a - b);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const fract = (v) => v - Math.floor(v);
-
-function rodEffectiveRadius(rod, intensity, radius = ROD_ATTRACT_RADIUS,
+function rodEffectiveRadius(rod, intensity, worldWidth = DEFAULT_WORLD_WIDTH_METERS,
                             rodHeight = DEFAULT_ROD_HEIGHT_CELLS, resY = DEFAULT_SIM_HEIGHT_CELLS) {
-  const heightFactor = 1.0 + clamp(rod.y * 1.2 + (rodHeight / Math.max(resY, 1.0)) * 3.0, 0.0, 0.45);
-  const currentFactor = clamp(0.85 + 0.12 * intensity, 0.90, 1.45);
-  return radius * heightFactor * currentFactor;
+  const strikingDistance = clamp(500 + 180 * intensity, 600, 1600);
+  const height = Math.min(rodHeight * DEFAULT_SIM_HEIGHT_METERS / resY * (rod.isSuper ? 1.8 : 1), strikingDistance);
+  return Math.min(0.5, Math.sqrt(Math.max(0, 2 * strikingDistance * height - height * height)) * (rod.isSuper ? 2.5 : 1) / worldWidth);
 }
 
 // strike = [x, y, startIterNum, intensity]; rods = [{x, y}]
-function attractToRod(strike, rods, radius = ROD_ATTRACT_RADIUS) {
+function attractToRod(strike, rods, worldWidth = DEFAULT_WORLD_WIDTH_METERS) {
   const result = strike.slice();
   if (result[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY)
     return result; // intra-cloud: no ground contact, nothing to attract
@@ -383,7 +381,7 @@ function attractToRod(strike, rods, radius = ROD_ATTRACT_RADIUS) {
   let nearestRod = -1;
   let bestNormalizedDist = 1.0;
   for (let i = 0; i < rods.length && i < MAX_LIGHTNING_RODS; i++) {
-    const effRadius = Math.max(rodEffectiveRadius(rods[i], result[INTENSITY], radius), 1e-5);
+    const effRadius = Math.max(rodEffectiveRadius(rods[i], result[INTENSITY], worldWidth), 1e-5);
     const dx = lightningHorizontalDist(result[0], rods[i].x);
     const normDist = dx / effRadius;
     if (normDist < bestNormalizedDist) {
@@ -394,9 +392,10 @@ function attractToRod(strike, rods, radius = ROD_ATTRACT_RADIUS) {
   if (nearestRod < 0)
     return result;
 
-  const pull = bestNormalizedDist <= 0.35
+  const guaranteedReach = rods[nearestRod].isSuper ? 0.70 : 0.35;
+  const pull = bestNormalizedDist <= guaranteedReach
     ? 1.0
-    : Math.pow(clamp((1.0 - bestNormalizedDist) / 0.65, 0.0, 1.0), 1.35);
+    : Math.pow(clamp((1.0 - bestNormalizedDist) / (1.0 - guaranteedReach), 0.0, 1.0), 1.35);
   if (random2d(result[1] * 149.7 + fract(result[0]) * 31.3, result[START_ITERNUM] * 7.31) > pull)
     return result;
 
@@ -456,7 +455,7 @@ check('every captured strike is a full return stroke', weakIntensity === 0, weak
   let innerHits = 0;
   const trials = 1000;
   for (let i = 0; i < trials; i++) {
-    const strike = [0.30 + 0.025, (i * 0.0173) % 1, 10 + i, 3.0];
+    const strike = [0.30 + rodEffectiveRadius(rods[0], 3.0) * 0.25, (i * 0.0173) % 1, 10 + i, 3.0];
     if (attractToRod(strike, rods)[0] === 0.30) innerHits++;
   }
   check('CG strikes inside the inner striking cone (<= 35% effective reach) capture 100%',
@@ -475,13 +474,15 @@ check('every captured strike is a full return stroke', weakIntensity === 0, weak
     seamHits === 0, seamHits + ' of 200');
 }
 
-// elevated rods and stronger CG currents extend electrogeometric reach
+// Taller masts and stronger intensity indices increase the gameplay reach;
+// absolute elevation is not substituted for height above local ground.
 {
-  const valleyRod = {x: 0.50, y: 0.02};
-  const mountainRod = {x: 0.50, y: 0.30};
-  check('elevated mountain rods and higher-current CG strikes have wider effective reach',
-    rodEffectiveRadius(mountainRod, 3.0) > rodEffectiveRadius(valleyRod, 3.0) &&
-    rodEffectiveRadius(valleyRod, 5.0) > rodEffectiveRadius(valleyRod, 1.5));
+  const rod = {x: 0.50, y: 0.02};
+  check('taller rods and stronger CG strikes have wider effective reach',
+    rodEffectiveRadius(rod, 3.0, DEFAULT_WORLD_WIDTH_METERS, 25) > rodEffectiveRadius(rod, 3.0) &&
+    rodEffectiveRadius(rod, 5.0) > rodEffectiveRadius(rod, 1.5));
+  check('world width changes normalized reach, not its size in metres',
+    Math.abs(rodEffectiveRadius(rod, 3, 48000) * 48000 - rodEffectiveRadius(rod, 3, 96000) * 96000) < 1e-8);
 }
 
 // capture probability follows electrogeometric curve outside the inner cone
@@ -496,7 +497,7 @@ function captureRate(distance, intensity = 3.0) {
 }
 
 const effR3 = rodEffectiveRadius(rods[0], 3.0);
-for (const distance of [0.01, 0.055, 0.095, 0.13]) {
+for (const distance of [0.2, 0.5, 0.8, 1.1].map(f => f * effR3)) {
   const norm = distance / effR3;
   const expected = norm >= 1.0 ? 0 : (norm <= 0.35 ? 1.0 : Math.pow((1.0 - norm) / 0.65, 1.35));
   const actual = captureRate(distance, 3.0);

@@ -11,18 +11,13 @@ const common = read('shaders/common.glsl');
 let passed = 0, failed = 0;
 function check(name, ok) { console.log((ok ? 'PASS ' : 'FAIL ') + name); if (ok) passed++; else failed++; }
 
-check('super rods scale base attraction radius by 2.5 while keeping height and current factors',
+check('super rods keep their boosted reach and taller geometry',
   /const SUPER_LIGHTNING_ROD_REACH_MULT = 2\.5;/.test(app) &&
-  /rodTypes\[rodIdx\] > 0\.5 \? 2\.5 : 1\.0/.test(location) &&
-  /return rodAttractRadius \* reachMultiplier \* heightFactor \* currentFactor;/.test(location) &&
-  /cursorType >= 5\.0 \? SUPER_LIGHTNING_ROD_REACH_MULT : 1\.0/.test(app));
-// Preview shows base reach (currently below its cap) and is clipped at tile
-// edges; actual capture also depends on mast height and strike current.
-const normalRadius = 0.11 * 1.1 * 1.1, superRadius = 0.11 * 2.5 * 1.1 * 1.1;
-check('2.5-fold base reach does not capture across the world edge',
-  Math.abs(superRadius / normalRadius - 2.5) < 1e-12 && superRadius < 0.5 &&
-  Math.abs(0.99 - 0.01) > superRadius && /return abs\(a - b\)/.test(location) &&
-  /Math\.min\(0\.5, LIGHTNING_ROD_ATTRACT_RADIUS/.test(app));
+  /heightMeters \* \(superRod \? 1\.8 : 1\.0\)/.test(location) &&
+  /radiusMeters \* \(superRod \? 2\.5 : 1\.0\) \/ worldWidth/.test(location) &&
+  /lightningRodPreviewRadius\(cursorType >= 5\.0\)/.test(app));
+check('rod capture remains inside the same world tile',
+  /return abs\(a - b\)/.test(location) && /Math\.min\(0\.5, radius/.test(app));
 check('superbolt attraction keeps its updated 9–37 km ground range',
   /float minRangeMeters = isSuperboltExt \? 9000\.0 : 5500\.0;/.test(location) && /float maxRangeMeters = isSuperboltExt \? 37000\.0 : 34000\.0;/.test(location) && /rodRangeMeters < minRangeMeters \|\| rodRangeMeters > maxRangeMeters/.test(location));
 check('super rods no longer initiate upward leaders',

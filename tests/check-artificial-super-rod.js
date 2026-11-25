@@ -45,6 +45,14 @@ check('normal and super tools place distinct rods on terrain',
 check('placement rejects sky, missing ground, and overlapping rods',
   !fixture.tryPlaceLightningRod(0.4, 0.9, true) && !fixture.tryPlaceLightningRod(0.001, 0.11, true) &&
   !fixture.tryPlaceLightningRod(0.25, 0.11, true));
+// Placement/removal must respect the selected world topology at the seam.
+const savedRods = fixture.lightningRods.slice();
+fixture.lightningRods = [];
+check('non-wrapped placement keeps the two world edges distinct',
+  fixture.tryPlaceLightningRod(0.0075, 0.11) && fixture.tryPlaceLightningRod(0.9975, 0.11));
+check('non-wrapped removal targets the correct edge',
+  fixture.tryRemoveNearestLightningRod(0.9999, 0.11) && fixture.lightningRods.length === 1 && fixture.lightningRods[0].x < 0.02);
+fixture.lightningRods = savedRods;
 const superRod = fixture.lightningRods[1];
 check('taller super rod can be removed near its tip',
   fixture.tryRemoveNearestLightningRod(superRod.x, superRod.y + (8 / 100) * 1.8) && fixture.lightningRods.length === 1);
@@ -71,9 +79,9 @@ check('rod types are uploaded to both shader programs with dirty tracking',
   /rodTypes\[0\]/.test(app) && /gl\.uniform1fv\(locations.types, rodTypeData\)/.test(app) &&
   /uploadLightningRodUniforms\(lightningLocationProgram\)/.test(app) && /uploadLightningRodUniforms\(realisticDisplayProgram\)/.test(app));
 check('super rod extends reach, guaranteed capture, visible height, tip termination and preview',
-  /rodTypes\[rodIdx\] > 0\.5 \? 2\.5 : 1\.0/.test(location) &&
+  /radiusMeters \* \(superRod \? 2\.5 : 1\.0\)/.test(location) &&
   /rodTypes\[nearestRod\] > 0\.5 \? 0\.70 : 0\.35/.test(location) &&
-  /rodAttractRadius \* reachMultiplier \* heightFactor \* currentFactor/.test(location) &&
+  /sqrt\(max\(2\.0 \* strikingDistance \* heightMeters/.test(location) &&
   /rodHeight \* \(rodTypes\[i\] > 0\.5 \? 1\.8 : 1\.0\)/.test(display) &&
   /float thisRodHeight = rodHeight \* \(isSuperRod \? 1\.8 : 1\.0\)/.test(display) &&
   /cursor\.w >= 5\.0/.test(cursor));
