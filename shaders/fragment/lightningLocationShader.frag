@@ -36,7 +36,6 @@ uniform vec2 rodPositions[MAX_LIGHTNING_RODS];
 uniform float rodTypes[MAX_LIGHTNING_RODS]; // 1 = super rod
 uniform int rodCount;
 uniform float rodHeight;        // mast height, in cells
-uniform float rodAttractRadius; // horizontal reach, normalized sim width
 
 float lightningHorizontalDist(float a, float b)
 {
@@ -54,24 +53,17 @@ bool sameNaturalStrike(vec4 data, vec4 meta, vec4 incoming, bool isArtificial, f
          age > 0.0 && age <= 2.0 && all(lessThanEqual(originDifference, cellSize * 0.25));
 }
 
-float rodEffectiveRadius(int rodIdx, float intensity)
+// Gameplay-scale rolling-sphere approximation, not an engineering protection
+// calculation. The intensity is a simulation index, not measured current.
+// Express the reach in metres before converting to world coordinates, so a
+// wider simulation or a different grid resolution does not grow the rod.
+float rodEffectiveRadius(int rodIdx, float strikingDistance, float worldWidth)
 {
-  float effectiveHeight = rodHeight * (rodTypes[rodIdx] > 0.5 ? 1.8 : 1.0);
-  float heightFactor = 1.0 + clamp(rodPositions[rodIdx].y * 1.2 + (effectiveHeight / max(resolution.y, 1.0)) * 3.0, 0.0, 0.45);
-  float currentFactor = clamp(0.85 + 0.12 * intensity, 0.90, 1.45);
-  float reachMultiplier = rodTypes[rodIdx] > 0.5 ? 2.5 : 1.0;
-  return rodAttractRadius * reachMultiplier * heightFactor * currentFactor;
-}
-
-bool hasNearbyLightningRod(float strikeX, float intensity)
-{
-  for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
-    if (i >= rodCount)
-      break;
-    if (lightningHorizontalDist(strikeX, rodPositions[i].x) < rodEffectiveRadius(i, intensity))
-      return true;
-  }
-  return false;
+  float heightMeters = rodHeight * simHeightMeters / max(resolution.y, 1.0);
+  bool superRod = rodTypes[rodIdx] > 0.5;
+  heightMeters = min(heightMeters * (superRod ? 1.8 : 1.0), strikingDistance);
+  float radiusMeters = sqrt(max(2.0 * strikingDistance * heightMeters - heightMeters * heightMeters, 0.0));
+  return min(0.5, radiusMeters * (superRod ? 2.5 : 1.0) / worldWidth);
 }
 
 // Lightning slot manager.
@@ -100,7 +92,7 @@ bool slotBusy(vec4 data, vec4 meta)
 float superboltWorldWidthMeters();
 
 // Pull any CG strike (normal -CG or external +CG) onto the nearest reachable rod.
-// Uses an electrogeometric reach scaled by rod elevation/height and stroke current:
+// Uses a gameplay rolling-sphere reach based on mast height and strike intensity:
 // inside the inner protective cone (35% for normal, 70% for super rods) capture
 // is guaranteed, tapering
 // smoothly toward the outer boundary without jumping the world seam.
@@ -109,16 +101,25 @@ vec4 attractToRodWithinRange(vec4 strike, float originX, float minRangeMeters, f
   if (strike[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY)
     return strike; // intra-cloud: no ground contact, so nothing to attract
 
+  if (rodCount == 0)
+    return strike;
   int nearestRod = -1;
   float bestNormalizedDist = 1.0;
+  float worldWidth = max(superboltWorldWidthMeters(), 1.0);
+  float strikingDistance = clamp(500.0 + 180.0 * strike[INTENSITY], 600.0, 1600.0);
   for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
     if (i >= rodCount)
       break;
-    float rodRangeMeters = lightningHorizontalDist(originX, rodPositions[i].x) * superboltWorldWidthMeters();
+    float rodRangeMeters = lightningHorizontalDist(originX, rodPositions[i].x) * worldWidth;
     if (rodRangeMeters < minRangeMeters || rodRangeMeters > maxRangeMeters)
       continue;
-    float effRadius = max(rodEffectiveRadius(i, strike[INTENSITY]), 1e-5);
     float dx = lightningHorizontalDist(strike.x, rodPositions[i].x);
+    // The rolling-sphere radius cannot exceed its striking distance. Reject
+    // distant rods before the square root and the normalized comparison.
+    float maxReachMeters = strikingDistance * (rodTypes[i] > 0.5 ? 2.5 : 1.0);
+    if (dx * worldWidth >= maxReachMeters)
+      continue;
+    float effRadius = max(rodEffectiveRadius(i, strikingDistance, worldWidth), 1e-5);
     float normDist = dx / effRadius;
     if (normDist < bestNormalizedDist) {
       bestNormalizedDist = normDist;
@@ -417,14 +418,13 @@ void main()
         extStrike = attractToRodWithinRange(extStrike, originX, minRangeMeters, maxRangeMeters);
         result = (row == 0) ? extStrike : vec4(originX, 1.0, 0.0, isHyperboltExt ? 2.0 : (isSuperboltExt ? 1.0 : 0.0));
       } else {
-        bool cgTriggerNearRod = incoming[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY &&
-                                hasNearbyLightningRod(originX, incoming[INTENSITY]);
-        vec3 ccTarget = (!cgTriggerNearRod && incoming.y >= 0.08)
-          ? selectCloudToCloudTarget(vec2(originX, incoming.y), iterNum)
-          : vec3(0.0);
+        // Decide whether CC is attempted before the expensive cloud-deck
+        // search. A ground rod cannot change a discharge into a ground strike.
         float ccRoll = random2d(vec2(originX * 47.3 + incoming.y * 83.1, iterNum * 1.37));
         float ccShare = (incoming[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY) ? 0.55 : 0.30;
-        if (!cgTriggerNearRod && ccTarget.z > 0.5 && ccRoll < ccShare) {
+        bool tryCC = incoming.y >= 0.08 && ccRoll < ccShare;
+        vec3 ccTarget = tryCC ? selectCloudToCloudTarget(vec2(originX, incoming.y), iterNum) : vec3(0.0);
+        if (tryCC && ccTarget.z > 0.5) {
           // Cloud-to-cloud (CC): meta.y = 2.0 for negative (-CC), 3.0 for positive (+CC).
           bool isPositiveCC = random2d(vec2(ccTarget.x * 71.9 + ccTarget.y * 31.1, iterNum * 2.19)) < 0.30;
           vec4 ccStrike = incoming;
