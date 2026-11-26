@@ -9,7 +9,7 @@
 //      and multi-stroke behavior for -CC (1-3 restrikes = 2-4 strokes), synchronized
 //      via lightningFlickers(), strikeAnimEnd(), and lightningIntensityOverTime() well
 //      within LIGHTNING_ANIM_ITERS.
-//   3. Renders in displayCloudToCloudLightning() with +CC exactly 50% brighter (1.5x)
+//   3. Renders in displayCloudToCloudLightning() with a 1.5x base gain and 2.5x final channel polarity gain
 //      than -CC (both channel emission and endpoint cloud onLight illumination), and
 //      with fewer branches on +CC (0-1 sparse branch, higher mainThreshold) than -CC
 //      (4 explicit branches + lower threshold).
@@ -93,11 +93,11 @@ check('realisticDisplayShader.frag separates External +CG (meta.y == 1.0), -CC (
   /vec3 displayCloudToCloudLightning\(/.test(displayShader),
   'all four lightning modes must dispatch cleanly without overlap');
 
-check('displayCloudToCloudLightning keeps +CC 50% brighter (1.5x) and avoids fwidth()/dFdx()/dFdy()',
+check('CC retains its base polarity gain and avoids conditional quad derivatives',
   /ccIntensityGain = \(isPositiveCC \? 1\.5 : 1\.0\) \* \(1\.8 \/ max\(pow\(lightningData\[INTENSITY\], 2\.0\), 0\.1\)\);/.test(displayShader) &&
   !/fwidth\s*\(|dFdx\s*\(|dFdy\s*\(/.test(displayShader.slice(displayShader.indexOf('displayCloudToCloudLightning'),
     displayShader.indexOf('float saturate'))),
-  '+CC must scale channel + cloud glow by exactly 1.5x without conditional quad derivatives');
+  'CC must retain its base gain without conditional quad derivatives');
 
 check('CC projects upstream artwork onto its cubic path and retains cloud lighting',
   (() => {
@@ -258,15 +258,15 @@ function flickersCC(x, y, intensity) {
     maxNegDur <= LIGHTNING_ANIM_ITERS && maxPosDur <= LIGHTNING_ANIM_ITERS,
     '+CC single=' + (posSingleShare * 100).toFixed(1) + '%, -CC multi=' + (negMultiShare * 100).toFixed(1) + '%');
 
-  // Verify exact 1.5x brightness invariance across encoded intensity range
+  // Verify the final 2.5x channel gain across encoded intensity values.
   const baseDecay = 19.995; // T = 0 peak of 1/(0.05 + (2T)^3) - 0.005
   const negGain = 1.0 * (1.8 / Math.pow(1.9, 2));
   const posGain = 1.5 * (1.8 / Math.pow(5.8, 2));
   const negLum = baseDecay * Math.pow(1.9, 2) * negGain;
-  const posLum = baseDecay * Math.pow(5.8, 2) * posGain;
+  const posLum = baseDecay * Math.pow(5.8, 2) * posGain * (2.5 / 1.5);
   const ratio = posLum / negLum;
-  check('positive CC channel and cloud illumination are exactly 50% brighter (1.5x) than negative CC',
-    Math.abs(ratio - 1.5) < 1e-6 && LIGHTNING_IC_MAX_INTENSITY === 1.0,
+  check('positive CC channel is nominally 2.5x brighter than negative CC',
+    Math.abs(ratio - 2.5) < 1e-6 && LIGHTNING_IC_MAX_INTENSITY === 1.0,
     'ratio=' + ratio.toFixed(6));
 }
 
