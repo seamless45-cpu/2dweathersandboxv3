@@ -290,29 +290,6 @@ float fractalLateralJagDeriv(float t, float spanKm, float seed, float amp)
   return (0.58 * f1 * sgn1 + 0.28 * f2 * sgn2 + 0.13 * f3 * sgn3) * spanKm * amp * 4.0;
 }
 
-// Blackbody helper retained by the special-variant intensity calculations.
-// Their final displayed channel colour is replaced by the upstream RGB below;
-// these internal values are not an independently displayed variant palette.
-vec3 planckBlackbody(float kelvin)
-{
-  float t = clamp(kelvin, 1000.0, 720000.0) / 100.0;
-  vec3 rgb;
-  if (t <= 66.0) {
-    rgb.r = 255.0;
-    rgb.g = 99.4708025861 * log(t) - 161.1195681661;
-    rgb.b = t <= 19.0 ? 0.0 : 138.5177312231 * log(t - 10.0) - 305.0447927307;
-  } else {
-    rgb.r = 329.698727446 * pow(t - 60.0, -0.1332047592);
-    rgb.g = 288.1221695283 * pow(t - 60.0, -0.0755148492);
-    rgb.b = 255.0;
-  }
-  rgb = clamp(rgb, 0.0, 255.0) / 255.0;
-  // Helland returns display-encoded RGB; decode before HDR compositing so
-  // the final gamma conversion does not wash out the temperature differences.
-  rgb = pow(rgb, vec3(2.2));
-  return rgb / max(rgb.b, 0.35); // blue stays unit gain for HDR tinting
-}
-
 // Niels747's original linear-RGB lightning channel colour. All variants keep
 // their own geometry and intensity, but use the same upstream colour.
 const vec3 upstreamLightningColor = vec3(0.70, 0.57, 1.0);
@@ -895,47 +872,48 @@ vec4 computeAirColor(vec2 bndFragCoord)
     const float superboltDurationShorten = 0.1;
     const float hyperboltBrightnessMult = 30.0; // 2.5x a superbolt
     const float hyperboltDurationShorten = 2.624; // 2.924 - 0.3: a 0.3 second lifetime
-    // Approximate 52,000 K Planckian emitter in linear sRGB, normalized to blue.
-    const vec3 superboltColor = vec3(0.332, 0.469, 1.0);
-    // Approximate 720,000 K Planckian emitter in linear sRGB, normalized to blue, for a
-    // nominal 80 terrawatts / 120 gigaamps discharge - both figures are fiction, kept here
-    // for the record and not modelled. At this temperature the spectrum sits deep in the
-    // Rayleigh-Jeans tail (B ~ 1/lambda^4), noticeably bluer and more saturated than the
-    // 52,000 K superbolt.
-    const vec3 hyperboltColor = vec3(0.25, 0.38, 1.0);
     float strokeBrightnessMult = isHyperbolt ? hyperboltBrightnessMult : superboltBrightnessMult;
     float strokeDurationShorten = isHyperbolt ? hyperboltDurationShorten : superboltDurationShorten;
-    // These intrinsic temperatures feed the channel; the apparent variant tint
-    // below also accounts for unresolved cores and atmospheric filtering.
-    vec3 positiveLightningCol = planckBlackbody(14000.0 + 4000.0 * (random2d(vec2(lightningPos.y * 4.7, lightningMeta.x * 9.1)) - 0.5));
-    float repeatPeriod = map_range(random2d(lightningPos), 0., 1., 1.5, 3.0);
-    if (isSuperbolt && lightningTime >= repeatPeriod * lightningFlickers(lightningData) + (2.924 - strokeDurationShorten))
-      continue;
-    float effectiveLightningTime = isSuperbolt && lightningTime > 0.0
-      ? lightningTime + strokeDurationShorten * smoothstep(0.0, 0.35, lightningTime)
-      : lightningTime;
-    if (isSuperbolt) {
-      currentLightningIntensity = lightningIntensityOverTime(effectiveLightningTime, lightningPos, lightningData[INTENSITY]);
-      if (currentLightningIntensity <= 0.0)
+    float effectiveLightningTime = lightningTime;
+    float ccIntensityGain = 1.0;
+    float ccTailFade = 1.0;
+    float extCurve = 0.0;
+    // Ordinary ground strokes and IC flashes never use CC/external tail or
+    // intensity calculations. The classification is per strike, so this
+    // coherent branch avoids multiple hashes, flicker curves and powers for
+    // every affected screen fragment without changing any strike timing.
+    if (isExternalPositive || isCloudToCloud) {
+      float repeatPeriod = map_range(random2d(lightningPos), 0., 1., 1.5, 3.0);
+      float flickers = lightningFlickers(lightningData);
+      if (isSuperbolt && lightningTime >= repeatPeriod * flickers + (2.924 - strokeDurationShorten))
         continue;
+      effectiveLightningTime = isSuperbolt && lightningTime > 0.0
+        ? lightningTime + strokeDurationShorten * smoothstep(0.0, 0.35, lightningTime)
+        : lightningTime;
+      if (isSuperbolt) {
+        currentLightningIntensity = lightningIntensityOverTime(effectiveLightningTime, lightningPos, lightningData[INTENSITY]);
+        if (currentLightningIntensity <= 0.0)
+          continue;
+      }
+      float tailT = max(effectiveLightningTime - repeatPeriod * flickers, 0.0);
+      if (isCloudToCloud) {
+        ccTailFade = pow(smoothstep(2.924, 1.25, tailT), 2.2);
+        ccIntensityGain = (isPositiveCC ? 1.5 : 1.0) * (1.8 / max(pow(lightningData[INTENSITY], 2.0), 0.1));
+      }
+      if (isExternalPositive) {
+        float extTailFade = pow(smoothstep(2.924, 1.15, tailT), 2.4);
+        float extBaseIntensity = clamp(mix(1.8, 3.4, (lightningData[INTENSITY] - 4.6) / 0.8), 1.8, 3.4);
+        float extIntensityGain = pow(extBaseIntensity / max(lightningData[INTENSITY], 1.0), 2.0);
+        extCurve = currentLightningIntensity * extIntensityGain * extTailFade;
+        if (isHyperbolt)
+          extCurve = max(extCurve, firstReturnIntensity(lightningTime, lightningData[INTENSITY], 0.10, 0.26) * extIntensityGain);
+      }
     }
-    float tailT = max(effectiveLightningTime - repeatPeriod * lightningFlickers(lightningData), 0.0);
-    float extTailFade = pow(smoothstep(2.924, 1.15, tailT), 2.4);
-    float ccTailFade = pow(smoothstep(2.924, 1.25, tailT), 2.2);
-    float ccIntensityGain = (isPositiveCC ? 1.5 : 1.0) * (1.8 / max(pow(lightningData[INTENSITY], 2.0), 0.1));
-    float extBaseIntensity = clamp(mix(1.8, 3.4, (lightningData[INTENSITY] - 4.6) / 0.8), 1.8, 3.4);
-    float extIntensityGain = pow(extBaseIntensity / max(lightningData[INTENSITY], 1.0), 2.0);
-    float extCurve = currentLightningIntensity * extIntensityGain * extTailFade;
-    // Hyperbolts compress the geometry and tail clock to fit a 0.3-unit
-    // lifetime. Keep the initial return bright on the real clock instead of
-    // letting that accelerated tail extinguish it before attachment.
-    if (isHyperbolt)
-      extCurve = max(extCurve, firstReturnIntensity(lightningTime, lightningData[INTENSITY], 0.10, 0.26) * extIntensityGain);
     sampledStrikeCoverage = 0.0;
     vec3 strikeChannel = vec3(0.0);
     if (isExternalPositive) {
       strikeChannel += displayExternalLightning(lightningPos, lightningMeta.x, effectiveLightningTime, extCurve,
-                                                     isHyperbolt ? hyperboltColor : (isSuperbolt ? superboltColor : positiveLightningCol),
+                                                     upstreamLightningColor,
                                                      lightningTime);
       if (isSuperbolt)
         strikeChannel *= strokeBrightnessMult;

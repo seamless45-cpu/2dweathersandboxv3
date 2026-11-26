@@ -123,10 +123,9 @@ check('superbolts keep their brightness and lifetime while using upstream color'
   /bool isSuperbolt = isExternalPositive && lightningMeta\.w >= 0\.5;/.test(displayShader) &&
   /const float superboltBrightnessMult = 12\.0;/.test(displayShader) &&
   /const float superboltDurationShorten = 0\.1;/.test(displayShader) &&
-  /const vec3 superboltColor = vec3\(0\.332, 0\.469, 1\.0\);/.test(displayShader) &&
-  /isSuperbolt \? superboltColor : positiveLightningCol/.test(displayShader) &&
+  /upstreamLightningColor,\s*lightningTime\)/.test(displayShader) &&
   /vec3 lightningIlluminationTint = vec3\(1\.0\)/.test(displayShader) && /upstreamColorize\(strikeChannel\)/.test(displayShader) &&
-  /lightningTime >= repeatPeriod \* lightningFlickers\(lightningData\) \+ \(2\.924 - strokeDurationShorten\)/.test(displayShader) &&
+  /lightningTime >= repeatPeriod \* flickers \+ \(2\.924 - strokeDurationShorten\)/.test(displayShader) &&
   /if \(isSuperbolt\)\s*\n\s*lightningOnLight \*= strokeBrightnessMult;/.test(displayShader));
 
 check('app.js implements 40 Hz decaying random-axis camera shake triggered by superbolts and hyperbolts (even when sound is off)',
@@ -217,10 +216,8 @@ check('app.js implements 40 Hz decaying random-axis camera shake triggered by su
   const red = 3.2406 * X - 1.5372 * Y - 0.4986 * Z;
   const green = -0.9689 * X + 1.8758 * Y + 0.0415 * Z;
   const blue = 0.0557 * X - 0.2040 * Y + 1.0570 * Z;
-  const match = displayShader.match(/const vec3 superboltColor = vec3\(([\d.]+), ([\d.]+), ([\d.]+)\)/);
-  check('superbolt linear RGB approximates a 52000 K Planck spectrum',
-    !!match && Math.abs(+match[1] - red / blue) < 0.01 &&
-    Math.abs(+match[2] - green / blue) < 0.01 && +match[3] === 1);
+  check('the displayed superbolt uses the shared upstream color',
+    /upstreamLightningColor,\s*lightningTime\)/.test(displayShader) && /upstreamColorize\(strikeChannel\)/.test(displayShader));
 }
 
 // Duration & brightness math check: peak ignition at T=0 is 12x, ends 0.1s earlier (T=2.824)

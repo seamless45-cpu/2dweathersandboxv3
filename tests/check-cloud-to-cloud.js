@@ -94,7 +94,7 @@ check('realisticDisplayShader.frag separates External +CG (meta.y == 1.0), -CC (
   'all four lightning modes must dispatch cleanly without overlap');
 
 check('displayCloudToCloudLightning keeps +CC 50% brighter (1.5x) and avoids fwidth()/dFdx()/dFdy()',
-  /float ccIntensityGain = \(isPositiveCC \? 1\.5 : 1\.0\) \* \(1\.8 \/ max\(pow\(lightningData\[INTENSITY\], 2\.0\), 0\.1\)\);/.test(displayShader) &&
+  /ccIntensityGain = \(isPositiveCC \? 1\.5 : 1\.0\) \* \(1\.8 \/ max\(pow\(lightningData\[INTENSITY\], 2\.0\), 0\.1\)\);/.test(displayShader) &&
   !/fwidth\s*\(|dFdx\s*\(|dFdy\s*\(/.test(displayShader.slice(displayShader.indexOf('displayCloudToCloudLightning'),
     displayShader.indexOf('float saturate'))),
   '+CC must scale channel + cloud glow by exactly 1.5x without conditional quad derivatives');

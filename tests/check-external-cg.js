@@ -258,7 +258,7 @@ function resolveStrike(incoming, stormScoreFn, rods = [], resX = 2000, resY = 30
     /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(displayShader) &&
     /float extBaseIntensity = clamp\(mix\(1\.8, 3\.4,/.test(displayShader) &&
     /float extTailFade = pow\(smoothstep\(2\.924, 1\.15, tailT\), 2\.4\);/.test(displayShader) &&
-    /float extCurve = currentLightningIntensity \* extIntensityGain \* extTailFade;/.test(displayShader),
+    /extCurve = currentLightningIntensity \* extIntensityGain \* extTailFade;/.test(displayShader),
     'main=' + mainB + ', ext=' + extB);
 
   check('external positive CG illuminates ground and storm origin 2x normal CG using extCurve',
