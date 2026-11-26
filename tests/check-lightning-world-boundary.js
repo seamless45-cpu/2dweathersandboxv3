@@ -17,8 +17,8 @@ check('external selector samples only same-tile candidates and uses the physical
   /if \(maxDx < minDx\)/.test(selector) && !/fract\(/.test(selector));
 check('rod eligibility is screened before selecting the nearest reachable rod',
   location.indexOf('if (rodRangeMeters < minRangeMeters || rodRangeMeters > maxRangeMeters)') <
-  location.indexOf('if (normDist < bestNormalizedDist)') &&
-  /float dx = lightningHorizontalDist\(strike.x, rodPositions\[i\].x\)/.test(location) &&
+  location.indexOf('if (normDist < bestNormalizedDist') &&
+  /float dx = lightningHorizontalDist\(strike.x, rod.x\)/.test(location) &&
   /return abs\(a - b\)/.test(location));
 // Invalid nearby candidates cannot hide a valid rod, and same-edge capture works.
 function nearestValid(origin, target, rods, width, min, max, reach) {
@@ -61,7 +61,7 @@ check('all channel dispatch and associated illumination are inside the clipped e
   ['displayLightning', 'displayFlash', 'displayPositiveFlash', 'displayExternalLightning', 'displayCloudToCloudLightning'].every(name => events.includes(name + '(')) &&
   !/fract\(texCoord\.x\)|mod\(texCoord\.x/.test(events) && events.includes('onLight +='));
 check('rod capture flashes are clipped but ordinary rod and terrain wrapping remain',
-  /abs\(strikeX - rodPositions\[i\]\.x\)/.test(display) &&
+  /abs\(strikeX - rod.x\)/.test(display) &&
   /abs\(strikeData.x - rod.x\)/.test(display) && /Math.abs\(targetX - rod.x\)/.test(app) &&
   /cursorWrapHorizontally \? fract\(texCoord.x\) : texCoord.x/.test(cursor) &&
   /if \(!inLightningWorldTile\(\) \|\| abs\(texCoord\.x - rod\.x\) > 0\.5\)\s*break;/.test(display) &&

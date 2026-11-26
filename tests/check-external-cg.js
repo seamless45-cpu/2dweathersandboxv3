@@ -72,7 +72,6 @@ const defineValue = (source, name) => {
   return m ? Number(m[1]) : NaN;
 };
 const LIGHTNING_IC_MAX_INTENSITY = defineValue(common, 'LIGHTNING_IC_MAX_INTENSITY');
-const MAX_LIGHTNING_RODS = defineValue(common, 'MAX_LIGHTNING_RODS');
 
 /* ------------------------------------------------------------- 1. wiring */
 
@@ -139,7 +138,7 @@ function attractToRod(strike, rods, radius = 0.08) {
   if (result[3] <= LIGHTNING_IC_MAX_INTENSITY) return result;
   let nearestRod = -1;
   let nearestDist = radius;
-  for (let i = 0; i < rods.length && i < MAX_LIGHTNING_RODS; i++) {
+  for (let i = 0; i < rods.length; i++) {
     const dx = Math.abs(result[0] - rods[i].x);
     if (dx < nearestDist) {
       nearestDist = dx;

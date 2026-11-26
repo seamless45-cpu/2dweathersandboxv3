@@ -43,30 +43,25 @@ const defineValue = (source, name) => {
   return match ? Number(match[1]) : NaN;
 };
 
-const MAX_LIGHTNING_RODS = defineValue(common, 'MAX_LIGHTNING_RODS');
 const LIGHTNING_SLOTS = defineValue(common, 'LIGHTNING_SLOTS');
 const LIGHTNING_IC_MAX_INTENSITY = defineValue(common, 'LIGHTNING_IC_MAX_INTENSITY');
 const LIGHTNING_ANIM_ITERS = defineValue(common, 'LIGHTNING_ANIM_ITERS');
 
-const appMaxRods = Number((appSource.match(/const\s+MAX_LIGHTNING_RODS\s*=\s*(\d+)/) || [])[1]);
 const appNumSlots = Number((appSource.match(/const\s+numLightningSlots\s*=\s*(\d+)/) || [])[1]);
 const appICtiles = (appSource.match(/const\s+numICLightningTiles\s*=\s*([^;]+);/) || [])[1];
 
-check('common.glsl declares MAX_LIGHTNING_RODS', Number.isInteger(MAX_LIGHTNING_RODS) && MAX_LIGHTNING_RODS > 0);
+check('there is no fixed gameplay rod-count cap', !/MAX_LIGHTNING_RODS/.test(common) && !/MAX_LIGHTNING_RODS/.test(appSource));
 // Strikes at or below this intensity are born inside a cloud, above it at the
 // cloud base: it is what the rod snapping is gated on, not a choice of artwork -
 // every strike is drawn with the same bolt.
 check('common.glsl declares the intra-cloud / cloud-to-ground threshold',
   LIGHTNING_IC_MAX_INTENSITY === 1.0, 'got ' + LIGHTNING_IC_MAX_INTENSITY);
-check('app.js MAX_LIGHTNING_RODS matches common.glsl',
-  appMaxRods === MAX_LIGHTNING_RODS,
-  'app.js ' + appMaxRods + ' vs common.glsl ' + MAX_LIGHTNING_RODS);
 check('app.js numLightningSlots matches LIGHTNING_SLOTS',
   appNumSlots === LIGHTNING_SLOTS,
   'app.js ' + appNumSlots + ' vs common.glsl ' + LIGHTNING_SLOTS);
 check('both lightning programs declare the rod uniforms',
-  /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(locationShader) &&
-  /uniform\s+vec2\s+rodPositions\[MAX_LIGHTNING_RODS\]/.test(displayShader));
+  /uniform\s+sampler2D\s+rodDataTex/.test(locationShader) &&
+  /uniform\s+sampler2D\s+rodDataTex/.test(displayShader));
 check('a stroke draws the bolt and a flash draws the network',
   /strikeChannel \+= isFlash \? displayFlash\(lightningPos, lightningTime, currentLightningIntensity\)\s*\n\s*: displayLightning\(lightningPos, lightningTime, currentLightningIntensity\);/
     .test(displayShader) &&
@@ -380,7 +375,7 @@ function attractToRod(strike, rods, worldWidth = DEFAULT_WORLD_WIDTH_METERS) {
 
   let nearestRod = -1;
   let bestNormalizedDist = 1.0;
-  for (let i = 0; i < rods.length && i < MAX_LIGHTNING_RODS; i++) {
+  for (let i = 0; i < rods.length; i++) {
     const effRadius = Math.max(rodEffectiveRadius(rods[i], result[INTENSITY], worldWidth), 1e-5);
     const dx = lightningHorizontalDist(result[0], rods[i].x);
     const normDist = dx / effRadius;

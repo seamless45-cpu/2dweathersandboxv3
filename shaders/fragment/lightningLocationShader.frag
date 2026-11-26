@@ -32,10 +32,25 @@ uniform float simHeightMeters; // simulation height in meters, for physical stri
 // is the normalized horizontal position of the mast, .y the normalized height of
 // the terrain surface it stands on. A rod only affects cloud-to-ground strikes:
 // an intra-cloud flash keeps the place it formed in.
-uniform vec2 rodPositions[MAX_LIGHTNING_RODS];
-uniform float rodTypes[MAX_LIGHTNING_RODS]; // 1 = super rod
+uniform sampler2D rodDataTex; // sorted x, ground y, super-rod flag
 uniform int rodCount;
 uniform float rodHeight;        // mast height, in cells
+
+vec4 rodDataAt(int index)
+{
+  return texelFetch(rodDataTex, ivec2(index, 0), 0);
+}
+// Lower bound in the sorted rod table; no per-fragment scan of distant rods.
+int rodLowerBound(float x)
+{
+  int lo = 0, hi = rodCount;
+  while (lo < hi) {
+    int mid = (lo + hi) / 2;
+    if (rodDataAt(mid).x < x) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
 
 float lightningHorizontalDist(float a, float b)
 {
@@ -57,10 +72,10 @@ bool sameNaturalStrike(vec4 data, vec4 meta, vec4 incoming, bool isArtificial, f
 // calculation. The intensity is a simulation index, not measured current.
 // Express the reach in metres before converting to world coordinates, so a
 // wider simulation or a different grid resolution does not grow the rod.
-float rodEffectiveRadius(int rodIdx, float strikingDistance, float worldWidth)
+float rodEffectiveRadius(float rodType, float strikingDistance, float worldWidth)
 {
   float heightMeters = rodHeight * simHeightMeters / max(resolution.y, 1.0);
-  bool superRod = rodTypes[rodIdx] > 0.5;
+  bool superRod = rodType > 0.5;
   heightMeters = min(heightMeters * (superRod ? 1.8 : 1.0), strikingDistance);
   float radiusMeters = sqrt(max(2.0 * strikingDistance * heightMeters - heightMeters * heightMeters, 0.0));
   return min(0.5, radiusMeters * (superRod ? 2.5 : 1.0) / worldWidth);
@@ -105,23 +120,26 @@ vec4 attractToRodWithinRange(vec4 strike, float originX, float minRangeMeters, f
     return strike;
   int nearestRod = -1;
   float bestNormalizedDist = 1.0;
+  float bestRodOrder = 1e30;
   float worldWidth = max(superboltWorldWidthMeters(), 1.0);
   float strikingDistance = clamp(500.0 + 180.0 * strike[INTENSITY], 600.0, 1600.0);
-  for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
-    if (i >= rodCount)
-      break;
-    float rodRangeMeters = lightningHorizontalDist(originX, rodPositions[i].x) * worldWidth;
+  // Only rods whose theoretical maximum reach overlaps the target can win.
+  float maxReach = min(0.5, strikingDistance * 2.5 / worldWidth);
+  int startRod = rodLowerBound(strike.x - maxReach);
+  for (int i = startRod; i < rodCount; i++) {
+    vec4 rod = rodDataAt(i);
+    if (rod.x > strike.x + maxReach) break;
+    float rodRangeMeters = lightningHorizontalDist(originX, rod.x) * worldWidth;
     if (rodRangeMeters < minRangeMeters || rodRangeMeters > maxRangeMeters)
       continue;
-    float dx = lightningHorizontalDist(strike.x, rodPositions[i].x);
-    // The rolling-sphere radius cannot exceed its striking distance. Reject
-    // distant rods before the square root and the normalized comparison.
-    float maxReachMeters = strikingDistance * (rodTypes[i] > 0.5 ? 2.5 : 1.0);
+    float dx = lightningHorizontalDist(strike.x, rod.x);
+    float maxReachMeters = strikingDistance * (rod.z > 0.5 ? 2.5 : 1.0);
     if (dx * worldWidth >= maxReachMeters)
       continue;
-    float effRadius = max(rodEffectiveRadius(i, strikingDistance, worldWidth), 1e-5);
+    float effRadius = max(rodEffectiveRadius(rod.z, strikingDistance, worldWidth), 1e-5);
     float normDist = dx / effRadius;
-    if (normDist < bestNormalizedDist) {
+    if (normDist < bestNormalizedDist || (normDist == bestNormalizedDist && normDist < 1.0 && rod.w < bestRodOrder)) {
+      bestRodOrder = rod.w;
       bestNormalizedDist = normDist;
       nearestRod = i;
     }
@@ -129,14 +147,15 @@ vec4 attractToRodWithinRange(vec4 strike, float originX, float minRangeMeters, f
   if (nearestRod < 0)
     return strike;
 
-  float guaranteedReach = rodTypes[nearestRod] > 0.5 ? 0.70 : 0.35;
+  vec4 winningRod = rodDataAt(nearestRod);
+  float guaranteedReach = winningRod.z > 0.5 ? 0.70 : 0.35;
   float pull = bestNormalizedDist <= guaranteedReach
     ? 1.0
     : pow(clamp((1.0 - bestNormalizedDist) / (1.0 - guaranteedReach), 0.0, 1.0), 1.35);
   if (random2d(vec2(strike.y * 149.7 + fract(strike.x) * 31.3, strike[START_ITERNUM] * 7.31)) > pull)
     return strike;
 
-  strike.x = rodPositions[nearestRod].x;
+  strike.x = winningRod.x;
   // a captured strike is always a full return stroke
   strike[INTENSITY] = max(strike[INTENSITY], LIGHTNING_IC_MAX_INTENSITY + 0.6);
   return strike;

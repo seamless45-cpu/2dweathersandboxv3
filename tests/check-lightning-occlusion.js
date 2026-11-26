@@ -23,7 +23,7 @@ check('every opaque terrain foreground clears the flash accumulated behind it (7
   clearSites === 7,
   'found ' + clearSites + ' sites (water-case shore slopes 2, urban/industrial overlays 2, tree/snow overlay 1, air-branch land slopes 2)');
 check('the rod pass composites its corona and strike surge AFTER the opaque foreground is resolved, so rod glow still composites over the ground',
-  display.indexOf('vec2 rod = rodPositions[i];') >
+  display.indexOf('vec2 rod = rodInfo.xy;') >
   display.lastIndexOf('// opaque terrain foreground'));
 check('the flash is multiplied by precise per-pixel terrain coverage at the composite',
   /emittedLight \* \(1\.0 - terrainOcclusion\) \+ rodGlow/.test(display));
