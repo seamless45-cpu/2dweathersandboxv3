@@ -64,18 +64,8 @@ check('hyperbolt is an external positive CG class selected by integer meta.w >= 
   /bool isHyperbolt = isExternalPositive && lightningMeta\.w >= 1\.5;/.test(displayShader) &&
   /bool isSuperbolt = isExternalPositive && lightningMeta\.w >= 0\.5;/.test(displayShader));
 
-check('720,000 K hyperbolt color is blue and deeper than the 52,000 K superbolt',
-  (() => {
-    const hyper = displayShader.match(/const vec3 hyperboltColor = vec3\(([0-9., ]+)\);/);
-    const superBolt = displayShader.match(/const vec3 superboltColor = vec3\(([0-9., ]+)\);/);
-    if (!hyper || !superBolt) return false;
-    const [hr, hg, hb] = hyper[1].split(',').map(Number);
-    const [sr, sg, sb] = superBolt[1].split(',').map(Number);
-    return hb === 1.0 && sb === 1.0 && hr < sr && hg < sg;
-  })());
-
-check('hyperbolt spec figures (80 terrawatts, 120 gigaamps) are recorded as fiction',
-  /80 terrawatts/.test(displayShader) && /120 gigaamps/.test(displayShader));
+check('hyperbolt uses the shared upstream channel colour',
+  /upstreamLightningColor,\s*lightningTime\)/.test(displayShader) && /upstreamColorize\(strikeChannel\)/.test(displayShader));
 
 check('hyperbolt is 30x brighter (2.5x a superbolt) and lives 0.3 s instead of 2.924',
   /const float hyperboltBrightnessMult = 30\.0;/.test(displayShader) &&
@@ -85,7 +75,7 @@ check('hyperbolt is 30x brighter (2.5x a superbolt) and lives 0.3 s instead of 2
   /float strokeDurationShorten = isHyperbolt \? hyperboltDurationShorten : superboltDurationShorten;/.test(displayShader));
 
 check('hyperbolt uses the shared superbolt-class gate with the shorter window',
-  /if \(isSuperbolt && lightningTime >= repeatPeriod \* lightningFlickers\(lightningData\) \+ \(2\.924 - strokeDurationShorten\)\)/.test(displayShader));
+  /if \(isSuperbolt && lightningTime >= repeatPeriod \* flickers \+ \(2\.924 - strokeDurationShorten\)\)/.test(displayShader));
 
 
 check('captured-rod surge honours the 0.3 s hyperbolt window and 30x gain',

@@ -193,27 +193,27 @@ void main()
     // Radiative cooling and heating effects
 
     if (texCoord.y > globalEffectsStartAlt && texCoord.y < globalEffectsEndAlt) {
-      water[TOTAL] -= clamp(globalDrying, 0., max(water[TOTAL] - maxWater(max(realTemp - 20.0, CtoK(-80.))), 0.)); // only dry down to a dew point 20 C below the temperature
+      if (globalDrying > 0.0)
+        water[TOTAL] -= clamp(globalDrying, 0., max(water[TOTAL] - maxWater(max(realTemp - 20.0, CtoK(-80.))), 0.)); // only dry down to a dew point 20 C below the temperature
 
       base[TEMPERATURE] += globalHeating;
 
 
-      // apply real sounding
-
-      int soundingArrayindex = int(texCoord.y * (1.0 / texelSize.y));
-
-      float Tdiff = base[TEMPERATURE] - getRealWorldSounding_T(soundingArrayindex);
-      base[TEMPERATURE] -= Tdiff * 0.001 * soundingForcing;
-
-
-      float Wdiff = water[TOTAL] - getRealWorldSounding_W(soundingArrayindex);
-      water[TOTAL] -= Wdiff * 0.001 * soundingForcing;
-
-      base.xy *= 1.0 - map_rangeC(soundingForcing, 0.1, 1.0, 0.0, 0.001); // drag to stabilize with high forcing
-
-      float velDiff = base[VX] - getRealWorldSounding_Vel(soundingArrayindex);
-      base[VX] -= velDiff * map_rangeC(soundingForcing, 0.9, 1.0, 0.0, 0.001);
-
+      // No sounding forcing is the common case. Skip profile texture reads
+      // and the associated arithmetic when they cannot affect the state.
+      if (soundingForcing != 0.0) {
+        int soundingArrayindex = int(texCoord.y * (1.0 / texelSize.y));
+        float Tdiff = base[TEMPERATURE] - getRealWorldSounding_T(soundingArrayindex);
+        base[TEMPERATURE] -= Tdiff * 0.001 * soundingForcing;
+        float Wdiff = water[TOTAL] - getRealWorldSounding_W(soundingArrayindex);
+        water[TOTAL] -= Wdiff * 0.001 * soundingForcing;
+        base.xy *= 1.0 - map_rangeC(soundingForcing, 0.1, 1.0, 0.0, 0.001);
+        // Below this threshold the velocity forcing weight is exactly zero.
+        if (soundingForcing > 0.9) {
+          float velDiff = base[VX] - getRealWorldSounding_Vel(soundingArrayindex);
+          base[VX] -= velDiff * map_rangeC(soundingForcing, 0.9, 1.0, 0.0, 0.001);
+        }
+      }
 
       // if (texCoord.y > 0.93) {
       //   base[TEMPERATURE] -= (KtoC(realTemp) - -55.0) * 0.0005; // tropopause temperature stabilization
@@ -272,33 +272,37 @@ void main()
   bool inBrush = false;           // if cell is in brush area
   float weight = 1.0;             // 1.0 at center, 0.0 at border
 
-  if (userInputType == 5) {
-    float horizontalDist = wrapHorizontally ? absHorizontalDist(userInputValues.x, texCoord.x) : abs(userInputValues.x - texCoord.x);
-    if (horizontalDist < windPushWidth * 0.5 && abs(userInputValues.y - texCoord.y) < windPushDepth * 0.5)
-      inBrush = true;
-  } else if (wholeWidthBrush) {
-    float horizontalDist = wrapHorizontally ? absHorizontalDist(userInputValues.x, texCoord.x) : abs(userInputValues.x - texCoord.x);
-    if ((wholeWidthBrushWidth >= 1.0 || horizontalDist < wholeWidthBrushWidth * 0.5) &&
-        abs(userInputValues.y - texCoord.y) < userInputValues[BRUSH_SIZE] * texelSize.y)
-      inBrush = true;
-  } else { // circular brush
+  // A disabled brush changes no state. Avoid distance, wrapping and
+  // smoothstep calculations across the entire grid between user actions.
+  if (userInputType != 0) {
+    if (userInputType == 5) {
+      float horizontalDist = wrapHorizontally ? absHorizontalDist(userInputValues.x, texCoord.x) : abs(userInputValues.x - texCoord.x);
+      if (horizontalDist < windPushWidth * 0.5 && abs(userInputValues.y - texCoord.y) < windPushDepth * 0.5)
+        inBrush = true;
+    } else if (wholeWidthBrush) {
+      float horizontalDist = wrapHorizontally ? absHorizontalDist(userInputValues.x, texCoord.x) : abs(userInputValues.x - texCoord.x);
+      if ((wholeWidthBrushWidth >= 1.0 || horizontalDist < wholeWidthBrushWidth * 0.5) &&
+          abs(userInputValues.y - texCoord.y) < userInputValues[BRUSH_SIZE] * texelSize.y)
+        inBrush = true;
+    } else { // circular brush
 
-    vec2 vecFromMouse;
+      vec2 vecFromMouse;
 
-    if (wrapHorizontally) {
-      vecFromMouse = vec2(absHorizontalDist(userInputValues.x, texCoord.x), userInputValues.y - texCoord.y);
-    } else {
-      vecFromMouse = vec2(abs(userInputValues.x - texCoord.x), userInputValues.y - texCoord.y);
-    }
+      if (wrapHorizontally) {
+        vecFromMouse = vec2(absHorizontalDist(userInputValues.x, texCoord.x), userInputValues.y - texCoord.y);
+      } else {
+        vecFromMouse = vec2(abs(userInputValues.x - texCoord.x), userInputValues.y - texCoord.y);
+      }
 
-    vecFromMouse.x *= texelSize.y / texelSize.x; // aspect ratio correction to make it a circle
+      vecFromMouse.x *= texelSize.y / texelSize.x; // aspect ratio correction to make it a circle
 
-    float distFromMouse = length(vecFromMouse);
+      float distFromMouse = length(vecFromMouse);
 
-    weight = smoothstep(userInputValues[BRUSH_SIZE] * texelSize.y, 0., distFromMouse);
+      weight = smoothstep(userInputValues[BRUSH_SIZE] * texelSize.y, 0., distFromMouse);
 
-    if (distFromMouse < userInputValues[BRUSH_SIZE] * texelSize.y) {
-      inBrush = true;
+      if (distFromMouse < userInputValues[BRUSH_SIZE] * texelSize.y) {
+        inBrush = true;
+      }
     }
   }
 
@@ -480,46 +484,50 @@ void main()
            //   water[CLOUD] = max(water[TOTAL] - maxWater(realTemp), 0.0); // recalculate cloud water
   }
 
-  vec2 vecFromPlane;
+  // Normal aircraft flight has no simulation-grid effect; only water dumps
+  // and crashes need distance and influence calculations.
+  if (airplaneValues[3] < 0.0 || airplaneValues[3] > 0.9) {
+    vec2 vecFromPlane;
 
-  if (wrapHorizontally) {
-    vecFromPlane = vec2(absHorizontalDist(airplaneValues.x, texCoord.x), airplaneValues.y - texCoord.y);
-  } else {
-    vecFromPlane = vec2(abs(airplaneValues.x - texCoord.x), airplaneValues.y - texCoord.y);
-  }
+    if (wrapHorizontally) {
+      vecFromPlane = vec2(absHorizontalDist(airplaneValues.x, texCoord.x), airplaneValues.y - texCoord.y);
+    } else {
+      vecFromPlane = vec2(abs(airplaneValues.x - texCoord.x), airplaneValues.y - texCoord.y);
+    }
 
-  vecFromPlane.x *= texelSize.y / texelSize.x; // aspect ratio correction to make it a circle
-  vecFromPlane *= resolution.y;                // convert to cell coordinates
+    vecFromPlane.x *= texelSize.y / texelSize.x; // aspect ratio correction to make it a circle
+    vecFromPlane *= resolution.y;                // convert to cell coordinates
 
-  if (airplaneValues[3] < 0.0)
-    vecFromPlane += vec2(0., -1.);            // dump water below plane
+    if (airplaneValues[3] < 0.0)
+      vecFromPlane += vec2(0., -1.);            // dump water below plane
 
-  float distFromPlane = length(vecFromPlane); // in cells
-
-
-  float planeInfluence = max(1.0 - distFromPlane, 0.) * 0.03;
-
-
-  if (airplaneValues[3] < 0.0) {
-    water[PRECIPITATION] += planeInfluence * 100.0; // dump water
-  }
-
-  // water[TOTAL] += planeInfluence * airplaneValues[2] * 1.0; // moisture
-  // water[SMOKE] += planeInfluence * 0.1;                     // smoke
-  //   base[TEMPERATURE] += planeInfluence * 74.0; // heat
+    float distFromPlane = length(vecFromPlane); // in cells
 
 
-  if (airplaneValues[3] > 0.9) { // PLANE CRASH!
+    float planeInfluence = max(1.0 - distFromPlane, 0.) * 0.03;
 
-    if (distFromPlane < 1.5) {
-      if (wall[DISTANCE] == 0) {
-        if (wall[TYPE] == WALLTYPE_LAND && wall[VERT_DISTANCE] == 0) // if land surface, set ground on fire
-          wall[TYPE] = WALLTYPE_FIRE;                                // start fire when plane hits the ground
-      } else {                                                       // air, create FIRE BALL!
-        base[PRESSURE] += 0.05;                                      // pressure wave
-        base[TEMPERATURE] = CtoK(50.0);                              // heat
-        water[TOTAL] += 1.;                                          // moisture
-        water[SMOKE] += 10.;                                         // smoke
+
+    if (airplaneValues[3] < 0.0) {
+      water[PRECIPITATION] += planeInfluence * 100.0; // dump water
+    }
+
+    // water[TOTAL] += planeInfluence * airplaneValues[2] * 1.0; // moisture
+    // water[SMOKE] += planeInfluence * 0.1;                     // smoke
+    //   base[TEMPERATURE] += planeInfluence * 74.0; // heat
+
+
+    if (airplaneValues[3] > 0.9) { // PLANE CRASH!
+
+      if (distFromPlane < 1.5) {
+        if (wall[DISTANCE] == 0) {
+          if (wall[TYPE] == WALLTYPE_LAND && wall[VERT_DISTANCE] == 0) // if land surface, set ground on fire
+            wall[TYPE] = WALLTYPE_FIRE;                                // start fire when plane hits the ground
+        } else {                                                       // air, create FIRE BALL!
+          base[PRESSURE] += 0.05;                                      // pressure wave
+          base[TEMPERATURE] = CtoK(50.0);                              // heat
+          water[TOTAL] += 1.;                                          // moisture
+          water[SMOKE] += 10.;                                         // smoke
+        }
       }
     }
   }

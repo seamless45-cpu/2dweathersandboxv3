@@ -1,0 +1,13 @@
+'use strict';
+const assert=require('assert'),fs=require('fs');
+const adv=fs.readFileSync('shaders/fragment/advectionShader.frag','utf8'),light=fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','utf8'),app=fs.readFileSync('app.js','utf8');
+assert.match(adv,/if \(soundingForcing != 0\.0\) \{[\s\S]*?getRealWorldSounding_T/);
+assert.match(adv,/if \(soundingForcing > 0\.9\) \{[\s\S]*?getRealWorldSounding_Vel/);
+assert.match(adv,/if \(globalDrying > 0\.0\)\s*water\[TOTAL\] -= clamp\(globalDrying/);
+assert.match(adv,/if \(userInputType != 0\) \{\s*if \(userInputType == 5\)/);
+assert.match(adv,/if \(airplaneValues\[3\] < 0\.0 \|\| airplaneValues\[3\] > 0\.9\) \{[\s\S]*?distFromPlane/);
+assert.match(light,/if \(isExternalPositive \|\| isCloudToCloud\) \{[\s\S]*?lightningFlickers/);
+assert.match(light,/if \(isCloudToCloud\) \{\s*ccTailFade/);
+assert.match(light,/if \(isExternalPositive\) \{\s*float extTailFade/);
+assert.match(app,/hdrQuality : '100%',/);assert.match(app,/motionBlurEnabled : false,/);
+console.log('Inactive simulation controls and lightning variant fast paths are guarded; defaults unchanged');

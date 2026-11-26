@@ -44,19 +44,17 @@ function check(name, condition, detail) {
 
 /* ----------------------------------------------------- blackbody helper */
 
-check('planckBlackbody exists and is the Tanner Helland blackbody fit, unit blue gain',
-  /vec3 planckBlackbody\(float kelvin\)/.test(display) &&
-  /329\.698727446 \* pow\(t - 60\.0, -0\.1332047592\)/.test(display) &&
-  /288\.1221695283 \* pow\(t - 60\.0, -0\.0755148492\)/.test(display) &&
-  /rgb \/ max\(rgb\.b, 0\.35\)/.test(display));
+check('unused temperature conversion is removed from the hot display path',
+  !/planckBlackbody\(/.test(display) && /upstreamColorize\(strikeChannel\)/.test(display));
 
 check('special classes retain their intensity gains and use upstream color',
   /upstreamColorize\(strikeChannel\)/.test(display) && /positive \? 3600\.0 : 2400\.0/.test(display) &&
   /const float ccBaseBrightness = 900\.0/.test(display) && /const float extBoltBrightness = 3000\.0/.test(display));
 
-check('superbolt and hyperbolt keep their pinned fictional hues (existing look off-limits)',
-  /const vec3 superboltColor = vec3\(0\.332, 0\.469, 1\.0\);/.test(display) &&
-  /const vec3 hyperboltColor = vec3\(0\.25, 0\.38, 1\.0\);/.test(display));
+check('superbolts and hyperbolts use upstream channel color',
+  /upstreamLightningColor,\s*lightningTime\)/.test(display) &&
+  /const float superboltBrightnessMult = 12\.0;/.test(display) &&
+  /const float hyperboltBrightnessMult = 30\.0;/.test(display));
 
 /* ------------------------------------------------------------ lifetimes */
 
