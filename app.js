@@ -2487,19 +2487,17 @@ let weatherStations = []; // array holding all weather stations
 // Lightning rods. The Lightning Rod tool plants one of these masts on the
 // terrain; clicking the open sky does nothing. Each rod is { x, y } in
 // normalized sim coordinates, where y is the height of the terrain surface it
-// stands on. Keep MAX_LIGHTNING_RODS in sync with #define MAX_LIGHTNING_RODS in
-// shaders/common.glsl. Rods belong to the running simulation, so they are
+// stands on. Rods belong to the running simulation, so they are
 // cleared whenever a new simulation (or a save file) is loaded.
 let lightningRods = [];
 let lightningRodsVersion = 0;
 let lightningRodCaptures = 0;
-const MAX_LIGHTNING_RODS = 12;
 const SUPER_LIGHTNING_ROD_REACH_MULT = 2.5;
-const lightningRodStatus = { placed : '0 / ' + MAX_LIGHTNING_RODS + ' (0 hits)' };
+const lightningRodStatus = { placed : '0 (0 hits)' };
 
 function updateLightningRodStatus()
 {
-  lightningRodStatus.placed = lightningRods.length + ' / ' + MAX_LIGHTNING_RODS + ' (' + lightningRodCaptures + ' hits)';
+  lightningRodStatus.placed = lightningRods.length + ' (' + lightningRodCaptures + ' hits)';
 }
 
 let simulationStartInProgress = false;
@@ -7019,8 +7017,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     const rodX = mod((cellX + 0.5) / sim_res_x, 1.0);
     if (lightningRods.some(rod => (guiControls.wrapHorizontally ? Math.abs(mod(rod.x - rodX + 0.5, 1.0) - 0.5) : Math.abs(rod.x - rodX)) * sim_res_x < 2))
       return false; // a rod already stands here
-    if (lightningRods.length >= MAX_LIGHTNING_RODS)
-      lightningRods.shift(); // the oldest mast makes way for the new one
     lightningRods.push({ x : rodX, y : (surfaceCell + 1) / sim_res_y, isSuper });
     lightningRodsVersion++;
     updateLightningRodStatus();
@@ -7443,8 +7439,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.103'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.103')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.104'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.104')
   ]);
 
   const [
@@ -8393,7 +8389,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.103');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.104');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8737,56 +8733,56 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform2f(gl.getUniformLocation(lightningLocationProgram, 'resolution'), sim_res_x, sim_res_y);
   gl.uniform2f(gl.getUniformLocation(lightningLocationProgram, 'texelSize'), texelSizeX, texelSizeY);
 
-  // Lightning rods. Geometry is expressed in cells so a mast keeps the same
-  // physical size at any resolution; the placed rods themselves are uploaded
-  // every frame because the Lightning Rod tool can add one at any time.
-  const rodPositionData = new Float32Array(MAX_LIGHTNING_RODS * 2);
-  const rodTypeData = new Float32Array(MAX_LIGHTNING_RODS);
+  // Every rod occupies a distinct simulation column. Store all rods, sorted
+  // by x, in one texture no wider than the already-allocated simulation grid.
+  // Sorted data allows the display shader to inspect only nearby masts.
+  const rodDataTexture = gl.createTexture();
+  const rodTextureData = new Float32Array(sim_res_x * 4);
+  let rodTextureVersion = -1;
   const rodUniformLocations = new Map();
   const rodUploadedVersion = new WeakMap();
-  const rodThickness = clamp(sim_res_x * 0.0022, 2.2, 24.0); // half width, in cells
-  const rodHeight = clamp(720.0 / cellHeight, 8.0, 70.0);    // mast height, in cells
+  const rodThickness = clamp(sim_res_x * 0.0022, 2.2, 24.0);
+  const rodHeight = clamp(720.0 / cellHeight, 8.0, 70.0);
+  gl.activeTexture(gl.TEXTURE10);
+  gl.bindTexture(gl.TEXTURE_2D, rodDataTexture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, 1, 0, gl.RGBA, gl.FLOAT, rodTextureData);
 
-  function lightningRodUniforms(program)
+  function uploadLightningRodUniforms(program)
   {
+    if (rodTextureVersion !== lightningRodsVersion) {
+      const sorted = lightningRods.map((rod, order) => ({ ...rod, order })).sort((a, b) => a.x - b.x);
+      rodTextureData.fill(0);
+      for (let i = 0; i < sorted.length; i++) {
+        rodTextureData[i * 4] = sorted[i].x;
+        rodTextureData[i * 4 + 1] = sorted[i].y;
+        rodTextureData[i * 4 + 2] = sorted[i].isSuper ? 1.0 : 0.0;
+        rodTextureData[i * 4 + 3] = sorted[i].order;
+      }
+      gl.activeTexture(gl.TEXTURE10);
+      gl.bindTexture(gl.TEXTURE_2D, rodDataTexture);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, sim_res_x, 1, gl.RGBA, gl.FLOAT, rodTextureData);
+      rodTextureVersion = lightningRodsVersion;
+    }
+    if (rodUploadedVersion.get(program) === lightningRodsVersion) return;
     let locations = rodUniformLocations.get(program);
-    if (locations == null) {
+    if (!locations) {
       locations = {
-        positions : gl.getUniformLocation(program, 'rodPositions[0]'),
-        types : gl.getUniformLocation(program, 'rodTypes[0]'),
+        data : gl.getUniformLocation(program, 'rodDataTex'),
         count : gl.getUniformLocation(program, 'rodCount'),
         thickness : gl.getUniformLocation(program, 'rodThickness'),
         height : gl.getUniformLocation(program, 'rodHeight')
       };
       rodUniformLocations.set(program, locations);
     }
-    return locations;
-  }
-
-  function uploadLightningRodUniforms(program)
-  {
-    if (rodUploadedVersion.get(program) === lightningRodsVersion)
-      return;
-    const locations = lightningRodUniforms(program);
-    gl.useProgram(program); // uniform locations are only valid for the active program
-    const count = Math.min(lightningRods.length, MAX_LIGHTNING_RODS);
-    rodPositionData.fill(0);
-    rodTypeData.fill(0);
-    for (let i = 0; i < count; i++) {
-      rodPositionData[i * 2] = lightningRods[i].x;
-      rodPositionData[i * 2 + 1] = lightningRods[i].y;
-      rodTypeData[i] = lightningRods[i].isSuper ? 1.0 : 0.0;
-    }
-    if (locations.types != null)
-      gl.uniform1fv(locations.types, rodTypeData);
-    if (locations.positions != null)
-      gl.uniform2fv(locations.positions, rodPositionData);
-    if (locations.count != null)
-      gl.uniform1i(locations.count, count);
-    if (locations.thickness != null)
-      gl.uniform1f(locations.thickness, rodThickness);
-    if (locations.height != null)
-      gl.uniform1f(locations.height, rodHeight);
+    gl.useProgram(program);
+    if (locations.data != null) gl.uniform1i(locations.data, program === lightningLocationProgram ? 4 : 10);
+    if (locations.count != null) gl.uniform1i(locations.count, lightningRods.length);
+    if (locations.thickness != null) gl.uniform1f(locations.thickness, rodThickness);
+    if (locations.height != null) gl.uniform1f(locations.height, rodHeight);
     rodUploadedVersion.set(program, lightningRodsVersion);
   }
 
@@ -9331,6 +9327,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
               gl.activeTexture(gl.TEXTURE3);
               gl.bindTexture(gl.TEXTURE_2D, baseTexture_1);
+              gl.activeTexture(gl.TEXTURE4);
+              gl.bindTexture(gl.TEXTURE_2D, rodDataTexture);
 
               gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuffs[lightningDst]);
               gl.viewport(0, 0, numLightningSlots, 2);
@@ -9804,6 +9802,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.bindTexture(gl.TEXTURE_2D, ambientLightFBOs[0].texture);
 
       uploadLightningRodUniforms(realisticDisplayProgram);
+      gl.activeTexture(gl.TEXTURE10);
+      gl.bindTexture(gl.TEXTURE_2D, rodDataTexture);
       if (hasLightningCoverage)
         gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE, gl.COLOR_ATTACHMENT2, gl.COLOR_ATTACHMENT3]);
       else if (hasLightningBloom)
@@ -10650,7 +10650,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.103');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.104');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

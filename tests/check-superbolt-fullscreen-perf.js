@@ -98,7 +98,7 @@ check('ambientLightDirty skips redundant 44-pass ambient light blur when emitted
 
 check('rodUploadedVersion avoids redundant lightning rod uniform uploads when rods have not changed',
   /const rodUploadedVersion = new WeakMap\(\);/.test(appSource) &&
-  /if \(rodUploadedVersion\.get\(program\) === lightningRodsVersion\)\s*\n\s*return;/.test(appSource));
+  /if \(rodUploadedVersion\.get\(program\) === lightningRodsVersion\) return;/.test(appSource));
 
 check('realisticDisplayShader.frag reuses fetched field state in computeAirColor and skips sky/underground wasted fetches',
   /vec4 computeAirColor\(vec2 bndFragCoord\)/.test(displayShader) &&

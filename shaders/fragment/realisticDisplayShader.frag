@@ -62,12 +62,27 @@ layout(location = 3) out vec4 lightningCoverageOutput;
 #include "common.glsl"
 
 // Lightning rods: masts standing on the terrain, placed with the Lightning Rod
-// tool. (Declared after common.glsl so MAX_LIGHTNING_RODS is known.)
-uniform vec2 rodPositions[MAX_LIGHTNING_RODS];
-uniform float rodTypes[MAX_LIGHTNING_RODS];
+// tool. Rod data is sorted by position for spatial lookup.
+uniform sampler2D rodDataTex; // sorted x, ground y, super-rod flag
 uniform int rodCount;
 uniform float rodThickness;     // half width of the mast, in cells
 uniform float rodHeight;        // height of the mast, in cells
+
+vec4 rodDataAt(int index)
+{
+  return texelFetch(rodDataTex, ivec2(index, 0), 0);
+}
+// Lower bound in the sorted rod table; no per-fragment scan of distant rods.
+int rodLowerBound(float x)
+{
+  int lo = 0, hi = rodCount;
+  while (lo < hi) {
+    int mid = (lo + hi) / 2;
+    if (rodDataAt(mid).x < x) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
 uniform float originalBoltBottomU; // original artwork ground contact for rod alignment
 
 #include "commonDisplay.glsl"
@@ -228,11 +243,11 @@ float cloudChannelStage(float time, float fromSource)
 
 float findCapturedRodTipY(float strikeX)
 {
-  for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
-    if (i >= rodCount)
-      break;
-    if (abs(strikeX - rodPositions[i].x) < 1e-5)
-      return rodPositions[i].y + rodHeight * (rodTypes[i] > 0.5 ? 1.8 : 1.0) / max(resolution.y, 1.0);
+  int index = rodLowerBound(strikeX - 1e-5);
+  if (index < rodCount) {
+    vec4 rod = rodDataAt(index);
+    if (abs(strikeX - rod.x) < 1e-5)
+      return rod.y + rodHeight * (rod.z > 0.5 ? 1.8 : 1.0) / max(resolution.y, 1.0);
   }
   return -1.0;
 }
@@ -538,12 +553,16 @@ vec3 displayAdaptedFlash(vec2 pos, float lightningTime, float currentLightningIn
   float lengthWorld = height * 2.0;
   float direction = random2d(vec2(pos.y * 3.77, 1.23)) < 0.5 ? -1.0 : 1.0;
   float t = 0.5 + direction * (texCoord.x - pos.x) * aspectRatios[0] / lengthWorld;
+  // The tile is empty outside this longitudinal interval. Avoid texture
+  // gradients and the expensive animated stage across the rest of the frame.
+  if (t < 0.01 || t > 0.99) return vec3(0.0);
   float u = 0.5 + (texCoord.y - pos.y) / (lengthWorld * lightningTexAspect);
   vec2 gradX = vec2(screenTexDx.y / (lengthWorld * lightningTexAspect),
                     direction * screenTexDx.x * aspectRatios[0] / lengthWorld);
   vec2 gradY = vec2(screenTexDy.y / (lengthWorld * lightningTexAspect),
                     direction * screenTexDy.x * aspectRatios[0] / lengthWorld);
   float coverage = adaptedUpstreamArtwork(u, t, gradX, gradY);
+  if (coverage <= 0.0) return vec3(0.0);
   float stage = cloudChannelStage(lightningTime, abs(t - 0.5) * 2.0);
   return upstreamLightningColor * coverage * currentLightningIntensity * (positive ? 3600.0 : 2400.0) * stage;
 }
@@ -633,6 +652,7 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   vec2 gradX = vec2(dot(pixelX, normDir) / (scaleLen * lightningTexAspect), dot(pixelX, tanDir) / alongScale);
   vec2 gradY = vec2(dot(pixelY, normDir) / (scaleLen * lightningTexAspect), dot(pixelY, tanDir) / alongScale);
   float pixVal = adaptedUpstreamArtwork(u, t, gradX, gradY);
+  if (pixVal <= 0.0) return vec3(0.0);
   const float extBoltBrightness = 3000.0;
   return max(pixVal * currentLightningIntensity * extBoltBrightness *
              groundChannelStage(lightningTime, t) * lightningColor, vec3(0.0));
@@ -709,6 +729,7 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
   vec2 gradX = vec2(dot(pixelX, normDir) / (span * lightningTexAspect), dot(pixelX, tanDir) / alongScale);
   vec2 gradY = vec2(dot(pixelY, normDir) / (span * lightningTexAspect), dot(pixelY, tanDir) / alongScale);
   float pixVal = adaptedUpstreamArtwork(u, t, gradX, gradY);
+  if (pixVal <= 0.0) return vec3(0.0);
   const float ccBaseBrightness = 900.0;
   return upstreamLightningColor * pixVal * cloudChannelStage(lightningTime, t) * ccCurve * ccBaseBrightness;
 }
@@ -1373,11 +1394,24 @@ void main()
   // lit by the same sunlight / lightning light as everything else.
   const float rodBaseCells = 1.9;   // height of the stepped grounding pedestal, in cells
   const float rodCoronaReach = 3.8; // how far the tip's ionized corona reaches, in cells
-  for (int i = 0; i < MAX_LIGHTNING_RODS; i++) {
-    if (i >= rodCount)
-      break;
-    vec2 rod = rodPositions[i];
-    bool isSuperRod = rodTypes[i] > 0.5;
+  // Cull by sorted x before any per-rod shading. The second interval handles
+  // only the periodic seam, preserving repeated scenery without duplicates.
+  float lastMetalRodOrder = -1.0;
+  float rodX = fract(texCoord.x);
+  float reach = min(0.5, max(rodThickness * 1.35 * 3.2, rodCoronaReach + 1.0) / resolution.x);
+  for (int pass = 0; pass < 2; pass++) {
+    float left = max(0.0, rodX - reach), right = min(1.0, rodX + reach);
+    if (pass == 1) {
+      if (reach >= 0.5) break;
+      if (rodX - reach < 0.0) { left = rodX - reach + 1.0; right = 1.0; }
+      else if (rodX + reach > 1.0) { left = 0.0; right = rodX + reach - 1.0; }
+      else break;
+    } else if (reach >= 0.5) { left = 0.0; right = 1.0; }
+    for (int i = rodLowerBound(left); i < rodCount; i++) {
+    vec4 rodInfo = rodDataAt(i);
+    if (rodInfo.x > right) break;
+    vec2 rod = rodInfo.xy;
+    bool isSuperRod = rodInfo.z > 0.5;
     float thisRodHeight = rodHeight * (isSuperRod ? 1.8 : 1.0);
     float thisRodThickness = rodThickness * (isSuperRod ? 1.35 : 1.0);
     float dyCells = (texCoord.y - rod.y) * resolution.y; // height above surface, in cells
@@ -1440,7 +1474,8 @@ void main()
     float halfWidth = dyCells < rodBaseCells ? baseWidth : mastWidth;
     bool onMetal = dyCells >= -0.75 && abs(dxCells) <= halfWidth;
 
-    if (onMetal) {
+    if (onMetal && rodInfo.w > lastMetalRodOrder) {
+      lastMetalRodOrder = rodInfo.w;
       float acrossRod = clamp(abs(dxCells) / max(halfWidth, 1e-4), 0.0, 1.0);
       vec3 matCol;
       if (dyCells < rodBaseCells * 0.72) {
@@ -1481,6 +1516,7 @@ void main()
       rodGlow += vec3(0.58, 0.72, 1.0) * strikeGlow * surgeWave *
                       (tipCore * 200.0 + earthingFlash * 140.0 + 2600.0) * (onMetal ? 1.0 : 0.22);
     }
+  }
   }
 
 

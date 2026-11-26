@@ -370,6 +370,8 @@ node tests/check-sw-offline.js # runs sw.js against a fake cache and network
 node tests/check-shaders.js    # glslangValidator on every shader
 node tests/check-lightning-occlusion.js # no lightning light over solid terrain foregrounds; the rod glow stays
 node tests/check-lightning-rods.js
+node tests/check-rod-sorted-lookup.js # uncapped rod table and wrapped lookup
+node tests/gpu-lightning-culling-parity.js # generated-artwork visual parity for lightning fast paths
 node tests/check-lightning-bolt.js # the channel's shape, drawn and measured
 node tests/check-lightning-strikes.js # how often lightning may strike, and when
 node tests/check-external-cg.js # positive external CG far clear-air targeting, 200000 brightness, smooth fade, single-stroke timing, and arc geometry
