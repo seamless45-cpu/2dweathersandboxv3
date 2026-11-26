@@ -429,7 +429,7 @@ check('the curved network is fine and sparse, not a bloated white web',
     /float height = \(positive \? 0\.095 : 0\.075\) \* lightningHeightScale\(\);/.test(displayShader) &&
     /float lengthWorld = height \* 2\.0;/.test(displayShader));
   check('IC projects the original artwork in world coordinates',
-    /\(texCoord\.x - pos\.x\) \* aspectRatios\[0\] \/ lengthWorld/.test(displayShader) &&
+    /cloudCurveProjection\(start, end, bow, skew, u, t, gradX, gradY\)/.test(displayShader) &&
     /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(displayShader));
   check('IC filters pre-thresholded upstream artwork',
     /textureGrad\(lightningTex, vec2\(u, t\), gradX, gradY\)\.r/.test(displayShader));

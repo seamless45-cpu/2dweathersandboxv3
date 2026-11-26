@@ -7,7 +7,7 @@ const app = fs.readFileSync('app.js', 'utf8');
 let failed = 0;
 function check(name, ok) { console.log((ok ? 'PASS ' : 'FAIL ') + name); if (!ok) failed++; }
 const chunk = (source, a, b) => source.slice(source.indexOf(a), source.indexOf(b, source.indexOf(a)));
-const ext = chunk(display, 'vec3 displayExternalLightning(', 'vec2 evalCcCubic(');
+const ext = chunk(display, 'vec3 displayExternalLightning(', 'vec3 displayCloudToCloudLightning(');
 const cc = chunk(display, 'vec3 displayCloudToCloudLightning(', 'vec3 saturate(');
 const crawler = chunk(display, 'vec3 drawAnvilCrawler(', '// Optical approximations');
 const selector = chunk(location, 'float selectExternalStrikeTarget(', '// Probe waterTex laterally');
@@ -50,7 +50,7 @@ for (const [label, name, next] of variants) {
   const body = chunk(display, 'vec3 ' + name + '(', (next === 'evalExtArc' || next === 'evalCcCubic' ? 'vec2 ' : next === 'computeAirColor' ? 'vec4 ' : 'vec3 ') + next + '(');
   check(label + ' rejects fragments outside the world tile and never wraps x',
     /^vec3 [^{]+\{\s*if \(!inLightningWorldTile\(\)\)\s*return vec3\(0\.0\);/.test(body) &&
-    !/fract\(texCoord\.x\)|mod\(texCoord\.x/.test(body) && /texCoord\.x - (?:pos|groundPos|targetPos|origin|data)\.x/.test(body));
+    !/fract\(texCoord\.x\)|mod\(texCoord\.x/.test(body) && (/texCoord\.x - (?:pos|groundPos|targetPos|origin|data)\.x/.test(body) || /cloudCurveProjection\(start, end, bow, skew, u, t, gradX, gradY\)/.test(body)));
 }
 check('both IC entry points delegate to the clipped shared renderer',
   /displayAdaptedFlash\(pos, lightningTime, currentLightningIntensity, false\)/.test(display) &&

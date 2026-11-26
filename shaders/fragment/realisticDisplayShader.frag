@@ -360,23 +360,6 @@ float artworkBranchCoverage(float sampleValue, bool positive)
   return lightningCoverage(sampleValue, threshold);
 }
 
-vec2 evalCcCubic(float t, vec2 p0, vec2 p1, vec2 p2, vec2 p3)
-{
-  float om = 1.0 - t;
-  return om * om * om * p0 +
-         3.0 * om * om * t * p1 +
-         3.0 * om * t * t * p2 +
-         t * t * t * p3;
-}
-
-vec2 evalCcCubicDeriv(float t, vec2 p0, vec2 p1, vec2 p2, vec2 p3)
-{
-  float om = 1.0 - t;
-  return 3.0 * om * om * (p1 - p0) +
-         6.0 * om * t * (p2 - p1) +
-         3.0 * t * t * (p3 - p2);
-}
-
 vec2 ccRotate(vec2 v, float angle)
 {
   float c = cos(angle);
@@ -551,24 +534,55 @@ float adaptedUpstreamArtwork(float u, float t, vec2 gradX, vec2 gradY)
   return sampledStrikeCoverage;
 }
 
-// Rotate the vertical source tile into a short horizontal cloud channel.
-// Both polarities share the original artwork but preserve their respective
-// spans, intensity and cloud-channel animation.
+// Project a bent cloud channel in a local orthonormal frame. The asymmetric
+// arch has exact endpoints and a single-valued mapping, so no per-pixel nearest
+// cubic search is needed. Derivatives follow the same warp for textureGrad.
+bool cloudCurveProjection(vec2 start, vec2 end, float bow, float skew,
+                          out float u, out float t, out vec2 gradX, out vec2 gradY)
+{
+  vec2 delta = end - start;
+  float span = length(delta);
+  if (span < 1e-4) return false;
+  vec2 tangent = delta / span;
+  vec2 normal = vec2(-tangent.y, tangent.x);
+  vec2 point = vec2(texCoord.x * aspectRatios[0], texCoord.y) - start;
+  t = dot(point, tangent) / span;
+  if (t < 0.01 || t > 0.99) return false;
+  float asym = 1.0 + skew * (2.0 * t - 1.0);
+  float profile = t * (1.0 - t) * asym;
+  float slope = (1.0 - 2.0 * t) * asym + 2.0 * skew * t * (1.0 - t);
+  u = 0.5 + (dot(point, normal) / span - bow * profile) / lightningTexAspect;
+  vec2 pixelX = vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y);
+  vec2 pixelY = vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y);
+  float tx = dot(pixelX, tangent) / span;
+  float ty = dot(pixelY, tangent) / span;
+  gradX = vec2((dot(pixelX, normal) / span - bow * slope * tx) / lightningTexAspect, tx);
+  gradY = vec2((dot(pixelY, normal) / span - bow * slope * ty) / lightningTexAspect, ty);
+  return true;
+}
+
+// IC channels sweep through different tilted, asymmetric arches while retaining
+// the original detailed artwork, width, timing and polarity-specific span.
 vec3 displayAdaptedFlash(vec2 pos, float lightningTime, float currentLightningIntensity, bool positive)
 {
   if (!inLightningWorldTile()) return vec3(0.0);
   float height = (positive ? 0.095 : 0.075) * lightningHeightScale();
   float lengthWorld = height * 2.0;
-  float direction = random2d(vec2(pos.y * 3.77, 1.23)) < 0.5 ? -1.0 : 1.0;
-  float t = 0.5 + direction * (texCoord.x - pos.x) * aspectRatios[0] / lengthWorld;
-  // The tile is empty outside this longitudinal interval. Avoid texture
-  // gradients and the expensive animated stage across the rest of the frame.
-  if (t < 0.01 || t > 0.99) return vec3(0.0);
-  float u = 0.5 + (texCoord.y - pos.y) / (lengthWorld * lightningTexAspect);
-  vec2 gradX = vec2(screenTexDx.y / (lengthWorld * lightningTexAspect),
-                    direction * screenTexDx.x * aspectRatios[0] / lengthWorld);
-  vec2 gradY = vec2(screenTexDy.y / (lengthWorld * lightningTexAspect),
-                    direction * screenTexDy.x * aspectRatios[0] / lengthWorld);
+  // A conservative square covers every angle, curve and artwork edge.
+  vec2 offset = vec2((texCoord.x - pos.x) * aspectRatios[0], texCoord.y - pos.y);
+  if (max(abs(offset.x), abs(offset.y)) > lengthWorld * 1.7) return vec3(0.0);
+  float seed = random2d(vec2(pos.x * 37.7 + pos.y * 13.3, pos.y * 29.1 + 3.17));
+  float shape = random2d(vec2(pos.x * 61.3 + 7.9, pos.y * 41.7 + 5.1));
+  float angle = mix(-0.70, 0.70, seed);
+  float direction = shape < 0.5 ? -1.0 : 1.0;
+  vec2 axis = direction * vec2(cos(angle), sin(angle));
+  vec2 center = vec2(pos.x * aspectRatios[0], pos.y);
+  vec2 start = center - axis * lengthWorld * 0.5;
+  vec2 end = center + axis * lengthWorld * 0.5;
+  float bow = (seed < 0.5 ? -1.0 : 1.0) * mix(0.65, 1.05, shape);
+  float skew = mix(-0.65, 0.65, seed);
+  float u, t; vec2 gradX, gradY;
+  if (!cloudCurveProjection(start, end, bow, skew, u, t, gradX, gradY)) return vec3(0.0);
   float coverage = adaptedUpstreamArtwork(u, t, gradX, gradY);
   if (coverage <= 0.0) return vec3(0.0);
   float stage = cloudChannelStage(lightningTime, abs(t - 0.5) * 2.0);
@@ -666,82 +680,32 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
              groundChannelStage(lightningTime, t) * lightningColor, vec3(0.0));
 }
 
-// Adapt the original bolt onto the existing cloud-to-cloud cubic path.
-// Both polarities retain their timing and brightness in the caller.
+// CC uses the actual two cloud endpoints, with a stable varied arch in their
+// local frame. No nearest-point iterations or per-pixel cubic search are needed.
 vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiveCC,
                                   float lightningTime, float ccCurve)
 {
-  if (!inLightningWorldTile())
-    return vec3(0.0);
-  float relX = texCoord.x - targetPos.x;
-  float dxWrap = originPos.x - targetPos.x;
-  vec2 p0 = vec2(dxWrap * aspectRatios[0], originPos.y);
-  vec2 p3 = vec2(0.0, targetPos.y);
-  vec2 target = vec2(relX * aspectRatios[0], texCoord.y);
-
-  float span = length(p3 - p0);
-  if (span < 1e-4)
-    return vec3(0.0);
-
+  if (!inLightningWorldTile()) return vec3(0.0);
+  vec2 start = vec2(originPos.x * aspectRatios[0], originPos.y);
+  vec2 end = vec2(targetPos.x * aspectRatios[0], targetPos.y);
+  float span = length(end - start);
+  if (span < 1e-4) return vec3(0.0);
+  vec2 point = vec2(texCoord.x * aspectRatios[0], texCoord.y);
+  vec2 pad = vec2(span * 1.1);
+  if (any(lessThan(point, min(start, end) - pad)) ||
+      any(greaterThan(point, max(start, end) + pad))) return vec3(0.0);
   float seed = random2d(vec2(originPos.x * 29.1 + originPos.y * 17.7,
                              targetPos.x * 41.3 + targetPos.y * 13.9));
-  float s2 = random2d(vec2(seed * 19.3, originPos.y * 37.1));
-  float s3 = random2d(vec2(targetPos.x * 53.7, seed * 23.9));
-  float s4 = random2d(vec2(originPos.x * 47.9, seed * 31.3));
-  float s5 = random2d(vec2(targetPos.y * 61.1, seed * 41.7));
-
-  float bow1 = (s2 < 0.5 ? 1.0 : -1.0) * mix(0.08, 0.22, s3) * span;
-  float bow2 = (s4 < 0.5 ? 1.0 : -1.0) * mix(0.08, 0.20, s5) * span;
-  vec2 p1 = mix(p0, p3, 0.32) + vec2((s3 - 0.5) * 0.12 * span, bow1);
-  vec2 p2 = mix(p0, p3, 0.68) + vec2((s5 - 0.5) * 0.12 * span, bow2);
-  p1.y = clamp(p1.y, 0.04, 0.94);
-  p2.y = clamp(p2.y, 0.04, 0.94);
-
-  float pad = max(span * 0.52, 0.26);
-  vec2 boxMin = min(min(p0, p3), min(p1, p2)) - vec2(pad);
-  vec2 boxMax = max(max(p0, p3), max(p1, p2)) + vec2(pad);
-  if (target.x < boxMin.x || target.x > boxMax.x || target.y < boxMin.y || target.y > boxMax.y)
-    return vec3(0.0);
-
-  float bestT = 0.0;
-  float bestD2 = 1e9;
-  for (int k = 0; k < 6; k++) {
-    float tc = float(k) / 5.0;
-    vec2 diff = evalCcCubic(tc, p0, p1, p2, p3) - target;
-    float d2 = dot(diff, diff);
-    if (d2 < bestD2) {
-      bestD2 = d2;
-      bestT = tc;
-    }
-  }
-
-  float t = bestT;
-  for (int it = 0; it < 3; it++) {
-    vec2 r = evalCcCubic(t, p0, p1, p2, p3) - target;
-    vec2 dC = evalCcCubicDeriv(t, p0, p1, p2, p3);
-    float denom = dot(dC, dC) + 1e-6;
-    t = clamp(t - dot(r, dC) / denom, 0.0, 1.0);
-  }
-
-  vec2 c = evalCcCubic(t, p0, p1, p2, p3);
-  vec2 dC = evalCcCubicDeriv(t, p0, p1, p2, p3);
-  float dLen = length(dC);
-  vec2 tanDir = dLen > 1e-5 ? dC / dLen : vec2(1.0, 0.0);
-  vec2 normDir = vec2(-tanDir.y, tanDir.x);
-
-  float dPerp = dot(target - c, normDir);
-  float u = 0.5 + dPerp / (span * lightningTexAspect);
-  vec2 pixelX = vec2(screenTexDx.x * aspectRatios[0], screenTexDx.y);
-  vec2 pixelY = vec2(screenTexDy.x * aspectRatios[0], screenTexDy.y);
-  float alongScale = max(dLen, 1e-4);
-  vec2 gradX = vec2(dot(pixelX, normDir) / (span * lightningTexAspect), dot(pixelX, tanDir) / alongScale);
-  vec2 gradY = vec2(dot(pixelY, normDir) / (span * lightningTexAspect), dot(pixelY, tanDir) / alongScale);
+  float shape = random2d(vec2(targetPos.y * 61.1 + 11.7, originPos.x * 47.9 + 8.3));
+  float bow = (seed < 0.5 ? -1.0 : 1.0) * mix(0.65, 1.05, shape);
+  float skew = mix(-0.65, 0.65, seed);
+  float u, t; vec2 gradX, gradY;
+  if (!cloudCurveProjection(start, end, bow, skew, u, t, gradX, gradY)) return vec3(0.0);
   float pixVal = adaptedUpstreamArtwork(u, t, gradX, gradY);
   if (pixVal <= 0.0) return vec3(0.0);
   const float ccBaseBrightness = 900.0;
   return upstreamLightningColor * pixVal * cloudChannelStage(lightningTime, t) * ccCurve * ccBaseBrightness;
 }
-
 
 
 

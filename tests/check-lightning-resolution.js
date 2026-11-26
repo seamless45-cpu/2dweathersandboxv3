@@ -15,7 +15,7 @@ check('IC and ground strikes filter coverage and retain raw leader and rod shear
   /textureGrad\(lightningTex, vec2\(u, t\), gradX, gradY\)\.r/.test(shader) &&
   /originalBoltBottomU - 0\.5/.test(shader));
 check('external and CC paths sample adapted original artwork rather than procedural cores',
-  /vec2 c = evalExtArc\(t, Hw, V\)/.test(shader) && /vec2 c = evalCcCubic\(t, p0, p1, p2, p3\)/.test(shader) &&
+  /vec2 c = evalExtArc\(t, Hw, V\)/.test(shader) && /cloudCurveProjection\(start, end, bow, skew, u, t, gradX, gradY\)/.test(shader) &&
   (shader.match(/adaptedUpstreamArtwork\(u, t, gradX, gradY\)/g) || []).length === 3);
 check('mipmapped RG8 bolt allocation is initialized safely before upload',
   /gl\.texImage2D\(gl\.TEXTURE_2D, 0, gl\.RG8, 1, 1, 0, gl\.RG, gl\.UNSIGNED_BYTE, emptyLightningTexturePixel\);\s*gl\.texParameteri\(gl\.TEXTURE_2D, gl\.TEXTURE_MIN_FILTER, gl\.LINEAR\)/.test(app) &&

@@ -99,10 +99,10 @@ check('CC retains its base polarity gain and avoids conditional quad derivatives
     displayShader.indexOf('float saturate'))),
   'CC must retain its base gain without conditional quad derivatives');
 
-check('CC projects upstream artwork onto its cubic path and retains cloud lighting',
+check('CC projects upstream artwork onto its curved path and retains cloud lighting',
   (() => {
     const body = displayShader.slice(displayShader.indexOf('vec3 displayCloudToCloudLightning('), displayShader.indexOf('float saturate'));
-    return /evalCcCubic\(t, p0, p1, p2, p3\)/.test(body) && /evalCcCubicDeriv\(t, p0, p1, p2, p3\)/.test(body) &&
+    return /cloudCurveProjection\(start, end, bow, skew, u, t, gradX, gradY\)/.test(body) &&
       /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(body) && /cloudChannelStage\(lightningTime, t\)/.test(body) &&
       !/ccEvalBranch\(|ccFractalDisp\(/.test(body) && /ccMidDist/.test(displayShader);
   })());
@@ -209,7 +209,7 @@ function selectCloudToCloudTarget(originX, originY, iter, densityFn, wallFn = ()
   check('CC bridges same-tile clouds but never selects the opposite edge',
     sameTile > 100 && seamHits === 0 &&
     /if \(cx < 0\.0 \|\| cx >= 1\.0\)/.test(locationShader) &&
-    /float dxWrap = originPos\.x - targetPos\.x;/.test(displayShader) &&
+    /vec2 start = vec2\(originPos\.x \* aspectRatios\[0\], originPos\.y\);/.test(displayShader) &&
     /const midX = 0\.5 \* \(targetX \+ originX\)/.test(appSource),
     'same-tile ' + sameTile + ', seam ' + seamHits);
 }
@@ -270,20 +270,14 @@ function flickersCC(x, y, intensity) {
     'ratio=' + ratio.toFixed(6));
 }
 
-/* ------------------------------------------- 4. Bezier curve endpoint check */
-
+/* ------------------------------------------- 4. Curved endpoint check */
 {
-  const evalCcCubic = (t, p0, p1, p2, p3) => {
-    const om = 1 - t;
-    return [om * om * om * p0[0] + 3 * om * om * t * p1[0] + 3 * om * t * t * p2[0] + t * t * t * p3[0],
-            om * om * om * p0[1] + 3 * om * om * t * p1[1] + 3 * om * t * t * p2[1] + t * t * t * p3[1]];
-  };
-  const p0 = [-0.8, 0.32], p1 = [-0.55, 0.44], p2 = [-0.25, 0.21], p3 = [0.0, 0.28];
-  const s = evalCcCubic(0, p0, p1, p2, p3);
-  const e = evalCcCubic(1, p0, p1, p2, p3);
-  check('cloud-to-cloud cubic S-curve starts at origin cloud and lands at target cloud',
-    Math.abs(s[0] - p0[0]) < 1e-6 && Math.abs(s[1] - p0[1]) < 1e-6 &&
-    Math.abs(e[0] - p3[0]) < 1e-6 && Math.abs(e[1] - p3[1]) < 1e-6);
+  const point = (t, bow, skew) => [t, bow * t * (1 - t) * (1 + skew * (2*t - 1))];
+  for (const bow of [-1.05, 0.65, 1.05]) for (const skew of [-0.65, 0, 0.65]) {
+    const start = point(0, bow, skew), end = point(1, bow, skew), mid = point(.5, bow, skew);
+    check('curved CC path preserves both endpoints and has a bend',
+      start[0] === 0 && start[1] === 0 && end[0] === 1 && end[1] === 0 && Math.abs(mid[1]) > .15);
+  }
 }
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

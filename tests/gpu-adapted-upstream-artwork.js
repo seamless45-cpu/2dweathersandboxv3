@@ -3,7 +3,7 @@ const fs=require('fs'),assert=require('assert'),{chromium}=require('playwright-c
 (async()=>{
  const s=fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','utf8');
  const func=(name)=>{const a=s.indexOf(name);return s.slice(a,s.indexOf('\n}',a)+2)};
- const snippets=['float dischargeLeader(', 'float groundChannelStage(', 'float cloudChannelStage(', 'vec2 evalCcCubic(', 'vec2 evalCcCubicDeriv(', 'float adaptedUpstreamArtwork(', 'vec3 displayAdaptedFlash(', 'vec3 displayFlash(', 'vec3 displayPositiveFlash(', 'vec2 evalExtArc(', 'vec2 evalExtArcDeriv(', 'vec3 displayExternalLightning(', 'vec3 displayCloudToCloudLightning('].map(func).join('\n');
+ const snippets=['float dischargeLeader(', 'float groundChannelStage(', 'float cloudChannelStage(', 'float adaptedUpstreamArtwork(', 'bool cloudCurveProjection(', 'vec3 displayAdaptedFlash(', 'vec3 displayFlash(', 'vec3 displayPositiveFlash(', 'vec2 evalExtArc(', 'vec2 evalExtArcDeriv(', 'vec3 displayExternalLightning(', 'vec3 displayCloudToCloudLightning('].map(func).join('\n');
  const bin=(await import(require.resolve('@sparticuz/chromium'))).default;
  const browser=await chromium.launch({executablePath:await bin.executablePath(),args:[...bin.args,'--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
  try { const page=await browser.newPage(); const result=await page.evaluate((functions)=>{
