@@ -459,7 +459,7 @@ vec2 ccEvalBranch(vec2 target, vec2 bStart, vec2 bDir, float bLen, float curveSi
 // easing of the tail and no second, wide lobe: a stroke goes from white to gone
 // as fast as the curve does. When captured by a lightning rod, the channel
 // terminates squarely on the rod's copper tip instead of passing underground.
-vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningIntensity)
+vec3 displayLightning(vec2 pos, float originX, float lightningTime, float currentLightningIntensity)
 {
   if (!inLightningWorldTile())
     return vec3(0.0);
@@ -474,7 +474,13 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
   float scaleMult = 1. / spanY; // 1.0 means lightning is as tall as the simheight
 
   vec2 lightningTexCoord;
-  lightningTexCoord.x = texCoord.x - pos.x;
+  // A captured leader keeps its cloud origin and bends toward the mast only
+  // near the ground instead of translating the entire bolt to the rod.
+  float descent = clamp((topY - texCoord.y) / spanY, 0.0, 1.0);
+  float bendT = clamp((descent - 0.35) / 0.65, 0.0, 1.0);
+  float bend = bendT * bendT * (3.0 - 2.0 * bendT);
+  float originOffset = rodHit ? originX - pos.x : 0.0;
+  lightningTexCoord.x = texCoord.x - pos.x - originOffset * (1.0 - bend);
   lightningTexCoord.y = texCoord.y - topY;
 
   lightningTexCoord.x *= scaleMult * aspectRatios[0] / lightningTexAspect;
@@ -505,7 +511,9 @@ vec3 displayLightning(vec2 pos, float lightningTime, float currentLightningInten
     vec2 gradY = vec2(screenTexDy.x * scaleMult * aspectRatios[0] / lightningTexAspect,
                       -screenTexDy.y * scaleMult);
     if (rodHit) {
-      float shearSlope = (originalBoltBottomU - 0.5) * 1.25 * pow(clamp(lightningTexCoord.y, 0.0, 1.0), 0.25);
+      float bendSlope = 6.0 * bendT * (1.0 - bendT) / 0.65;
+      float shearSlope = (originalBoltBottomU - 0.5) * 1.25 * pow(clamp(lightningTexCoord.y, 0.0, 1.0), 0.25)
+                       + originOffset * bendSlope * scaleMult * aspectRatios[0] / lightningTexAspect;
       gradX.x += shearSlope * gradX.y;
       gradY.x += shearSlope * gradY.y;
     }
@@ -948,11 +956,18 @@ vec4 computeAirColor(vec2 bndFragCoord)
       strikeChannel += displayPositiveFlash(lightningPos, lightningTime, currentLightningIntensity);
     } else {
       strikeChannel += isFlash ? displayFlash(lightningPos, lightningTime, currentLightningIntensity)
-                                    : displayLightning(lightningPos, lightningTime, currentLightningIntensity);
+                                    : displayLightning(lightningPos, lightningMeta.x, lightningTime, currentLightningIntensity);
     }
 
-    // Ordinary CG already carries the exact upstream RGB. Other variants
-    // retain their geometry and radiance while adopting that same colour.
+    // Brighten the channel, with a uniform 2.5x polarity gain for +IC,
+    // +CC and +CG (including superbolts and hyperbolts). Geometry and
+    // coverage are unchanged; the existing HDR bloom receives the same light.
+    // IC/CC already include a 1.5x positive gain in their variant paths.
+    float polarityGain = isExternalPositive ? 2.5 : ((isPositiveIC || isPositiveCC) ? (2.5 / 1.5) : 1.0);
+    strikeChannel *= 2.0 * polarityGain;
+
+    // Ordinary CG already carries the upstream RGB. Other variants retain
+    // their geometry while adopting that same colour.
     float strikePeak = max(strikeChannel.r, max(strikeChannel.g, strikeChannel.b));
     if (strikePeak > 0.0)
       lightningPixelCoverage = min(1.0, lightningPixelCoverage + sampledStrikeCoverage);

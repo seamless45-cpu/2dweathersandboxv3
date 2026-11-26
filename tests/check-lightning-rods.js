@@ -63,7 +63,7 @@ check('both lightning programs declare the rod uniforms',
   /uniform\s+sampler2D\s+rodDataTex/.test(locationShader) &&
   /uniform\s+sampler2D\s+rodDataTex/.test(displayShader));
 check('a stroke draws the bolt and a flash draws the network',
-  /strikeChannel \+= isFlash \? displayFlash\(lightningPos, lightningTime, currentLightningIntensity\)\s*\n\s*: displayLightning\(lightningPos, lightningTime, currentLightningIntensity\);/
+  /strikeChannel \+= isFlash \? displayFlash\(lightningPos, lightningTime, currentLightningIntensity\)\s*\n\s*: displayLightning\(lightningPos, lightningMeta.x, lightningTime, currentLightningIntensity\);/
     .test(displayShader) &&
   /bool isFlash = lightningData\[INTENSITY\] <= LIGHTNING_IC_MAX_INTENSITY;/.test(displayShader) &&
   !/lightningGroundHeight/.test(displayShader),

@@ -79,7 +79,7 @@ check('lightningLocationShader.frag encodes +IC as meta.y = 4.0 while keeping in
   /vec4\(originX, 4\.0, 0\.0, 0\.0\)/.test(locationShader),
   'positive IC must share IC intensity budget and encode meta.y == 4.0');
 
-check('positive IC keeps its wider span and 50% brighter channel and illumination',
+check('positive IC keeps its wider span, base gain and cloud illumination',
   /bool isPositiveIC = isFlash && lightningMeta\.y >= 3\.5;/.test(displayShader) &&
   /float height = \(positive \? 0\.095 : 0\.075\) \* lightningHeightScale\(\);/.test(displayShader) &&
   /positive \? 3600\.0 : 2400\.0/.test(displayShader) &&
