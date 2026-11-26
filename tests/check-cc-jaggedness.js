@@ -77,9 +77,9 @@ check('external positive CG follows its arc using the upstream artwork without a
 
 /* ----------------------------------------------- CC path itself intact */
 
-check('CC retains its cubic path and original artwork',
+check('CC uses its analytic curved path and original artwork',
   /const float ccBaseBrightness = 900\.0;/.test(shader) &&
-  /vec2 c = evalCcCubic\(t, p0, p1, p2, p3\)/.test(shader) &&
+  /cloudCurveProjection\(start, end, bow, skew, u, t, gradX, gradY\)/.test(shader) &&
   /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(shader));
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

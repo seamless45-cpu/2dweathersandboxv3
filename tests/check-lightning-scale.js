@@ -77,9 +77,9 @@ check('cloud-to-cloud branch bounds (cull, masks, jag, core, halo) are expressed
   /float halo = exp\(-dist \/ max\(bw \* 3\.0, 0\.0040 \* hScale\)\) \* 0\.20 \* endMask;/.test(displayShader) &&
   /float hScale = lightningHeightScale\(\);\s*\n\s*vec2 bNorm/.test(displayShader));
 
-check('cloud-to-cloud artwork width follows the length of its cubic path',
-  /float span = length\(p3 - p0\);/.test(displayShader) &&
-  /float u = 0\.5 \+ dPerp \/ \(span \* lightningTexAspect\);/.test(displayShader));
+check('cloud-to-cloud artwork width follows the length of its curved path',
+  /float span = length\(delta\);/.test(displayShader) &&
+  /u = 0\.5 \+ \(dot\(point, normal\) \/ span - bow \* profile\) \/ lightningTexAspect;/.test(displayShader));
 
 // --------------------------------------------------- strike illumination lobes
 check('strike cloud lobes are scaled with hScale (IC slab, CG anchor, CC taps, CG leader, external origin)',

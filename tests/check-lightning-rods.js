@@ -76,7 +76,7 @@ check('IC and +IC project the original artwork onto compact cloud paths',
   /float height = \(positive \? 0\.095 : 0\.075\) \* lightningHeightScale\(\);/.test(displayShader) &&
   /float lengthWorld = height \* 2\.0;/.test(displayShader) &&
   /adaptedUpstreamArtwork\(u, t, gradX, gradY\)/.test(displayShader) &&
-  /\(texCoord\.x - pos\.x\) \* aspectRatios\[0\] \/ lengthWorld/.test(displayShader));
+  /cloudCurveProjection\(start, end, bow, skew, u, t, gradX, gradY\)/.test(displayShader));
 check('a flash lights the slab it lives in and a stroke lights the cloud under it',
   /if \(isFlash\) \{\s*\n\s*\/\/ A flash lights the whole slab/.test(displayShader) &&
   /vec2 flashDist = vec2\(\(lightningPos\.x - texCoord\.x\) \* aspectRatios\[0\], texCoord\.y - lightningPos\.y\);/.test(displayShader) &&
