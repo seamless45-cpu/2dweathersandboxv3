@@ -458,7 +458,10 @@ which cover their full chains. The first seven simulation values and precipitati
 are **per iteration**, so compare them with the reported iterations per frame.
 The frame interval reports time between frame submissions (including scheduling);
 the CPU frame value is JavaScript submission time, not GPU time or frame interval;
-CPU section maxima can reveal occasional readback stalls. Samples are a bounded,
+CPU section maxima can reveal occasional readback stalls. Station UI and clock
+contrast are timed separately; contrast fence polling, layout, read enqueue and
+buffer download have their own CPU sections, making it possible to distinguish
+a GPU readback stall from a browser layout stall. Samples are a bounded,
 sparse snapshot, not a complete trace, and cannot identify every possible cause.
 
 Workloads to investigate include: multiple full-grid simulation passes per
