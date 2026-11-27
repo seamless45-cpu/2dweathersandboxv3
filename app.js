@@ -793,6 +793,8 @@ let drawFrameErrorStreak = 0;
 // rather than making the CPU wait for every preceding GPU draw. Each clock or
 // station retains its previous colour while its own sample is in flight.
 const sceneContrastStates = new WeakMap();
+// Set only for opt-in diagnostics; contrast sampling remains unchanged.
+let sceneContrastProfiler = null;
 function disposeSceneContrast(owner)
 {
   const state = sceneContrastStates.get(owner);
@@ -811,7 +813,9 @@ function getSceneContrastTextColor(screenX, screenY, owner)
     sceneContrastStates.set(owner, state);
   }
   if (state.sync) {
+    sceneContrastProfiler?.cpuBegin('contrast fence poll');
     const status = gl.clientWaitSync(state.sync, 0, 0);
+    sceneContrastProfiler?.cpuEnd('contrast fence poll');
     if (status === gl.WAIT_FAILED) {
       gl.deleteSync(state.sync);
       state.sync = null;
@@ -821,7 +825,9 @@ function getSceneContrastTextColor(screenX, screenY, owner)
       state.sync = null;
       const values = new Uint8Array(state.size * state.size * 4);
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, state.buffer);
+      sceneContrastProfiler?.cpuBegin('contrast buffer download');
       gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, values);
+      sceneContrastProfiler?.cpuEnd('contrast buffer download');
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
       let luminanceSum = 0;
       for (let i = 0; i < values.length; i += 4) {
@@ -837,12 +843,14 @@ function getSceneContrastTextColor(screenX, screenY, owner)
   if (state.disabled || state.sync || performance.now() - state.lastRequest < 1000)
     return state.color;
   // DOM geometry is needed only when issuing a new sample, not while polling.
+  sceneContrastProfiler?.cpuBegin('contrast layout');
   if (typeof screenX === 'function') {
     const position = screenX();
     screenX = position.x;
     screenY = position.y;
   }
   const bounds = canvas.getBoundingClientRect();
+  sceneContrastProfiler?.cpuEnd('contrast layout');
   if (bounds.width <= 0 || bounds.height <= 0) return state.color;
   const centerX = Math.floor((screenX - bounds.left) * canvas.width / bounds.width);
   const centerY = Math.floor((screenY - bounds.top) * canvas.height / bounds.height);
@@ -855,7 +863,9 @@ function getSceneContrastTextColor(screenX, screenY, owner)
   gl.readBuffer(gl.BACK);
   gl.bindBuffer(gl.PIXEL_PACK_BUFFER, state.buffer);
   gl.bufferData(gl.PIXEL_PACK_BUFFER, size * size * 4, gl.STREAM_READ);
+  sceneContrastProfiler?.cpuBegin('contrast read enqueue');
   gl.readPixels(x, y, size, size, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+  sceneContrastProfiler?.cpuEnd('contrast read enqueue');
   state.sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
   gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
   state.size = size;
@@ -5303,6 +5313,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
                              new URLSearchParams(location.search).get('gpuProfile') === '1';
   const gpuProfiler = createGpuPerformanceProfiler(gl, gpuProfilerEnabled);
   if (gpuProfilerEnabled) {
+    sceneContrastProfiler = gpuProfiler;
     window.weatherPerformanceReport = () => ({...gpuProfiler.report(),
       simulation: [sim_res_x, sim_res_y], canvas: [canvas.width, canvas.height],
       iterationsPerFrame: guiControls.IterPerFrame, zoom: cam.curZoom,
@@ -7642,8 +7653,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.115'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.115')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.116'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.116')
   ]);
 
   const [
@@ -8616,7 +8627,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.115');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.116');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -10436,12 +10447,16 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
 
     gpuProfiler.cpuBegin('station UI and contrast');
+    gpuProfiler.cpuBegin('station UI');
     if (displayWeatherStations) {
       for (let i = 0; i < weatherStations.length; i++) {
         weatherStations[i].updateCanvas(); // update weather stations
       }
     }
+    gpuProfiler.cpuEnd('station UI');
+    gpuProfiler.cpuBegin('clock contrast');
     updateClockTextContrast();
+    gpuProfiler.cpuEnd('clock contrast');
     gpuProfiler.cpuEnd('station UI and contrast');
 
     updateDiagnosticOverlays();
@@ -10961,7 +10976,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.115');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.116');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
