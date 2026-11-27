@@ -4,6 +4,7 @@ const vm = require('vm');
 const html = fs.readFileSync('index.html', 'utf8');
 const app = fs.readFileSync('app.js', 'utf8');
 const css = html.match(/<style>([\s\S]*?)<\/style>/)[1];
+const theme = fs.readFileSync('sci-fi-ui.css', 'utf8');
 let failed = 0;
 function check(name, ok) { console.log((ok ? 'PASS ' : 'FAIL ') + name); if (!ok) failed++; }
 const shadows = [...css.matchAll(/box-shadow\s*:\s*([^;]+);/g)].map(m => m[1].trim());
@@ -11,9 +12,11 @@ check('authored box shadows are absent or zero-blur focus rings', shadows.every(
 check('no blurred text or drop shadows; vendor inset is overridden',
   !/text-shadow\s*:|drop-shadow\s*\(/.test(css) && /#dg-new-constructor\s*\{\s*box-shadow:\s*none/.test(css));
 check('menu keyboard focus retains a visible outline', /\.main-menu-action:focus-visible\s*\{[^}]*outline:\s*2px solid/.test(css));
-check('all UI animations and transitions are disabled, including vendor CSS',
-  !/@keyframes/.test(css) && /animation: none !important/.test(css) && /transition: none !important/.test(css) &&
-  [...css.matchAll(/(?:animation|transition)(?:-[a-z-]+)?\s*:\s*([^;]+);/g)].every(m => m[1].trim() === 'none !important'));
+check('sci-fi interaction motion is finite and honours reduced motion',
+  /@keyframes hud-enter/.test(theme) && /animation: hud-enter 220ms/.test(theme) &&
+  /prefers-reduced-motion: reduce/.test(theme) && /animation: none !important/.test(theme) &&
+  !/animation[^;]*infinite/.test(theme));
+check('no UI blur or backdrop filtering', !/backdrop-filter|(?:^|[\s:])blur\(/m.test(css + theme));
 check('display-mode announcement remains statically visible and is cleaned up',
   /\.display-mode-toast\.is-visible\s*\{\s*opacity: 1/.test(css) && /aria-live', 'polite'/.test(app) && /\}, 850\);/.test(app));
 check('loading has no transition wait and station pages switch without interpolating',

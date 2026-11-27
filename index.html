@@ -29,15 +29,16 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="Weather Sandbox" />
-    <link rel="apple-touch-icon" sizes="180x180" href="resources/icons/app/apple-touch-icon.png?v=2026-11-16.118" />
-    <link rel="icon" type="image/png" sizes="192x192" href="resources/icons/app/icon-192.png?v=2026-11-16.118" />
+    <link rel="apple-touch-icon" sizes="180x180" href="resources/icons/app/apple-touch-icon.png?v=2026-11-16.119" />
+    <link rel="icon" type="image/png" sizes="192x192" href="resources/icons/app/icon-192.png?v=2026-11-16.119" />
     <script type="text/javascript" src="libraries/dat.gui.min.js"></script>
     <script type="text/javascript" src="libraries/pako.min.js"></script>
     <script type="text/javascript" src="libraries/chart.js"></script>
     <script type="text/javascript" src="libraries/chartjs-adapter-date-fns.js"></script>
-    <script type="text/javascript" src="app.js?v=2026-11-16.118"></script>
+    <script type="text/javascript" src="app.js?v=2026-11-16.119"></script>
     <script type="text/javascript" src="pwa.js"></script>
-    <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=2026-11-16.118">
+    <script defer src="sci-fi-ui.js?v=2026-11-16.119"></script>
+    <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=2026-11-16.119">
     <style>
         #dg-new-constructor { box-shadow: none; }
 
@@ -110,8 +111,8 @@
         .weather-station-menu-hint {
             align-items: center;
             background: linear-gradient(145deg, rgba(17, 24, 32, 0.48), rgba(17, 24, 32, 0.28));
-            -webkit-backdrop-filter: blur(12px) saturate(160%) brightness(1.12);
-            backdrop-filter: blur(12px) saturate(160%) brightness(1.12);
+
+
             border: 1px solid rgba(255, 255, 255, 0.4);
             border-radius: 999px;
             box-sizing: border-box;
@@ -326,8 +327,8 @@
             transform: translateX(-50%);
             width: min(320px, calc(100vw - 32px));
             z-index: 9000;
-            -webkit-backdrop-filter: blur(14px) saturate(135%);
-            backdrop-filter: blur(14px) saturate(135%);
+
+
         }
 
         .diagnostic-legend[hidden] {
@@ -397,8 +398,8 @@
             pointer-events: none;
             position: fixed;
             z-index: 10001;
-            -webkit-backdrop-filter: blur(14px) saturate(135%);
-            backdrop-filter: blur(14px) saturate(135%);
+
+
         }
 
         .cape-hover-tooltip[hidden] {
@@ -425,8 +426,8 @@
 
             width: 250px;
             z-index: 10000;
-            -webkit-backdrop-filter: blur(14px) saturate(135%);
-            backdrop-filter: blur(14px) saturate(135%);
+
+
         }
 
         .performance-tooltip.is-visible {
@@ -545,14 +546,6 @@
             position: relative;
             width: 100% !important;
             z-index: 1003;
-        }
-
-        @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-            .dg.ac .dg.main {
-                background: rgba(18, 25, 35, 0.56);
-                -webkit-backdrop-filter: blur(16px) saturate(140%);
-                backdrop-filter: blur(16px) saturate(140%);
-            }
         }
 
         .dg.ac .dg.main li:not(.folder) {
@@ -820,8 +813,8 @@
 
         .loading-screen {
             align-items: center;
-            -webkit-backdrop-filter: blur(8px) saturate(120%);
-            backdrop-filter: blur(8px) saturate(120%);
+
+
             background: rgba(3, 7, 12, 0.28);
             box-sizing: border-box;
             color: #fff;
@@ -949,8 +942,8 @@
             padding: 0rem 2rem 0rem 2rem;
             background: rgba(8, 15, 24, 0.42);
             border-bottom: 1px solid rgba(255, 255, 255, 0.13);
-            -webkit-backdrop-filter: blur(16px) saturate(145%);
-            backdrop-filter: blur(16px) saturate(145%);
+
+
             z-index: 0;
             box-shadow: none;
         }
@@ -1001,8 +994,7 @@
             border: 1px solid rgba(255, 255, 255, 0.2);
             border-radius: var(--border-radius);
             box-shadow: none;
-            -webkit-backdrop-filter: blur(14px) saturate(135%);
-            backdrop-filter: blur(14px) saturate(135%);
+
 
         }
 
@@ -1025,8 +1017,8 @@
             padding: 24px;
             position: fixed;
             z-index: 20;
-            -webkit-backdrop-filter: blur(22px) saturate(75%);
-            backdrop-filter: blur(22px) saturate(75%);
+
+
         }
 
         #IntroScreen > :not(.main-menu-content) {
@@ -1401,8 +1393,8 @@
             visibility: hidden;
             white-space: nowrap;
             z-index: 2;
-            -webkit-backdrop-filter: blur(20px) saturate(155%);
-            backdrop-filter: blur(20px) saturate(155%);
+
+
         }
 
         .main-menu-action-wrap:hover .main-menu-tooltip,
@@ -1419,8 +1411,8 @@
             color: #fff;
             color-scheme: dark;
             padding: 7px 9px;
-            -webkit-backdrop-filter: blur(10px);
-            backdrop-filter: blur(10px);
+
+
         }
 
         #IntroScreen select option {
@@ -1456,8 +1448,8 @@
             font-size: 1rem;
 
             box-shadow: none;
-            -webkit-backdrop-filter: blur(10px);
-            backdrop-filter: blur(10px);
+
+
         }
 
         input[type="button"]:hover {
@@ -1475,8 +1467,7 @@
             border-radius: var(--border-radius);
             box-shadow: none;
 
-            -webkit-backdrop-filter: blur(16px) saturate(140%);
-            backdrop-filter: blur(16px) saturate(140%);
+
         }
 
         .tips,
@@ -1488,8 +1479,8 @@
             border: 1px solid rgba(255, 255, 255, 0.15);
             border-radius: var(--border-radius);
             box-shadow: none;
-            -webkit-backdrop-filter: blur(12px) saturate(135%);
-            backdrop-filter: blur(12px) saturate(135%);
+
+
         }
 
         .support {
@@ -1500,8 +1491,8 @@
             border-radius: var(--border-radius);
             box-shadow: none;
             text-align: center;
-            -webkit-backdrop-filter: blur(12px) saturate(135%);
-            backdrop-filter: blur(12px) saturate(135%);
+
+
         }
 
         #mainCanvas {
@@ -1604,13 +1595,8 @@
             text-anchor: middle
         }
 
-        /* Disable animations and transitions from bundled controls as well. */
-        *, *::before, *::after {
-            animation: none !important;
-            transition: none !important;
-            scroll-behavior: auto !important;
-        }
     </style>
+    <link rel="stylesheet" href="sci-fi-ui.css?v=2026-11-16.119" />
 </head>
 
 <body id="body" onload="updateSetupSliders();">
@@ -1638,7 +1624,10 @@
         <div class="main-menu-content" id="mainMenuContent">
             <section class="main-menu-choice" id="mainMenuChoice">
             <div class="main-menu-intro">
-                <p class="main-menu-prompt">Create a new simulation or load an existing one?</p>
+                <div class="interface-kicker"><span class="interface-status-dot"></span> ATMOSPHERIC SYSTEMS // ONLINE</div>
+                <h1 class="interface-title">WEATHER<span> SANDBOX</span></h1>
+                <p class="interface-subtitle">2D ATMOSPHERIC SIMULATION PLATFORM</p>
+                <p class="main-menu-prompt">Select a mission to begin</p>
                 <p class="main-menu-credit">Explore a real-time 2D weather sandbox: build an atmospheric sounding and watch clouds, storms, wind, precipitation and lightning evolve.</p>
                 <p class="main-menu-credit">Thanks to <a href="https://niels747.github.io/2D-Weather-Sandbox/" target="_blank" rel="noopener noreferrer">Niels Daemen</a> for the original simulation.</p>
             </div>
@@ -1649,6 +1638,7 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
                             <path d="M12 5v14M5 12h14" />
                         </svg>
+                        <span class="action-label">NEW SIMULATION<small>INITIALIZE SYSTEM</small></span>
                     </button>
                     <span class="main-menu-tooltip" role="tooltip">Create new simulation</span>
                 </div>
@@ -1659,6 +1649,7 @@
                             <path d="M12 13V3m0 0 4 4m-4-4L8 7" />
                             <path d="M5 13v5a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3v-5" />
                         </svg>
+                        <span class="action-label">LOAD SIMULATION<small>RESTORE SESSION</small></span>
                     </button>
                     <span class="main-menu-tooltip" role="tooltip">Load existing save</span>
                 </div>
@@ -1668,6 +1659,7 @@
                             <path d="M12 3v11m0 0 4.2-4.2M12 14l-4.2-4.2" />
                             <path d="M4.5 15.5V18A2.5 2.5 0 0 0 7 20.5h10a2.5 2.5 0 0 0 2.5-2.5v-2.5" />
                         </svg>
+                        <span class="action-label">INSTALL APP<small>OFFLINE ACCESS</small></span>
                     </button>
                     <span class="main-menu-tooltip" role="tooltip">Install app</span>
                 </div>
@@ -1758,6 +1750,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
                     <path d="m8 5 12 7-12 7V5Z" />
                 </svg>
+                <span>INITIALIZE</span>
             </button>
             <i>Move the mouse until you see a terrain you like, then just click to start.</i>
             <i>Use <b>Lightning Rod</b> or <b>Super Lightning Rod</b> to place a mast on the ground;
