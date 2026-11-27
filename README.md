@@ -117,7 +117,9 @@ Choose **Super Lake** from the Tool menu (listed right below Lake / Sea) and pai
 
 The Radiation folder has a **Real Time Cycle** toggle next to Day/Night Cycle. With it on, the simulation clock is synchronized to your real wall clock — date and time — so the sun tracks the actual sun for the chosen latitude year-round, including the seasonal declination, instead of being coupled to simulation iterations; **Accelerate Night** is ignored while it is on (a real night is a real night), and the clock display, sunrise/sunset countdown and run timer all follow the real time. Turn it off to go back to the simulated cycle, which resumes from its own time base. The setting round-trips through save files (older saves get it off).
 
-The Performance folder has **Motion Blur** (default off) and **Motion Blur Strength %** (0–350). Existing settings are preserved. The post pass inverts the current camera transform, backtracks fluid velocity over the actual number of simulation steps, and projects that world point through the previous camera view to obtain a screen-space vector. Solid terrain and regions outside the simulation do not inherit fluid velocity; camera motion still affects them. A wrapped camera crossing uses the nearest periodic view, while a non-wrapped view does not fold the vector. Sixteen midpoint taps gather the current unblurred frame along the reprojected motion vector; no blurred frame is fed back into the trail. The strength slider controls shutter length, capped at 48 display pixels, and subpixel movement fades smoothly. Camera shake is included in the view. Pausing stops fluid advection but does not suppress blur from moving the camera. History is invalidated on setup or display-mode changes, not ordinary camera moves. This is a 2D approximation: separately moving particles and transient lightning do not have dedicated per-object velocity buffers.
+The Performance folder has **Motion Blur** (default off) and **Motion Blur Strength %** (0–350). It combines a velocity-based shutter for camera and fluid motion with a two-frame integration of unblurred scene captures, so changing scene content also contributes with a stationary camera. This is an approximation, not full per-object motion vectors or optical-flow reconstruction: lightning and other changes may ghost, and precipitation drawn after the post pass is not included. Still images are not blurred. Enabling it adds an extra full-screen render and history texture and may reduce FPS. Existing settings are preserved.
+
+**Spatial Upscaling (67%)** is an opt-in Performance toggle: it renders the HDR scene at two thirds of the selected HDR scale in each dimension and reconstructs the full canvas using bounded spatial sharpening. It does not change the saved HDR scale. Fine detail may be lost, and it is not AI upscaling; zoomed-out lightning supersampling takes priority when active. Actual performance depends on the device and scene.
 
 ## Clouds and precipitation
 Simulating clouds and precipitation are the main objectives of this project.
@@ -448,7 +450,7 @@ The interface uses the locally bundled Orbitron font (SIL Open Font License,
 `resources/fonts/Orbitron-OFL.txt`) and sharp, unblurred sci-fi panels. Short UI cues use locally bundled [Kenney UI Audio](https://github.com/Calinou/kenney-ui-audio) samples
 (CC0; see `resources/sounds/ui/LICENSE.txt`). They play only after interaction and follow
 the existing **Sound** setting; disabling sound also silences the interface cues.
-Finite JavaScript interface animations respect reduced-motion preferences. Removing UI backdrop filters avoids
+Interface animations use finite JavaScript effects. Removing UI backdrop filters avoids
 that compositor work, but does not establish that the simulation or lightning
 rendering meets a particular frame rate.
 
