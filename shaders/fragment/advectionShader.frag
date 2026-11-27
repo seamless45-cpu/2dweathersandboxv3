@@ -122,10 +122,11 @@ void main()
     base[VX] = bilerp(baseTex, fragCoord - velAtVx).x;
     base[VY] = bilerp(baseTex, fragCoord - velAtVy).y;
 
-    base[PRESSURE] = bilerpWall(baseTex, wallTex, fragCoord - velAtP)[PRESSURE];
-    base[TEMPERATURE] = bilerpWall(baseTex, wallTex, fragCoord - velAtP)[TEMPERATURE];
-
-    water.xyw = bilerpWall(waterTex, wallTex, fragCoord - velAtP).xyw; // centered
+    vec4 advectedBase, advectedWater;
+    bilerpWallPair(baseTex, waterTex, wallTex, fragCoord - velAtP, advectedBase, advectedWater);
+    base[PRESSURE] = advectedBase[PRESSURE];
+    base[TEMPERATURE] = advectedBase[TEMPERATURE];
+    water.xyw = advectedWater.xyw; // centered
 
                                                                        //   water.z = bilerpWall(waterTex, wallTex, fragCoord + vec2(0.0, +0.01)).z;
     // // precipitation visualization
