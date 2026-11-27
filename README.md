@@ -445,10 +445,10 @@ The GitHub Pages site has a canonical URL, indexable descriptive content and a s
 ### Interface theme and sounds
 
 The interface uses the locally bundled Orbitron font (SIL Open Font License,
-`resources/fonts/Orbitron-OFL.txt`) and sharp, unblurred sci-fi panels. Short
-synthesized UI cues play only after interaction and follow the existing **Sound**
-setting; disabling sound also silences the interface cues. Reduced-motion
-preferences disable interface animation. Removing UI backdrop filters avoids
+`resources/fonts/Orbitron-OFL.txt`) and sharp, unblurred sci-fi panels. Short UI cues use locally bundled [Kenney UI Audio](https://github.com/Calinou/kenney-ui-audio) samples
+(CC0; see `resources/sounds/ui/LICENSE.txt`). They play only after interaction and follow
+the existing **Sound** setting; disabling sound also silences the interface cues.
+Finite JavaScript interface animations respect reduced-motion preferences. Removing UI backdrop filters avoids
 that compositor work, but does not establish that the simulation or lightning
 rendering meets a particular frame rate.
 

@@ -73,7 +73,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   display: flex; gap: 16px; justify-content: flex-start; text-align: left;
   border: 1px solid #2b606a; border-left: 3px solid #5ad9de; border-radius: 0;
   background: #0b212b; color: #9efaff; cursor: pointer;
-  transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
 }
 .main-menu-action svg { flex: 0 0 30px; width: 30px; height: 30px; stroke-width: 1.5; }
 .action-label { display: grid; gap: 7px; color: #dbf5f5; font-size: 11px; letter-spacing: .05em; line-height: 1.2; }
@@ -125,7 +124,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .dg.ac .dg.main .cr.boolean .gui-lucide-check svg { display: none; }
 .dg.ac .dg.main .cr.boolean .gui-lucide-check::after {
   content: ''; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; background: #64838a;
-  transition: transform 120ms ease, background-color 120ms ease;
 }
 .dg.ac .dg.main .cr.boolean .c input[type="checkbox"]:checked + .gui-lucide-check { border-color: #6bf1eb; background: #12414a; }
 .dg.ac .dg.main .cr.boolean .c input[type="checkbox"]:checked + .gui-lucide-check::after { background: #8afff7; transform: translateX(16px); }
@@ -150,12 +148,116 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
-/* Small, finite motion only on user-visible panels and controls. */
-@keyframes hud-enter { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
-.main-menu-choice { animation: hud-enter 220ms ease-out both; }
-.main-menu-content.is-configuring .main-menu-setup { animation: hud-enter 220ms ease-out both; }
 .main-menu-setup #startBtn > i { color: #91b8be; font-size: 10px; line-height: 1.6; font-style: normal; }
 html body .dg.ac .dg.main, html body .dg.ac .dg.main * { font-size: 10px !important; }
-@media (prefers-reduced-motion: reduce) {
-  .main-menu-choice, .main-menu-content.is-configuring .main-menu-setup { animation: none; }
+
+/* Layered flight-deck surfaces: hard-edged light, depth and telemetry, without blur. */
+#IntroScreen {
+  background-color: #030b15;
+  background-image:
+    radial-gradient(ellipse at 50% 12%, rgba(20, 95, 122, .32), transparent 58%),
+    linear-gradient(rgba(52, 124, 150, .08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(52, 124, 150, .08) 1px, transparent 1px),
+    linear-gradient(155deg, #061627 0%, #030a13 62%, #0a1b29 100%);
+  background-size: auto, 48px 48px, 48px 48px, auto;
+}
+.main-menu-content { max-width: min(980px, 100%); }
+.main-menu-choice, .main-menu-setup {
+  border: 1px solid #386679;
+  border-top: 2px solid #8cf7f6;
+  background:
+    linear-gradient(135deg, rgba(48, 146, 168, .11), transparent 34%),
+    repeating-linear-gradient(0deg, transparent 0 3px, rgba(102, 218, 235, .018) 3px 4px),
+    linear-gradient(155deg, #102b3b 0%, #071521 48%, #091d2b 100%);
+  box-shadow: 0 0 0 1px #031018, 0 8px 0 -4px #153c4d, 0 18px 0 -10px #091e2c,
+              inset 0 1px 0 #d3ffff, inset 0 0 0 5px rgba(20, 63, 78, .38);
+}
+.main-menu-choice::before, .main-menu-setup::before {
+  content: 'ATMOS // CONTROL  01'; top: 15px; right: 20px;
+  color: #79b6c1; font-size: 9px; letter-spacing: .16em;
+}
+.main-menu-choice::after, .main-menu-setup::after {
+  content: ''; position: absolute; bottom: 9px; left: 16px; right: 16px; height: 3px;
+  pointer-events: none;
+  background: linear-gradient(90deg, #66e8e7 0 7%, #236579 7% 27%, transparent 27% 73%, #236579 73% 93%, #66e8e7 93%);
+}
+.main-menu-intro { position: relative; }
+.interface-kicker {
+  padding: 7px 12px; border: 1px solid #32677a;
+  background: linear-gradient(90deg, #0b2836, #143d4a, #0b2836);
+  color: #9de8e9; letter-spacing: .2em;
+}
+.interface-status-dot { background: #91ffdf; box-shadow: 0 0 0 2px #246960; }
+.interface-title {
+  color: #efffff; letter-spacing: .065em;
+  text-shadow: 0 2px 0 #377788, 0 4px 0 #102f40;
+}
+.interface-title span { color: #70eff0; }
+.interface-subtitle { color: #80c1cd; letter-spacing: .23em; }
+.main-menu-prompt {
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  color: #d8fafa; letter-spacing: .06em;
+}
+.main-menu-prompt::before, .main-menu-prompt::after {
+  content: ''; display: block; width: clamp(24px, 6vw, 70px); height: 1px;
+  background: linear-gradient(90deg, transparent, #4f9ba9);
+}
+.main-menu-prompt::after { transform: scaleX(-1); }
+.main-menu-credit { color: #a7c5ce; }
+.main-menu-action {
+  position: relative; overflow: hidden;
+  border: 1px solid #396e7c; border-left: 3px solid #83f6ef;
+  background: linear-gradient(120deg, #153d4d, #0a202e 60%, #102f3c);
+  box-shadow: inset 0 1px 0 #77b7c3, inset 0 -3px 0 #07131d, 0 3px 0 #031019;
+}
+.main-menu-action::after {
+  content: '↗'; position: absolute; right: 12px; top: 9px; color: #7ed9dc; font-size: 14px;
+}
+.main-menu-action svg {
+  box-sizing: content-box; padding: 8px; border: 1px solid #438897;
+  background: linear-gradient(145deg, #1c5867, #0b2838);
+  box-shadow: inset 0 1px 0 #83e0e1;
+}
+.main-menu-action:hover, .main-menu-action:focus-visible {
+  background: linear-gradient(120deg, #206174, #103849 65%, #184859);
+  box-shadow: inset 0 1px 0 #c8ffff, inset 0 -3px 0 #0b2632, 0 5px 0 #031019;
+}
+.action-label { color: #edffff; letter-spacing: .075em; }
+.action-label small { color: #91c5ce; }
+.main-menu-setup > h2 { border-left: 3px solid #8df7ed; padding-left: 12px; }
+.main-menu-setup .resolution-warning, .performance-estimate {
+  background: linear-gradient(110deg, #103341, #0a202d);
+  border: 1px solid #315e6d; border-left: 3px solid #62dfe1;
+  box-shadow: inset 0 1px 0 #366c79;
+}
+.main-menu-setup .main-menu-submit {
+  background: linear-gradient(135deg, #266776, #123c4b); border-color: #8df7f0;
+  box-shadow: inset 0 1px 0 #c2ffff, inset 0 -3px 0 #09222e, 0 3px 0 #031019;
+}
+.main-menu-setup .main-menu-submit:hover { background: linear-gradient(135deg, #338698, #195064); }
+.main-menu-setup input[type="range"]::-webkit-slider-thumb { background: linear-gradient(90deg, #a6ffff, #3dbecb); box-shadow: 0 0 0 2px #164f5d; }
+.main-menu-setup input[type="range"]::-moz-range-thumb { background: linear-gradient(90deg, #a6ffff, #3dbecb); box-shadow: 0 0 0 2px #164f5d; }
+.simulation-clock, .weather-station-menu, .weather-station-menu-hint, .sim-option-menu,
+#help, .tips, .controls, .support, .example-files {
+  border-color: #3f7786;
+  box-shadow: inset 0 1px 0 #5e9da9, 0 3px 0 #041019;
+}
+.simulation-clock { border-left: 3px solid #78f0ed; background: #0a1b25; }
+.dg.ac .dg.main {
+  background: #081b29 !important; border-color: #427889; border-top: 2px solid #a1ffff;
+  box-shadow: inset 0 1px 0 #c9ffff, 0 4px 0 #031019;
+}
+.dg.ac .dg.main li:not(.folder) { background: linear-gradient(90deg, #102c3b, #0a1c29); border-bottom-color: #254553; }
+.dg.ac .dg.main li.title { background: linear-gradient(90deg, #205160, #102b39); border-left: 3px solid #75e5e5; }
+.dg.ac .dg.main .c .slider { background: #071824; border-color: #3d7080; box-shadow: inset 0 1px 0 #06121b; }
+.dg.ac .dg.main .c .slider-fg { background: repeating-linear-gradient(90deg, #8bf4ef 0 6px, #338e9e 6px 8px) !important; }
+.dg.ac .dg.main .cr.boolean .gui-lucide-check { box-shadow: inset 0 1px 0 #284a57; }
+.dg.ac .dg.main .cr.boolean .c input[type="checkbox"]:checked + .gui-lucide-check { background: #1a6370; box-shadow: inset 0 1px 0 #80f6ec; }
+.loading-bar-fill { background: repeating-linear-gradient(110deg, #a5fff7 0 12px, #36aabb 12px 16px); }
+@media (max-width: 600px) {
+  .main-menu-choice::before, .main-menu-setup::before { top: 10px; right: 12px; font-size: 7px; }
+  .main-menu-choice, .main-menu-setup { padding-top: 34px; }
+  .main-menu-action svg { width: 24px; height: 24px; flex-basis: 24px; padding: 6px; }
+  .interface-title { letter-spacing: .025em; }
+  .interface-kicker { letter-spacing: .1em; }
 }
