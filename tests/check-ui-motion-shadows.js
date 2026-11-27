@@ -11,11 +11,14 @@ const shadows = [...css.matchAll(/box-shadow\s*:\s*([^;]+);/g)].map(m => m[1].tr
 check('authored box shadows are absent or zero-blur focus rings', shadows.every(s => s === 'none' || /^0 0 0 2px /.test(s)));
 check('no blurred text or drop shadows; vendor inset is overridden',
   !/text-shadow\s*:|drop-shadow\s*\(/.test(css) && /#dg-new-constructor\s*\{\s*box-shadow:\s*none/.test(css));
+const themeShadows = [...theme.matchAll(/(?:box|text)-shadow\s*:\s*([^;]+);/g)].map(m => m[1]);
+check('theme depth uses only hard-edged shadows, not blurred shadows', themeShadows.every(value =>
+  value.replace(/rgba?\([^)]*\)/g, '#color').split(',').every(shadow => shadow.trim() === 'none' || /^(?:inset\s+)?(?:-?\d+(?:\.\d+)?(?:px)?\s+){2}0(?:px)?(?:\s|$)/.test(shadow.trim()))));
 check('menu keyboard focus retains a visible outline', /\.main-menu-action:focus-visible\s*\{[^}]*outline:\s*2px solid/.test(css));
 check('sci-fi interaction motion is finite and honours reduced motion',
-  /@keyframes hud-enter/.test(theme) && /animation: hud-enter 220ms/.test(theme) &&
-  /prefers-reduced-motion: reduce/.test(theme) && /animation: none !important/.test(theme) &&
-  !/animation[^;]*infinite/.test(theme));
+  /element\.animate\(keyframes, options\)/.test(fs.readFileSync('sci-fi-ui.js', 'utf8')) &&
+  /prefers-reduced-motion: reduce/.test(theme) && /reducedMotion\.matches/.test(fs.readFileSync('sci-fi-ui.js', 'utf8')) &&
+  !/@keyframes|animation[^;]*infinite/.test(theme));
 check('no UI blur or backdrop filtering', !/backdrop-filter|(?:^|[\s:])blur\(/m.test(css + theme));
 check('display-mode announcement remains statically visible and is cleaned up',
   /\.display-mode-toast\.is-visible\s*\{\s*opacity: 1/.test(css) && /aria-live', 'polite'/.test(app) && /\}, 850\);/.test(app));

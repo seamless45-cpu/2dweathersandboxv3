@@ -23,7 +23,7 @@
 
 'use strict';
 
-const VERSION = '2026-11-16.119';
+const VERSION = '2026-11-16.121';
 
 const APP_CACHE_PREFIX = 'weather-sandbox-';
 const SHELL_CACHE_PREFIX = APP_CACHE_PREFIX + 'shell-';
@@ -46,6 +46,9 @@ const PRECACHE = [
   './pwa.js',
   './sci-fi-ui.css',
   './sci-fi-ui.js',
+  './resources/sounds/ui/click1.wav',
+  './resources/sounds/ui/switch6.wav',
+  './resources/sounds/ui/rollover2.wav',
   './resources/fonts/orbitron-variable.ttf',
   './lightningGenerator.js',
   './upstreamLightningGenerator.js',
