@@ -467,3 +467,13 @@ readbacks. Wide-spaced weather stations can require a large cloud-column readbac
 Hardware, canvas size, simulation resolution, weather and settings affect which
 one dominates; software-renderer timings do not establish device performance.
 The profiler reports current dimensions and relevant options to aid comparison.
+
+The velocity and pressure steps do not modify terrain. Their redundant wall
+texture copies are omitted: boundary and advection alone ping-pong wall state,
+and saves, measurements, audio and collision read the latest advection output.
+This avoids two full-grid integer render-target writes per simulation iteration
+without reducing resolution or changing simulation settings. Performance varies
+by GPU and workload; this does not guarantee that rendering is no longer the
+bottleneck.
+The lighting pass also skips the fire-colour conversion when smoke produces
+exactly zero fire light; smoky and burning cells retain the same calculation.

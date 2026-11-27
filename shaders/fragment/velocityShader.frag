@@ -26,7 +26,6 @@ uniform highp sampler2D soundingTex;
 float getInitialT(int y) { return texelFetch(soundingTex, ivec2(clamp(y, 0, 503), 0), 0).r; }
 
 layout(location = 0) out vec4 base;
-layout(location = 2) out ivec4 wall;
 
 float dryLapse; // NOT USED needs to be declared for common.glsl
 vec2 resolution;
@@ -38,7 +37,7 @@ void main()
   vec4 baseXpY0 = texture(baseTex, texCoordXpY0);
   vec4 baseX0Yp = texture(baseTex, texCoordX0Yp);
 
-  wall = texture(wallTex, texCoord);
+  ivec4 wall = texture(wallTex, texCoord);
   ivec4 wallX0Yp = texture(wallTex, texCoordX0Yp);
   ivec4 wallXpY0 = texture(wallTex, texCoordXpY0);
 

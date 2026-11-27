@@ -150,10 +150,13 @@ void main()
 
       float smokeOpacity = clamp(1. - (1. / (water[SMOKE] + 1.)), 0.0, 1.0);
       float fireIntensity = clamp((smokeOpacity - 0.8) * 25., 0.0, 1.0);
-      vec3 fireCol = hsv2rgb(vec3(fireIntensity * 0.008, 0.98, 5.0)) * 1.0; // 1.0, 0.7, 0.0
-      vec3 FinalFireCol = mix(vec3(0), fireCol, fireIntensity);
-
-      reflectedLight.rgb += FinalFireCol * 0.1;
+      // In clear air the fire contribution is exactly zero. Avoid evaluating
+      // the HSV conversion for every cell, on every lighting iteration.
+      if (fireIntensity > 0.0) {
+        vec3 fireCol = hsv2rgb(vec3(fireIntensity * 0.008, 0.98, 5.0));
+        vec3 FinalFireCol = mix(vec3(0), fireCol, fireIntensity);
+        reflectedLight.rgb += FinalFireCol * 0.1;
+      }
 
       net_heating *= IR_rate;
 

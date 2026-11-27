@@ -956,6 +956,7 @@ function createGpuPerformanceProfiler(gl, enabled)
 
 // global framebuffers for measurements
 var frameBuff_0;
+var wallFrameBuff; // most recent wall state (advection output)
 var lightFrameBuff_0;
 var precipitationFeedbackFrameBuff;
 
@@ -3687,7 +3688,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           gl.bufferData(gl.PIXEL_PACK_BUFFER, this.#ambientReadbackWallValues.byteLength, gl.STREAM_READ);
           gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
         }
-        gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, wallFrameBuff);
         gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.#ambientWallReadbackBuffer);
         gl.readBuffer(gl.COLOR_ATTACHMENT2);
         gl.readPixels(simXpos - sampleWidth_2, simYpos, sampleWidth, 1, gl.RGBA_INTEGER, gl.BYTE, 0);
@@ -4738,7 +4739,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       // console.log(Ypos);
 
-      gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, wallFrameBuff);
       gl.readBuffer(gl.COLOR_ATTACHMENT2); // walltexture
       var wallTextureValues = new Int8Array(sim_res_x * 4);
       gl.readPixels(0, Ypos, sim_res_x, 1, gl.RGBA_INTEGER, gl.BYTE, wallTextureValues);
@@ -4969,6 +4970,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       // gl.readPixels(Xpos, Ypos, 1, 1, gl.RGBA, gl.FLOAT, waterTextureValues);
       // let dewpoint = KtoC(dewpoint(waterTextureValues[0]));
 
+      gl.bindFramebuffer(gl.FRAMEBUFFER, wallFrameBuff);
       gl.readBuffer(gl.COLOR_ATTACHMENT2);
       var wallTextureValues = new Int8Array(4 * 3 * 1);
       gl.readPixels(Xpos, Ypos, 3, 1, gl.RGBA_INTEGER, gl.BYTE, wallTextureValues);
@@ -7606,8 +7608,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.111'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.111')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.112'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.112')
   ]);
 
   const [
@@ -8163,6 +8165,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   frameBuff_0 = gl.createFramebuffer(); // global for weather stations
   const frameBuff_1 = gl.createFramebuffer();
+  wallFrameBuff = frameBuff_1;
+  // Velocity only writes base; a separate FBO avoids sampling a wall texture
+  // that is also attached to its draw framebuffer (WebGL feedback loop).
+  const velocityFrameBuff = gl.createFramebuffer();
 
   const curlFrameBuff = gl.createFramebuffer();
   const vortForceFrameBuff = gl.createFramebuffer();
@@ -8257,6 +8263,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, baseTexture_1, 0);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, waterTexture_1, 0);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, wallTexture_1, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, velocityFrameBuff);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, baseTexture_1, 0);
 
 
   gl.bindTexture(gl.TEXTURE_2D, curlTexture);
@@ -8556,7 +8565,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.111');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.112');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9316,9 +9325,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, baseTexture_0);
             gl.activeTexture(gl.TEXTURE1);
-            gl.bindTexture(gl.TEXTURE_2D, wallTexture_0);
-            gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_1);
-            gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.NONE, gl.COLOR_ATTACHMENT2 ]);
+            gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, velocityFrameBuff);
+            gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
             if (i === 0) gpuProfiler.begin('velocity');
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
             if (i === 0) gpuProfiler.end('velocity');
@@ -9389,7 +9398,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             gl.activeTexture(gl.TEXTURE1);
             gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
             gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_0);
-            gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.NONE, gl.COLOR_ATTACHMENT2 ]);
+            gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.NONE, gl.NONE ]);
             if (i === 0) gpuProfiler.begin('pressure');
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
             if (i === 0) gpuProfiler.end('pressure');
@@ -10441,6 +10450,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
     const cloudWaterData = weatherStationSamplingBuffers.cloudWater;
     gl.readPixels(cloudXStart, 0, cloudWidth, sim_res_y, gl.RGBA, gl.FLOAT, cloudWaterData);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, wallFrameBuff);
     gl.readBuffer(gl.COLOR_ATTACHMENT2);
     const cloudWallData = weatherStationSamplingBuffers.cloudWalls;
     gl.readPixels(cloudXStart, 0, cloudWidth, sim_res_y, gl.RGBA_INTEGER, gl.BYTE, cloudWallData);
@@ -10743,6 +10753,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.readBuffer(gl.COLOR_ATTACHMENT1);
     let waterTextureValues = new Float32Array(4 * sim_res_x * sim_res_y);
     gl.readPixels(0, 0, sim_res_x, sim_res_y, gl.RGBA, gl.FLOAT, waterTextureValues);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, wallFrameBuff);
     gl.readBuffer(gl.COLOR_ATTACHMENT2);
     let wallTextureValues = new Int8Array(4 * sim_res_x * sim_res_y);
     gl.readPixels(0, 0, sim_res_x, sim_res_y, gl.RGBA_INTEGER, gl.BYTE, wallTextureValues);
@@ -10861,7 +10872,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.111');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.112');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
