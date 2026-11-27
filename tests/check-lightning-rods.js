@@ -272,7 +272,7 @@ const softHdrClamp = (value) => {
 
   check('a cloud-to-ground stroke lights the clouds around it',
     onLift === 0.0008 &&
-    /lightningOnLight = lightningOnLightBrightness \/ \(pow\(length\(dist\), 2\.\) \+ 0\.03 \* lightningHeightScale\(\)\);/.test(displayShader) &&
+    /lightningOnLight = lightningOnLightBrightness \/ \(dot\(dist, dist\) \+ 0\.03 \* lightningHeightScale\(\)\);/.test(displayShader) &&
     /onLight \+= lightningIlluminationTint \* lightningOnLight/.test(displayShader),
     'the tight lobe has to sit on the channel it came from');
   check('there is no second, wide lobe any more',
