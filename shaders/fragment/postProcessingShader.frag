@@ -124,14 +124,18 @@ void main()
   vec3 neighborhoodMin = outputCol;
   vec3 neighborhoodMax = outputCol;
   if (needsNeighborhood) {
-    neighborhoodMin = min(neighborhoodMin, mappedColor(texCoord - vec2(outputTexelSize.x, 0.0)));
-    neighborhoodMin = min(neighborhoodMin, mappedColor(texCoord + vec2(outputTexelSize.x, 0.0)));
-    neighborhoodMin = min(neighborhoodMin, mappedColor(texCoord - vec2(0.0, outputTexelSize.y)));
-    neighborhoodMin = min(neighborhoodMin, mappedColor(texCoord + vec2(0.0, outputTexelSize.y)));
-    neighborhoodMax = max(neighborhoodMax, mappedColor(texCoord - vec2(outputTexelSize.x, 0.0)));
-    neighborhoodMax = max(neighborhoodMax, mappedColor(texCoord + vec2(outputTexelSize.x, 0.0)));
-    neighborhoodMax = max(neighborhoodMax, mappedColor(texCoord - vec2(0.0, outputTexelSize.y)));
-    neighborhoodMax = max(neighborhoodMax, mappedColor(texCoord + vec2(0.0, outputTexelSize.y)));
+    vec3 left = mappedColor(texCoord - vec2(outputTexelSize.x, 0.0));
+    vec3 right = mappedColor(texCoord + vec2(outputTexelSize.x, 0.0));
+    vec3 down = mappedColor(texCoord - vec2(0.0, outputTexelSize.y));
+    vec3 up = mappedColor(texCoord + vec2(0.0, outputTexelSize.y));
+    neighborhoodMin = min(neighborhoodMin, left);
+    neighborhoodMin = min(neighborhoodMin, right);
+    neighborhoodMin = min(neighborhoodMin, down);
+    neighborhoodMin = min(neighborhoodMin, up);
+    neighborhoodMax = max(neighborhoodMax, left);
+    neighborhoodMax = max(neighborhoodMax, right);
+    neighborhoodMax = max(neighborhoodMax, down);
+    neighborhoodMax = max(neighborhoodMax, up);
   }
 
   if (temporalAAEnabled && temporalHistoryValid) {
