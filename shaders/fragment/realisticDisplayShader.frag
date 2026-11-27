@@ -1181,24 +1181,27 @@ void main()
     color = airColor.rgb;
 
 
-    vec2 rainbowCenter = vec2(0.0, -1.5 + abs(sunAngle) * 0.60);
+    // The rainbow contribution is exactly zero without precipitation. Avoid
+    // the per-pixel angle, spectral and temperature calculations in clear air.
+    if (water[PRECIPITATION] != 0.0) {
+      vec2 rainbowCenter = vec2(0.0, -1.5 + abs(sunAngle) * 0.60);
 
-    float centerDist = length(onScreenUV - rainbowCenter) * 1.3;
+      float centerDist = length(onScreenUV - rainbowCenter) * 1.3;
 
-    const float cameraHeight = 1.0;
+      const float cameraHeight = 1.0;
 
-    float angle = atan(centerDist / cameraHeight) * rad2deg;
+      float angle = atan(centerDist / cameraHeight) * rad2deg;
 
-    float waveLength = map_range(angle, 40.0, 42.0, 400., 700.);
+      float waveLength = map_range(angle, 40.0, 42.0, 400., 700.);
 
-    float realTemp = potentialToRealT(base[TEMPERATURE]);
-    float rainSnowFactor = map_rangeC(KtoC(realTemp), 0.0, 5.0, 0.0, 1.0); // only rain if above freezing
+      float realTemp = potentialToRealT(base[TEMPERATURE]);
+      float rainSnowFactor = map_rangeC(KtoC(realTemp), 0.0, 5.0, 0.0, 1.0); // only rain if above freezing
 
-    vec3 rainbowCol = spectral_zucconi(waveLength) * min(pow(lightIntensity, 2.0) * 1.9, 1.0) * min(water[PRECIPITATION] * 3.0, 1.0) * rainSnowFactor * 0.7;
+      vec3 rainbowCol = spectral_zucconi(waveLength) * min(pow(lightIntensity, 2.0) * 1.9, 1.0) * min(water[PRECIPITATION] * 3.0, 1.0) * rainSnowFactor * 0.7;
 
-    emittedLight += rainbowCol;
-    opacity = max(opacity - length(rainbowCol), 0.); // remove some white rain to prevent overbrightening and increase color saturation
-
+      emittedLight += rainbowCol;
+      opacity = max(opacity - length(rainbowCol), 0.); // remove some white rain to prevent overbrightening and increase color saturation
+    }
 
     if (wall[VERT_DISTANCE] >= 0 && wall[VERT_DISTANCE] < 10) { // near surface
       float localX = fract(fragCoord.x);

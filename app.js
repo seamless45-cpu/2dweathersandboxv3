@@ -7489,8 +7489,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.109'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.109')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.110'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.110')
   ]);
 
   const [
@@ -8439,7 +8439,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.109');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.110');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -10704,7 +10704,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.109');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.110');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
