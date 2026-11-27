@@ -11,7 +11,6 @@ uniform sampler2D baseTex;
 uniform isampler2D wallTex;
 
 layout(location = 0) out vec4 base;
-layout(location = 2) out ivec4 wall;
 
 float finiteClamp(float value, float fallback, float minValue, float maxValue)
 {
@@ -23,8 +22,6 @@ void main()
   base = texture(baseTex, texCoord);
   vec4 baseXmY0 = texture(baseTex, texCoordXmY0);
   vec4 baseX0Ym = texture(baseTex, texCoordX0Ym);
-
-  wall = texture(wallTex, texCoord); // pass trough
 
   ivec2 wallX0Ym = texture(wallTex, texCoordX0Ym).xy;
   if (wallX0Ym[1] == 0 && wallX0Ym[0] == 1) { // cell below is land wall
