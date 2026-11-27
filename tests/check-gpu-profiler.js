@@ -4,3 +4,8 @@ let focused=ctx.createGpuPerformanceProfiler(gl,true,'scene');const base=begins;
 for(let frame=0;frame<=24;frame+=4){focused.frame(frame);focused.begin('velocity');focused.end('velocity');focused.begin('scene');focused.end('scene');focused.finish();}
 focused.frame(28);focused.finish();assert.equal(begins-base,7);assert.equal(focused.report().gpu.scene.samples,7);assert.equal(focused.report().gpu.velocity,null);
 console.log('Focused scene profiling increases scene samples without timing other passes.');
+// A batch query encloses all subpasses without starting nested WebGL queries.
+let batch=ctx.createGpuPerformanceProfiler(gl,true,'simulation');const before=begins;
+for(let frame=0;frame<=24;frame+=4){batch.frame(frame);batch.begin('simulation batch');batch.begin('velocity');batch.end('velocity');batch.begin('advection');batch.end('advection');batch.end('simulation batch');batch.finish();}
+batch.frame(28);batch.finish();assert.equal(begins-before,7);assert.equal(batch.report().gpu['simulation batch'].samples,7);assert.equal(batch.report().gpu.velocity,null);
+console.log('Focused simulation batch profiling does not nest queries.');

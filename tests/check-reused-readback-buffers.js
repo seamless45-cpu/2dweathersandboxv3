@@ -53,3 +53,18 @@ assert.doesNotMatch(poll, /gl\.deleteBuffer\(this\.#ambientWallReadbackBuffer\)/
 // Deletion on fence failure is intentional; successful completion keeps the buffer.
 assert.strictEqual((poll.match(/gl\.deleteBuffer\(this\.#ambientWeatherReadbackBuffer\)/g)||[]).length, 1);
 console.log('Reusable and asynchronous readback checks passed');
+// Attribute a completed readback to the exact WebGL operation, only when profiling.
+const e=fakeGL(), labels=[];
+const profiler={cpuBegin:n=>labels.push('begin '+n),cpuEnd:n=>labels.push('end '+n)};
+const instrumented=context.createLightningReadback(e.gl,new Float32Array(48),6,profiler,'lightning');
+instrumented.request({}, {iteration:8}); instrumented.poll();
+assert.deepStrictEqual(labels,['begin lightning fence poll','end lightning fence poll']);
+labels.length=0;e.setWait(e.gl.CONDITION_SATISFIED);instrumented.poll();
+assert.deepStrictEqual(labels,['begin lightning fence poll','end lightning fence poll','begin lightning completed snapshot','begin lightning buffer download','end lightning buffer download','end lightning completed snapshot']);
+console.log('Readback timing distinguishes fence polling and buffer download.');
+
+const f=fakeGL(), failedLabels=[];
+const failedProfiler={cpuBegin:n=>failedLabels.push('begin '+n),cpuEnd:n=>failedLabels.push('end '+n)};
+const failure=context.createLightningReadback(f.gl,new Float32Array(48),6,failedProfiler,'lightning');
+failure.request({}, {iteration:9}); f.setWait(f.gl.WAIT_FAILED); failure.poll();
+assert(failedLabels.includes('begin lightning fence wait failed'));

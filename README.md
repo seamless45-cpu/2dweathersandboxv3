@@ -469,6 +469,16 @@ scene GPU medians and frame intervals, but do not sum sparse maxima or infer GPU
 work from CPU submission times. This can establish whether scene cost grows with
 strikes; it cannot by itself isolate a particular operation inside that shader.
 
+To measure the rest of an unpaused frame, `?gpuProfile=simulation` focuses the
+GPU timer on the full simulation-iteration batch (all iterations, fluid,
+precipitation and lightning slot draws). It can include GPU idle gaps caused by
+CPU submission/readback inside the batch, so it is a batch elapsed time, not a
+sum of individual kernel costs. CPU sections separately time precipitation
+readback and lightning fence polling, completed-snapshot handling and buffer
+download. The diagnostics do not alter the scene, simulation settings or the
+readback behavior. The regular `?gpuProfile=1` mode still reports individual
+GPU stages and can be used to narrow an expensive batch further.
+
 For an opt-in diagnostic session, add `?gpuProfile=1` to the page URL, run a
 representative scene for at least 30 seconds (longer at low FPS), then tap
 **Performance report** and copy the displayed text. The same report is available

@@ -115,7 +115,7 @@ check('selectCloudToCloudTarget skips terrain, searches four decks only after th
 
 check('app.js reads both rows of lightningDataTextures for CC midpoint cc*.mp3 thunder',
   /new Float32Array\(numLightningSlots \* 2 \* 4\)/.test(appSource) &&
-  /createLightningReadback\(gl, lightningDataValues, numLightningSlots\)/.test(appSource) &&
+  /createLightningReadback\(gl, lightningDataValues, numLightningSlots(?:,|\))/.test(appSource) &&
   /else if \(metaType >= 1\.5\)/.test(appSource) &&
   /metaType >= 2\.5/.test(appSource),
   'CC strikes should trigger midpoint cloud-to-cloud thunder with +CC 50% stronger than -CC');
