@@ -813,8 +813,11 @@ vec4 computeAirColor(vec2 bndFragCoord)
       break; // no channel, crawler or lightning illumination in repeated tiles
     vec4 lightningData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
     float lightningStartIterNum = lightningData[START_ITERNUM];
-    if (lightningStartIterNum <= 0.0)
-      continue;                                              // never used / released
+    if (lightningStartIterNum <= 0.0 || iterNum >= lightningStartIterNum + 2048.0)
+      continue; // empty or certainly expired; avoid metadata and lifetime hashes
+    // The longest supported ordinary parent is under 140 iterations; even the
+    // 8x legacy duration and 100-iteration optical minimum stay below 2048.
+    // Recent strikes still use their exact end calculation below.
     vec4 lightningMeta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
     // Artificial (manually clicked) strikes mark their meta.z with the +10
     // offset; metaRawZ recovers the real height/sentinel, metaArt flags them.

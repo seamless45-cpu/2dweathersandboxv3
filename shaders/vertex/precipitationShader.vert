@@ -98,9 +98,21 @@ void main()
     texCoord = vec2(random2d(vec2(mass[WATER], dropPosition.x + iterNum * 0.3754)), random2d(vec2(mass[ICE], dropPosition.x + iterNum * 0.073162)));
 
 
-    // sample fluid at generated position
-    base = texture(baseTex, texCoord);
+    // In clear air below both spawn thresholds an inactive droplet cannot
+    // spawn. Avoid the second random texture fetch and temperature work; the
+    // brush can override cloud requirements, so it keeps the full path.
     water = texture(waterTex, texCoord);
+    if (precipBrushActive != 1 && water[CLOUD] <= min(aboveZeroThreshold, subZeroThreshold)) {
+      gl_PointSize = 1.0;
+      feedback[MASS] = 1.0;
+      gl_Position = compactFeedback ? vec4(2.0, 2.0, 0.0, 1.0) :
+                    vec4(vec2(-1. + texelSize.x, -1. + texelSize.y), 0.0, 1.0);
+      position_out = newPos;
+      mass_out = newMass;
+      density_out = max(newDensity, 0.0);
+      return;
+    }
+    base = texture(baseTex, texCoord);
 
     // Precipitation tool: painting with the brush releases droplets directly
     // inside it, in any air, without needing cloud cover. A freezing paint
@@ -185,16 +197,22 @@ void main()
           // cooldown between strikes: whenever a freezing droplet triggers
           // lightning and any of the LIGHTNING_SLOTS slots is idle, either an
           // intra-cloud flash or a cloud-to-ground bolt spawns immediately.
+          // The probability roll is independent of slot state. Most ice
+          // spawns cannot trigger lightning, so only those that pass need to
+          // fetch and inspect the slot textures.
           bool lightningSlotFree = false;
-          for (int i = 0; i < LIGHTNING_SLOTS; i++) {
-            vec4 slotData = texelFetch(lightningDataTex, ivec2(i, 0), 0);
-            vec4 slotMeta = texelFetch(lightningDataTex, ivec2(i, 1), 0);
-            if (!(slotData[START_ITERNUM] > 0. && iterNum < lightningSlotEnd(slotData, slotMeta)))
-              lightningSlotFree = true;
+          if (random2d(vec2(base[TEMPERATURE] * 0.99, water[TOTAL] * 17.2)) < lightningSpawnChance) {
+            for (int i = 0; i < LIGHTNING_SLOTS; i++) {
+              vec4 slotData = texelFetch(lightningDataTex, ivec2(i, 0), 0);
+              vec4 slotMeta = texelFetch(lightningDataTex, ivec2(i, 1), 0);
+              if (!(slotData[START_ITERNUM] > 0. && iterNum < lightningSlotEnd(slotData, slotMeta))) {
+                lightningSlotFree = true;
+                break;
+              }
+            }
           }
 
-          if (lightningSlotFree &&
-              random2d(vec2(base[TEMPERATURE] * 0.99, water[TOTAL] * 17.2)) < lightningSpawnChance) { // Spawn lightning
+          if (lightningSlotFree) { // Spawn lightning
             lightningSpawned = true;
             isActive = false;
             gl_PointSize = 1.0;
