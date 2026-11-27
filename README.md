@@ -456,6 +456,19 @@ rendering meets a particular frame rate.
 
 ### Investigating lag on a device
 
+For an investigation of lightning-related lag specifically, open the same page
+with `?gpuProfile=scene`. This mode samples the actual scene GPU pass every four
+eligible frames instead of rotating through fifteen stages; it does not skip or
+change rendering. In the same saved scene and orientation, capture one report
+without active strikes, then reload that save and capture another while producing
+continuous overlapping strikes. Run each long enough to obtain at least ten scene
+samples if possible. Tap **Performance report** to copy each. The report records
+actual HDR target size and quality effects, plus CPU durations for lightning
+readback requests, polls, and sound. No data is uploaded automatically. Compare
+scene GPU medians and frame intervals, but do not sum sparse maxima or infer GPU
+work from CPU submission times. This can establish whether scene cost grows with
+strikes; it cannot by itself isolate a particular operation inside that shader.
+
 For an opt-in diagnostic session, add `?gpuProfile=1` to the page URL, run a
 representative scene for at least 30 seconds (longer at low FPS), then tap
 **Performance report** and copy the displayed text. The same report is available
@@ -466,7 +479,8 @@ submission times without waiting for the GPU. A `null` result means that stage
 was not sampled (for example, the simulation is paused or the option is off).
 Some browsers disable WebGL timer queries; the report says whether they are
 supported. GPU numbers are milliseconds per draw, except bloom and ambient blur,
-which cover their full chains. The first seven simulation values and precipitation
+which cover their full chains. Post includes the extra motion-blur capture pass
+when enabled. The first seven simulation values and precipitation
 are **per iteration**, so compare them with the reported iterations per frame.
 The frame interval reports time between frame submissions (including scheduling);
 the CPU frame value is JavaScript submission time, not GPU time or frame interval;

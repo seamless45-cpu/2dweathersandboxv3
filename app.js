@@ -900,11 +900,12 @@ function readRgbaChannel(data, pixelOffset, channel)
 
 // Opt-in, asynchronous GPU timing. One non-overlapping query at a time,
 // sampled sparsely; never wait for the GPU or change rendering settings.
-function createGpuPerformanceProfiler(gl, enabled)
+function createGpuPerformanceProfiler(gl, enabled, focus)
 {
   const names = ['velocity', 'curl', 'vorticity', 'boundary', 'advection', 'pressure', 'lighting',
                  'precipitation', 'lightning slots', 'lightning render state', 'ambient blur', 'sky', 'scene', 'bloom', 'post'];
   const ext = enabled && gl.getExtension('EXT_disjoint_timer_query_webgl2');
+  const scheduledNames = focus && names.includes(focus) ? [focus] : names;
   let next = 0, selected = null, active = null, pending = null, cpuStart = 0, previousFrameStart = null;
   let disjointSamples = 0;
   const results = Object.fromEntries(names.map(name => [name, []]));
@@ -931,7 +932,7 @@ function createGpuPerformanceProfiler(gl, enabled)
       if (ext) poll();
       // Rotate even when a stage is absent (paused simulation, disabled bloom).
       // At low FPS a 30-frame interval can take minutes to cover all stages.
-      selected = ext && !pending && frame % 4 === 0 ? names[next++ % names.length] : null;
+      selected = ext && !pending && frame % 4 === 0 ? scheduledNames[next++ % scheduledNames.length] : null;
     },
     begin(name) {
       if (name !== selected || active || pending) return;
@@ -5325,17 +5326,24 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     throw new Error('Your browser does not support WebGL2.');
   }
 
-  const gpuProfilerEnabled = typeof location !== 'undefined' && typeof URLSearchParams !== 'undefined' &&
-                             new URLSearchParams(location.search).get('gpuProfile') === '1';
-  const gpuProfiler = createGpuPerformanceProfiler(gl, gpuProfilerEnabled);
+  const gpuProfileMode = typeof location !== 'undefined' && typeof URLSearchParams !== 'undefined' ?
+                         new URLSearchParams(location.search).get('gpuProfile') : null;
+  const gpuProfilerEnabled = gpuProfileMode === '1' || gpuProfileMode === 'scene';
+  const gpuProfiler = createGpuPerformanceProfiler(gl, gpuProfilerEnabled, gpuProfileMode === 'scene' ? 'scene' : null);
   if (gpuProfilerEnabled) {
     sceneContrastProfiler = gpuProfiler;
     window.weatherPerformanceReport = () => ({...gpuProfiler.report(),
       simulation: [sim_res_x, sim_res_y], canvas: [canvas.width, canvas.height],
       iterationsPerFrame: guiControls.IterPerFrame, zoom: cam.curZoom,
-      hdrQuality: guiControls.hdrQuality, zoomSupersample: previousZoomSupersampleActive,
-      bloom: guiControls.bloomEnabled, volumetric: guiControls.volumetricCloudLighting,
-      precipitation: guiControls.enablePrecipitation, paused: guiControls.paused});
+      profileMode: gpuProfileMode, hdrQuality: guiControls.hdrQuality,
+      hdrTarget: hdrFBO ? [hdrFBO.width, hdrFBO.height] : null,
+      sceneTarget: previousZoomSupersampleActive && zoomHdrFBO ? [zoomHdrFBO.width, zoomHdrFBO.height] : (hdrFBO ? [hdrFBO.width, hdrFBO.height] : null),
+      zoomSupersample: previousZoomSupersampleActive, spatialUpscaling: guiControls.spatialUpscalingEnabled,
+      superSharpDetail: guiControls.superSharpDetail, motionBlur: guiControls.motionBlurEnabled,
+      motionBlurStrength: guiControls.motionBlurIntensity, fxaa: guiControls.fxaaEnabled, taa: guiControls.temporalAAEnabled,
+      bloom: guiControls.bloomEnabled, bloomQuality: guiControls.bloomQuality, volumetric: guiControls.volumetricCloudLighting,
+      precipitation: guiControls.enablePrecipitation, sound: guiControls.sound,
+      stationCount: weatherStations.length, rodCount: lightningRods.length, paused: guiControls.paused});
     // A text report works on phones too, where browser developer tools are
     // often unavailable. No clipboard permission or server upload is needed.
     const diagnosticButton = document.createElement('button');
@@ -7678,8 +7686,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.122'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.122')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.123'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.123')
   ]);
 
   const [
@@ -8652,7 +8660,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.122');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.123');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9263,7 +9271,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     let motionBlurSimulationSteps = 0;
     let artificialAttemptedThisFrame = false;
+    gpuProfiler.cpuBegin('manual lightning readback poll');
     acknowledgeManualLightning(manualLightningReadback.poll());
+    gpuProfiler.cpuEnd('manual lightning readback poll');
     let camPanSpeed = guiControls.camSpeed;
 
     if (rightCtrlPressed) {
@@ -9664,7 +9674,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
                 // Keep the click queued until its fenced GPU snapshot confirms
                 // whether the slot was accepted. Never issue it twice in flight.
                 const sample = {strike: manualStrike, iteration: iterNum, generation: lightningReadbackGeneration};
+                gpuProfiler.cpuBegin('manual lightning readback request');
                 const request = manualLightningReadback.request(lightningDataFrameBuffs[lightningDataSrc], sample);
+                gpuProfiler.cpuEnd('manual lightning readback request');
                 if (request.accepted) {
                   manualLightningReadbackPending = !request.result;
                   acknowledgeManualLightning(request.result);
@@ -9701,14 +9713,18 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         const rodCaptureCheckDue = lightningRods.length > 0 && (guiControls.enablePrecipitation || iterNum <= manualLightningActiveUntil) &&
                                    iterNum != lastRodCaptureCheckIteration &&
                                    (rodCaptureFrame++ % 12) === 0;
+        gpuProfiler.cpuBegin('lightning readback poll');
         let completedLightning = lightningReadback.poll();
+        gpuProfiler.cpuEnd('lightning readback poll');
         if (completedLightning && completedLightning.generation !== lightningReadbackGeneration)
           completedLightning = null; // a simulation reset superseded this snapshot
         if (!completedLightning && (lightningSoundDue || rodCaptureCheckDue || superboltCheckDue)) {
+          gpuProfiler.cpuBegin('lightning readback request');
           const request = lightningReadback.request(lightningDataFrameBuffs[lightningDataSrc], {
             sound: lightningSoundDue, superbolt: superboltCheckDue, iteration: iterNum,
             generation: lightningReadbackGeneration
           });
+          gpuProfiler.cpuEnd('lightning readback request');
           if (request.accepted) {
             if (lightningSoundDue) lastLightningSoundCheckIteration = iterNum;
             if (superboltCheckDue) lastSuperboltCheckIteration = iterNum;
@@ -9764,6 +9780,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           }
 
           if (completedLightning.sound && guiControls.sound) {
+            gpuProfiler.cpuBegin('lightning sound');
             // thunder belongs to the newest strike in the slot array that we have
             // not heard yet (several strikes can be in flight at once now)
             let newestSlot = -1;
@@ -9807,6 +9824,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               lastLightningSoundIteration = newestIteration;
               lastPlayedLightningSoundIteration = newestIteration;
             }
+            gpuProfiler.cpuEnd('lightning sound');
           }
         } else if (!guiControls.sound || (!guiControls.enablePrecipitation && iterNum > manualLightningActiveUntil && !manualLightningReadbackPending)) {
           lastLightningSoundIteration = iterNum;
@@ -10288,6 +10306,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       // No clear here: the post pass writes every fragment of the fullscreen quad.
 
       gl.drawBuffers([ gl.BACK ]);
+      gpuProfiler.begin('post');
       // Capture this frame without temporal effects before drawing the final shutter.
       // The previous history remains bound on unit 2 for the final pass. This
       // extra pass is only paid for when motion blur is enabled.
@@ -10302,7 +10321,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         gl.uniform1i(getUniformLoc(postProcessingProgram, 'motionBlurEnabled'), true);
         gl.uniform1i(getUniformLoc(postProcessingProgram, 'temporalAAEnabled'), guiControls.temporalAAEnabled);
       }
-      gpuProfiler.begin('post');
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to canvas
       gpuProfiler.end('post');
 
@@ -11004,7 +11022,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.122');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.123');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
