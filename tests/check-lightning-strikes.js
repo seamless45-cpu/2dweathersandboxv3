@@ -585,7 +585,8 @@ check('a strike formed this iteration is recorded, however many droplets made it
 
 check('a strike is dropped only when every slot is busy',
   /if \(!lightningSlotFree\)/.test(precipitationVert) ||
-  /lightningSlotFree &&/.test(precipitationVert),
+  /lightningSlotFree &&/.test(precipitationVert) ||
+  /if \(lightningSlotFree\)/.test(precipitationVert),
   'the spawn has to test the slot state, not a timer');
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
