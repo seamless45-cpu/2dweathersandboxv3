@@ -886,7 +886,9 @@ vec4 computeAirColor(vec2 bndFragCoord)
     // light. Keep the channel and bloom above, and retain lighting anywhere a
     // later terrain, vegetation or rod overlay can make the pixel opaque.
     if (opacity != 0.0 || wall[VERT_DISTANCE] < 10 || rodCount > 0) {
-      // The light a strike throws on the clouds around it.
+      // The light a strike throws on the clouds around it. Squared distance
+      // is dot(v, v): avoid a square root followed by a square for each lobe
+      // of every active strike. Roundoff can differ by a few float32 ulps.
       float lightningOnLight;
       if (isFlash) {
         // A flash lights the whole slab it lives in, not a point below itself: its
@@ -894,25 +896,25 @@ vec4 computeAirColor(vec2 bndFragCoord)
         // because what a player sees of an intra-cloud flash from outside the cloud is
         // mostly this - the deck glowing from the inside - with the network on top.
         vec2 flashDist = vec2((lightningPos.x - texCoord.x) * aspectRatios[0], texCoord.y - lightningPos.y);
-        lightningOnLight = lightningOnLightBrightness * 2.0 / (pow(length(flashDist) * 0.5, 2.) + 0.03 * lightningHeightScale());
+        lightningOnLight = lightningOnLightBrightness * 2.0 / ((dot(flashDist, flashDist) * 0.25) + 0.03 * lightningHeightScale());
         if (isPositiveIC)
           lightningOnLight *= 1.5;
       } else if (isCloudToCloud) {
         vec2 ccTargetDist = vec2((lightningPos.x - texCoord.x) * aspectRatios[0],
                                  texCoord.y - metaRawZ);
-        lightningOnLight = lightningOnLightBrightness * 1.4 / (pow(length(ccTargetDist) * 0.5, 2.) + 0.03 * lightningHeightScale()) * ccIntensityGain * ccTailFade;
+        lightningOnLight = lightningOnLightBrightness * 1.4 / ((dot(ccTargetDist, ccTargetDist) * 0.25) + 0.03 * lightningHeightScale()) * ccIntensityGain * ccTailFade;
         float ccOriginDx = lightningMeta.x - texCoord.x;
         vec2 ccOriginDist = vec2(ccOriginDx * aspectRatios[0], texCoord.y - lightningPos.y);
         float ccMidDx = 0.5 * (lightningPos.x + lightningMeta.x) - texCoord.x;
         vec2 ccMidDist = vec2(ccMidDx * aspectRatios[0], texCoord.y - 0.5 * (lightningPos.y + metaRawZ));
-        onLight += lightningIlluminationTint * (lightningOnLightBrightness * 1.4 / (pow(length(ccOriginDist) * 0.5, 2.) + 0.03 * lightningHeightScale()) * ccIntensityGain * ccTailFade * currentLightningIntensity);
-        onLight += lightningIlluminationTint * (lightningOnLightBrightness * 0.9 / (pow(length(ccMidDist) * 0.55, 2.) + 0.035 * lightningHeightScale()) * ccIntensityGain * ccTailFade * currentLightningIntensity);
+        onLight += lightningIlluminationTint * (lightningOnLightBrightness * 1.4 / ((dot(ccOriginDist, ccOriginDist) * 0.25) + 0.03 * lightningHeightScale()) * ccIntensityGain * ccTailFade * currentLightningIntensity);
+        onLight += lightningIlluminationTint * (lightningOnLightBrightness * 0.9 / ((dot(ccMidDist, ccMidDist) * 0.3025) + 0.035 * lightningHeightScale()) * ccIntensityGain * ccTailFade * currentLightningIntensity);
       } else {
         // The ground lobe remains in the same world tile as the strike.
         float cgDx = lightningPos.x - texCoord.x;
         vec2 dist = vec2(cgDx, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1 * lightningHeightScale()), 0.));
         dist.x *= aspectRatios[0];
-        lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03 * lightningHeightScale());
+        lightningOnLight = lightningOnLightBrightness / (dot(dist, dist) + 0.03 * lightningHeightScale());
       }
       lightningOnLight *= isExternalPositive ? extCurve : currentLightningIntensity;
       if (isSuperbolt)
@@ -922,7 +924,7 @@ vec4 computeAirColor(vec2 bndFragCoord)
         onLight += lightningIlluminationTint * lightningOnLight;
         float originDx = lightningMeta.x - texCoord.x;
         vec2 originDist = vec2(originDx * aspectRatios[0], texCoord.y - lightningPos.y);
-        onLight += lightningIlluminationTint * (lightningOnLightBrightness * 2.0 / (pow(length(originDist) * 0.7, 2.) + 0.03 * lightningHeightScale()) * extCurve * (isSuperbolt ? strokeBrightnessMult : 1.0));
+        onLight += lightningIlluminationTint * (lightningOnLightBrightness * 2.0 / ((dot(originDist, originDist) * 0.49) + 0.03 * lightningHeightScale()) * extCurve * (isSuperbolt ? strokeBrightnessMult : 1.0));
       }
     }
   }
