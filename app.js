@@ -892,11 +892,13 @@ function readRgbaChannel(data, pixelOffset, channel)
 function createGpuPerformanceProfiler(gl, enabled)
 {
   const names = ['velocity', 'curl', 'vorticity', 'boundary', 'advection', 'pressure', 'lighting',
-                 'precipitation', 'lightning slots', 'ambient blur', 'sky', 'scene', 'bloom', 'post'];
+                 'precipitation', 'lightning slots', 'lightning render state', 'ambient blur', 'sky', 'scene', 'bloom', 'post'];
   const ext = enabled && gl.getExtension('EXT_disjoint_timer_query_webgl2');
-  let next = 0, selected = null, active = null, pending = null, cpuStart = 0;
+  let next = 0, selected = null, active = null, pending = null, cpuStart = 0, previousFrameStart = null;
+  let disjointSamples = 0;
   const results = Object.fromEntries(names.map(name => [name, []]));
   const cpuFrames = [];
+  const frameIntervals = [];
   const cpuSections = {};
   const cpuStarts = {};
   const append = (array, value) => { array.push(value); if (array.length > 60) array.shift(); };
@@ -905,6 +907,7 @@ function createGpuPerformanceProfiler(gl, enabled)
     const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT);
     const ms = gl.getQueryParameter(pending.query, gl.QUERY_RESULT) / 1e6;
     if (!disjoint && Number.isFinite(ms)) append(results[pending.name], ms);
+    else if (disjoint) disjointSamples++;
     gl.deleteQuery(pending.query);
     pending = null;
   }
@@ -912,8 +915,12 @@ function createGpuPerformanceProfiler(gl, enabled)
     frame(frame) {
       if (!enabled) return;
       cpuStart = performance.now();
+      if (previousFrameStart !== null) append(frameIntervals, cpuStart - previousFrameStart);
+      previousFrameStart = cpuStart;
       if (ext) poll();
-      selected = ext && !pending && frame % 30 === 0 ? names[next++ % names.length] : null;
+      // Rotate even when a stage is absent (paused simulation, disabled bloom).
+      // At low FPS a 30-frame interval can take minutes to cover all stages.
+      selected = ext && !pending && frame % 4 === 0 ? names[next++ % names.length] : null;
     },
     begin(name) {
       if (name !== selected || active || pending) return;
@@ -947,7 +954,8 @@ function createGpuPerformanceProfiler(gl, enabled)
         const sorted = [...samples].sort((a, b) => a - b);
         return {samples: sorted.length, medianMs: sorted[Math.floor(sorted.length / 2)], maxMs: sorted[sorted.length - 1]};
       };
-      return {gpuTimerSupported: !!ext, cpuFrame: summarize(cpuFrames),
+      return {gpuTimerSupported: !!ext, gpuDisjointSamples: disjointSamples,
+              frameInterval: summarize(frameIntervals), cpuFrame: summarize(cpuFrames),
               cpuSections: Object.fromEntries(Object.entries(cpuSections).map(([name, samples]) => [name, summarize(samples)])),
               gpu: Object.fromEntries(names.map(name => [name, summarize(results[name])]))};
     }
@@ -5301,7 +5309,34 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       hdrQuality: guiControls.hdrQuality, zoomSupersample: previousZoomSupersampleActive,
       bloom: guiControls.bloomEnabled, volumetric: guiControls.volumetricCloudLighting,
       precipitation: guiControls.enablePrecipitation, paused: guiControls.paused});
-    console.info('GPU profiling enabled. After at least 15 seconds, run weatherPerformanceReport() in the console.');
+    // A text report works on phones too, where browser developer tools are
+    // often unavailable. No clipboard permission or server upload is needed.
+    const diagnosticButton = document.createElement('button');
+    diagnosticButton.textContent = 'Performance report';
+    diagnosticButton.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:100000;padding:8px;background:#202833;color:white;border:1px solid white;border-radius:4px';
+    diagnosticButton.addEventListener('click', () => {
+      let panel = document.getElementById('performanceReportPanel');
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'performanceReportPanel';
+        panel.style.cssText = 'position:fixed;inset:10%;z-index:100001;background:#202833;color:white;padding:12px;display:flex;flex-direction:column;gap:8px';
+        const instructions = document.createElement('div');
+        instructions.textContent = 'Copy this report and share it. Close this panel to resume viewing.';
+        const text = document.createElement('textarea');
+        text.setAttribute('aria-label', 'Performance report');
+        text.readOnly = true;
+        text.style.cssText = 'width:100%;flex:1;box-sizing:border-box';
+        const close = document.createElement('button');
+        close.textContent = 'Close';
+        close.addEventListener('click', () => panel.remove());
+        panel.append(instructions, text, close);
+        document.body.appendChild(panel);
+      }
+      panel.querySelector('textarea').value = JSON.stringify(window.weatherPerformanceReport(), null, 2);
+      panel.querySelector('textarea').select();
+    });
+    document.body.appendChild(diagnosticButton);
+    console.info('GPU profiling enabled. Use the Performance report button or weatherPerformanceReport() in the console.');
   }
 
   const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
@@ -7607,8 +7642,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.114'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.114')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.115'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.115')
   ]);
 
   const [
@@ -8581,7 +8616,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.114');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.115');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9894,7 +9929,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.bindFramebuffer(gl.FRAMEBUFFER, lightningRenderStateFrameBuff);
       gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
       gl.viewport(0, 0, numLightningSlots, 4);
+      gpuProfiler.begin('lightning render state');
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gpuProfiler.end('lightning render state');
 
       if (ambientLightDirty) { //  Ambient Light Calculation
         gpuProfiler.begin('ambient blur');
@@ -10924,7 +10961,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.114');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.115');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

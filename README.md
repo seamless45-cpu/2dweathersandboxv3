@@ -445,16 +445,19 @@ The GitHub Pages site has a canonical URL, indexable descriptive content and a s
 ### Investigating lag on a device
 
 For an opt-in diagnostic session, add `?gpuProfile=1` to the page URL, run a
-representative scene for at least 30 seconds (longer at low FPS), and execute
-`weatherPerformanceReport()` in the browser console. Profiling does not change
-saved settings. It samples one GPU timer query every 30 frames and collects CPU
+representative scene for at least 30 seconds (longer at low FPS), then tap
+**Performance report** and copy the displayed text. The same report is available
+as `weatherPerformanceReport()` in the browser console. Profiling does not change
+saved settings or upload the report. It samples at most one GPU timer query every
+four frames and collects CPU
 submission times without waiting for the GPU. A `null` result means that stage
 was not sampled (for example, the simulation is paused or the option is off).
 Some browsers disable WebGL timer queries; the report says whether they are
 supported. GPU numbers are milliseconds per draw, except bloom and ambient blur,
 which cover their full chains. The first seven simulation values and precipitation
 are **per iteration**, so compare them with the reported iterations per frame.
-The CPU frame value is JavaScript submission time, not GPU time or frame interval;
+The frame interval reports time between frame submissions (including scheduling);
+the CPU frame value is JavaScript submission time, not GPU time or frame interval;
 CPU section maxima can reveal occasional readback stalls. Samples are a bounded,
 sparse snapshot, not a complete trace, and cannot identify every possible cause.
 
