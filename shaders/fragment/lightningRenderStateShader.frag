@@ -196,8 +196,8 @@ void main()
       }
     }
     // Rows 0–1 retain the exact timeline. Rows 2–3 cache the four coarse
-    // samples of an external CG arc; those samples depend on the strike and
-    // rods, not on the screen pixel performing the nearest-point search.
+    // samples of an external CG arc or the seeded IC/CC shape parameters.
+    // These depend on the strike, not the screen pixel drawing the channel.
     int row = int(gl_FragCoord.y);
     if (row == 0) {
       stateOutput = vec4(lightningTime, currentLightningIntensity, effectiveLightningTime, 1.0);
@@ -213,5 +213,26 @@ void main()
       vec2 p0 = evalExtArc(float(first) / 3.0, Hw, V);
       vec2 p1 = evalExtArc(float(first + 1) / 3.0, Hw, V);
       stateOutput = vec4(p0, p1);
+    } else if (isFlash || isCloudToCloud) {
+      float seed, shape;
+      if (isFlash) {
+        seed = random2d(vec2(lightningPos.x * 37.7 + lightningPos.y * 13.3, lightningPos.y * 29.1 + 3.17));
+        shape = random2d(vec2(lightningPos.x * 61.3 + 7.9, lightningPos.y * 41.7 + 5.1));
+      } else {
+        vec2 originPos = vec2(lightningMeta.x, lightningPos.y);
+        vec2 targetPos = vec2(lightningPos.x, metaRawZ);
+        seed = random2d(vec2(originPos.x * 29.1 + originPos.y * 17.7,
+                             targetPos.x * 41.3 + targetPos.y * 13.9));
+        shape = random2d(vec2(targetPos.y * 61.1 + 11.7, originPos.x * 47.9 + 8.3));
+      }
+      vec2 axis = vec2(0.0);
+      if (isFlash) {
+        float angle = mix(-0.70, 0.70, seed);
+        float direction = shape < 0.5 ? -1.0 : 1.0;
+        axis = direction * vec2(cos(angle), sin(angle));
+      }
+      float bow = (seed < 0.5 ? -1.0 : 1.0) * mix(0.65, 1.05, shape);
+      float skew = mix(-0.65, 0.65, seed);
+      stateOutput = row == 2 ? vec4(seed, shape, axis) : vec4(bow, skew, 0.0, 0.0);
     }
 }
