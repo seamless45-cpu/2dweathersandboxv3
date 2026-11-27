@@ -905,10 +905,11 @@ function createGpuPerformanceProfiler(gl, enabled, focus)
   const names = ['velocity', 'curl', 'vorticity', 'boundary', 'advection', 'pressure', 'lighting',
                  'precipitation', 'lightning slots', 'lightning render state', 'ambient blur', 'sky', 'scene', 'bloom', 'post'];
   const ext = enabled && gl.getExtension('EXT_disjoint_timer_query_webgl2');
-  const scheduledNames = focus && names.includes(focus) ? [focus] : names;
+  const resultNames = [...names, 'simulation batch'];
+  const scheduledNames = focus === 'simulation' ? ['simulation batch'] : (focus && names.includes(focus) ? [focus] : names);
   let next = 0, selected = null, active = null, pending = null, cpuStart = 0, previousFrameStart = null;
   let disjointSamples = 0;
-  const results = Object.fromEntries(names.map(name => [name, []]));
+  const results = Object.fromEntries(resultNames.map(name => [name, []]));
   const cpuFrames = [];
   const frameIntervals = [];
   const cpuSections = {};
@@ -969,7 +970,7 @@ function createGpuPerformanceProfiler(gl, enabled, focus)
       return {gpuTimerSupported: !!ext, gpuDisjointSamples: disjointSamples,
               frameInterval: summarize(frameIntervals), cpuFrame: summarize(cpuFrames),
               cpuSections: Object.fromEntries(Object.entries(cpuSections).map(([name, samples]) => [name, summarize(samples)])),
-              gpu: Object.fromEntries(names.map(name => [name, summarize(results[name])]))};
+              gpu: Object.fromEntries(resultNames.map(name => [name, summarize(results[name])]))};
     }
   };
 }
@@ -1439,7 +1440,7 @@ class FBO // wraps texture, frambuffer and info in one
 // A single reusable pixel-pack buffer avoids a CPU/GPU rendezvous on every
 // lightning status check. Never overwrite an in-flight read: poll its fence
 // without waiting and skip new requests until the prior snapshot is ready.
-function createLightningReadback(gl, values, width)
+function createLightningReadback(gl, values, width, profiler, label)
 {
   let buffer = null;
   let sync = null;
@@ -1458,16 +1459,27 @@ function createLightningReadback(gl, values, width)
   return {
     poll() {
       if (!sync) return null;
+      if (profiler) profiler.cpuBegin(label + ' fence poll');
       const status = gl.clientWaitSync(sync, 0, 0);
+      if (profiler) profiler.cpuEnd(label + ' fence poll');
+      // A separate sample count makes exceptional WAIT_FAILED visible in reports.
+      if (profiler && status === gl.WAIT_FAILED) {
+        profiler.cpuBegin(label + ' fence wait failed');
+        profiler.cpuEnd(label + ' fence wait failed');
+      }
       if (status !== gl.WAIT_FAILED && status !== gl.ALREADY_SIGNALED && status !== gl.CONDITION_SATISFIED)
         return null;
       // WAIT_FAILED is exceptional; retrieve the staged snapshot before falling
       // back to synchronous reads, so an accepted event is not retried twice.
+      if (profiler) profiler.cpuBegin(label + ' completed snapshot');
       gl.deleteSync(sync);
       sync = null;
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+      if (profiler) profiler.cpuBegin(label + ' buffer download');
       gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, values);
+      if (profiler) profiler.cpuEnd(label + ' buffer download');
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      if (profiler) profiler.cpuEnd(label + ' completed snapshot');
       const result = pending;
       pending = null;
       if (status === gl.WAIT_FAILED) disableAsync();
@@ -5328,8 +5340,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   const gpuProfileMode = typeof location !== 'undefined' && typeof URLSearchParams !== 'undefined' ?
                          new URLSearchParams(location.search).get('gpuProfile') : null;
-  const gpuProfilerEnabled = gpuProfileMode === '1' || gpuProfileMode === 'scene';
-  const gpuProfiler = createGpuPerformanceProfiler(gl, gpuProfilerEnabled, gpuProfileMode === 'scene' ? 'scene' : null);
+  const gpuProfilerEnabled = ['1', 'scene', 'simulation'].includes(gpuProfileMode);
+  const gpuProfiler = createGpuPerformanceProfiler(gl, gpuProfilerEnabled, gpuProfileMode === '1' ? null : gpuProfileMode);
   if (gpuProfilerEnabled) {
     sceneContrastProfiler = gpuProfiler;
     window.weatherPerformanceReport = () => ({...gpuProfiler.report(),
@@ -7686,8 +7698,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.123'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.123')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.124'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.124')
   ]);
 
   const [
@@ -8660,7 +8672,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.123');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.124');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9121,9 +9133,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   }
   const countedSlotStartIter = new Float64Array(numLightningSlots);
   const lightningDataValues = new Float32Array(numLightningSlots * 2 * 4);
-  const lightningReadback = createLightningReadback(gl, lightningDataValues, numLightningSlots);
+  const lightningReadback = createLightningReadback(gl, lightningDataValues, numLightningSlots, gpuProfilerEnabled ? gpuProfiler : null, 'lightning');
   const manualSlotReadback = new Float32Array(numLightningSlots * 2 * 4);
-  const manualLightningReadback = createLightningReadback(gl, manualSlotReadback, numLightningSlots);
+  const manualLightningReadback = createLightningReadback(gl, manualSlotReadback, numLightningSlots, gpuProfilerEnabled ? gpuProfiler : null, 'manual lightning');
   let manualLightningReadbackPending = false;
 
   function acknowledgeManualLightning(sample)
@@ -9419,7 +9431,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       if (!guiControls.paused) { // Simulation part
 
+        gpuProfiler.cpuBegin('precipitation readback poll');
         applyPrecipitationCount(precipitationCountReadback.poll());
+        gpuProfiler.cpuEnd('precipitation readback poll');
         const sunAngle = guiControls.sunAngle;
         let nightAccelerationActive = !airplaneMode && guiControls.dayNightCycle && guiControls.accelerateNight && !guiControls.realTimeCycle && (sunAngle < 0. || sunAngle > 180.);
 
@@ -9452,6 +9466,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           let numIterations = guiControls.IterPerFrame;
           if (airplaneMode)
             numIterations = 1;
+          gpuProfiler.begin('simulation batch');
           for (var i = 0; i < numIterations; i++) { // Simulation loop
             motionBlurSimulationSteps++;
             // calc and apply velocity
@@ -9622,7 +9637,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               // Queue a snapshot without forcing this frame to wait for the GPU.
               if (iterNum % 600 == 0) {
                 const source = precipitationEven ? precipVertexBuffer_1 : precipVertexBuffer_0;
+                gpuProfiler.cpuBegin('precipitation readback request');
                 applyPrecipitationCount(precipitationCountReadback.request(source, precipitationBufferGeneration));
+                gpuProfiler.cpuEnd('precipitation readback request');
               }
 
               gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
@@ -9694,6 +9711,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               iterNum++;
             }
           }
+          gpuProfiler.end('simulation batch');
 
         }
 
@@ -11022,7 +11040,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.123');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.124');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
