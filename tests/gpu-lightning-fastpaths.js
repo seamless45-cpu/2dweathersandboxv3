@@ -2,8 +2,8 @@
 const fs=require('fs'),assert=require('assert'),{chromium}=require('playwright-core');
 (async()=>{
  const old=fs.readFileSync('tests/fixtures/lightning-variant-calculations-before.glsl','utf8');
- const shader=fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','utf8');
- const begin=shader.indexOf('    float strokeBrightnessMult = isHyperbolt'),end=shader.indexOf('    sampledStrikeCoverage = 0.0;',begin),now=shader.slice(begin,end);
+ const shader=fs.readFileSync('shaders/fragment/lightningRenderStateShader.frag','utf8');
+ const begin=shader.indexOf('    float strokeBrightnessMult = isHyperbolt'),end=shader.indexOf('    // Two rows keep',begin),now=shader.slice(begin,end).replace(/return;/g, "continue;");
  const bin=(await import(require.resolve('@sparticuz/chromium'))).default;
  const browser=await chromium.launch({executablePath:await bin.executablePath(),args:[...bin.args,'--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
  try{const page=await browser.newPage();const results=await page.evaluate(({old,now})=>{

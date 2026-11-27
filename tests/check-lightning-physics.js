@@ -24,7 +24,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
-const display = read('shaders/fragment/realisticDisplayShader.frag');
+const display = read('shaders/fragment/realisticDisplayShader.frag') + '\n' + read('shaders/fragment/lightningRenderStateShader.frag');
 const common = read('shaders/common.glsl');
 const post = read('shaders/fragment/postProcessingShader.frag');
 const precip = read('shaders/vertex/precipitationShader.vert');

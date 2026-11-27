@@ -477,3 +477,10 @@ by GPU and workload; this does not guarantee that rendering is no longer the
 bottleneck.
 The lighting pass also skips the fire-colour conversion when smoke produces
 exactly zero fire light; smoky and burning cells retain the same calculation.
+
+Lightning rendering computes each slot's lifetime, flicker, intensity and
+variant-specific curves once in a small GPU state pass, rather than repeating
+those calculations for every scene pixel. The simulation slot data, channel
+artwork, coverage and bloom path are unchanged. Manual strike acknowledgements
+use a fenced GPU snapshot, keeping clicks queued until the slot result arrives
+instead of synchronously reading back at the instant of the strike.

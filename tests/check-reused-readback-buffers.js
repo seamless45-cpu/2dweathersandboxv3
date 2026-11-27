@@ -42,7 +42,8 @@ const c = fakeGL(); c.failFence(); const fallbackFence = context.createLightning
 assert.strictEqual(fallbackFence.request({}, {iteration:5}).result.iteration,5);
 assert(c.calls.includes('deleteBuffer'));
 const d = fakeGL(); const failed = context.createLightningReadback(d.gl, new Float32Array(48), 6);
-failed.request({}, {iteration:6}); d.setWait(d.gl.WAIT_FAILED); assert.strictEqual(failed.poll(), null);
+failed.request({}, {iteration:6}); d.setWait(d.gl.WAIT_FAILED); assert.strictEqual(failed.poll().iteration, 6);
+assert(d.calls.includes('get'));
 assert.strictEqual(failed.request({}, {iteration:7}).result.iteration,7);
 assert.match(app, /completedLightning\.generation !== lightningReadbackGeneration/);
 assert.match(app, /createPrecipitationCountReadback\(gl, NUM_DROPLETS, compactPrecipitationFeedback\)/);

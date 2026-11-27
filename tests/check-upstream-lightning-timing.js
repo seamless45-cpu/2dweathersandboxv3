@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('assert');
 const fs = require('fs');
-const display = fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','utf8');
+const display = fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','utf8') + '\n' + fs.readFileSync('shaders/fragment/lightningRenderStateShader.frag','utf8');
 const common = fs.readFileSync('shaders/common.glsl','utf8');
 const location = fs.readFileSync('shaders/fragment/lightningLocationShader.frag','utf8');
 const ground = display.slice(display.indexOf('vec3 displayLightning('),display.indexOf('vec3 displayFlash('));

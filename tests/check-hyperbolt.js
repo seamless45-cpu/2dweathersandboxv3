@@ -18,7 +18,7 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
 const locationShader = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'lightningLocationShader.frag'), 'utf8');
-const displayShader = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'realisticDisplayShader.frag'), 'utf8');
+const displayShader = fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'realisticDisplayShader.frag'), 'utf8') + '\n' + fs.readFileSync(path.join(ROOT, 'shaders', 'fragment', 'lightningRenderStateShader.frag'), 'utf8');
 
 let passed = 0;
 let failed = 0;

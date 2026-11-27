@@ -2,7 +2,7 @@
 // Numeric regression for timing and the actual linear-HDR -> display path.
 const assert = require('assert');
 const fs = require('fs');
-const shader = fs.readFileSync('shaders/fragment/realisticDisplayShader.frag', 'utf8');
+const shader = fs.readFileSync('shaders/fragment/realisticDisplayShader.frag', 'utf8') + '\n' + fs.readFileSync('shaders/fragment/lightningRenderStateShader.frag','utf8');
 const common = fs.readFileSync('shaders/common.glsl', 'utf8');
 const post = fs.readFileSync('shaders/fragment/postProcessingShader.frag', 'utf8');
 assert.match(shader, /max\(curve, firstReturnIntensity\(Tin, intensity, 0\.65, 0\.78\)\)/);
