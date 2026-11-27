@@ -441,3 +441,29 @@ The site name and simulation performance defaults are unchanged. GitHub Pages on
 The GitHub Pages site has a canonical URL, indexable descriptive content and a sitemap at `https://seamless45-cpu.github.io/2dweathersandboxv3/sitemap.xml`. Search engines decide whether and when to index the site; the sitemap can be submitted in Google Search Console or Bing Webmaster Tools after verifying the site.
 
 `robots.txt` is included for deployments at a domain root. On GitHub Pages project sites, crawlers look for `https://seamless45-cpu.github.io/robots.txt`, not the copy under `/2dweathersandboxv3/`. To advertise this sitemap via robots on GitHub Pages, the owner must place its `Sitemap:` line in the host-root robots file (typically published by the `seamless45-cpu.github.io` site); this project cannot publish that file at the host root. Submitting the sitemap directly does not require that change.
+
+### Investigating lag on a device
+
+For an opt-in diagnostic session, add `?gpuProfile=1` to the page URL, run a
+representative scene for at least 30 seconds (longer at low FPS), and execute
+`weatherPerformanceReport()` in the browser console. Profiling does not change
+saved settings. It samples one GPU timer query every 30 frames and collects CPU
+submission times without waiting for the GPU. A `null` result means that stage
+was not sampled (for example, the simulation is paused or the option is off).
+Some browsers disable WebGL timer queries; the report says whether they are
+supported. GPU numbers are milliseconds per draw, except bloom and ambient blur,
+which cover their full chains. The first seven simulation values and precipitation
+are **per iteration**, so compare them with the reported iterations per frame.
+The CPU frame value is JavaScript submission time, not GPU time or frame interval;
+CPU section maxima can reveal occasional readback stalls. Samples are a bounded,
+sparse snapshot, not a complete trace, and cannot identify every possible cause.
+
+Workloads to investigate include: multiple full-grid simulation passes per
+iteration; transform-feedback precipitation; the realistic scene's cloud and
+active-lightning shading; zoomed-out 2x HDR (four times as many scene pixels,
+retained for lightning detail); ambient-light and bloom blur chains; post-processing;
+and optional soundings, stations, manual-lightning acknowledgements and other
+readbacks. Wide-spaced weather stations can require a large cloud-column readback.
+Hardware, canvas size, simulation resolution, weather and settings affect which
+one dominates; software-renderer timings do not establish device performance.
+The profiler reports current dimensions and relevant options to aid comparison.

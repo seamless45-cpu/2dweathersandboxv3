@@ -789,39 +789,80 @@ var cellHeight = 12000. / 300.; // guiControls.simHeight / sim_res_y;  // in met
 var frameNum = 0;
 // Consecutive-frame exception counter for the draw loop; see draw().
 let drawFrameErrorStreak = 0;
-var lastClockContrastSampleTime = -Infinity;
-const sceneContrastSamples = new Uint8Array(9 * 9 * 4);
-function getSceneContrastTextColor(screenX, screenY)
+// Contrast is cosmetic: read the finished frame through a fenced pack buffer
+// rather than making the CPU wait for every preceding GPU draw. Each clock or
+// station retains its previous colour while its own sample is in flight.
+const sceneContrastStates = new WeakMap();
+function disposeSceneContrast(owner)
+{
+  const state = sceneContrastStates.get(owner);
+  if (!state) return;
+  if (state.sync) state.gl.deleteSync(state.sync);
+  if (state.buffer) state.gl.deleteBuffer(state.buffer);
+  sceneContrastStates.delete(owner);
+}
+function getSceneContrastTextColor(screenX, screenY, owner)
 {
   if (!gl || !canvas || gl.isContextLost() || canvas.width < 1 || canvas.height < 1)
     return '#ffffff';
-
+  let state = sceneContrastStates.get(owner);
+  if (!state || state.gl !== gl) {
+    state = {gl, buffer: null, sync: null, size: 0, color: '#ffffff', lastRequest: -Infinity, disabled: false};
+    sceneContrastStates.set(owner, state);
+  }
+  if (state.sync) {
+    const status = gl.clientWaitSync(state.sync, 0, 0);
+    if (status === gl.WAIT_FAILED) {
+      gl.deleteSync(state.sync);
+      state.sync = null;
+      state.disabled = true; // retain the last colour instead of stalling the GPU
+    } else if (status === gl.ALREADY_SIGNALED || status === gl.CONDITION_SATISFIED) {
+      gl.deleteSync(state.sync);
+      state.sync = null;
+      const values = new Uint8Array(state.size * state.size * 4);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, state.buffer);
+      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, values);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      let luminanceSum = 0;
+      for (let i = 0; i < values.length; i += 4) {
+        const r = values[i] / 255, g = values[i + 1] / 255, b = values[i + 2] / 255;
+        const linearR = r <= 0.04045 ? r / 12.92 : Math.pow((r + 0.055) / 1.055, 2.4);
+        const linearG = g <= 0.04045 ? g / 12.92 : Math.pow((g + 0.055) / 1.055, 2.4);
+        const linearB = b <= 0.04045 ? b / 12.92 : Math.pow((b + 0.055) / 1.055, 2.4);
+        luminanceSum += 0.2126 * linearR + 0.7152 * linearG + 0.0722 * linearB;
+      }
+      state.color = luminanceSum / (state.size * state.size) > 0.43 ? '#111820' : '#ffffff';
+    }
+  }
+  if (state.disabled || state.sync || performance.now() - state.lastRequest < 1000)
+    return state.color;
+  // DOM geometry is needed only when issuing a new sample, not while polling.
+  if (typeof screenX === 'function') {
+    const position = screenX();
+    screenX = position.x;
+    screenY = position.y;
+  }
   const bounds = canvas.getBoundingClientRect();
-  if (bounds.width <= 0 || bounds.height <= 0)
-    return '#ffffff';
-
+  if (bounds.width <= 0 || bounds.height <= 0) return state.color;
   const centerX = Math.floor((screenX - bounds.left) * canvas.width / bounds.width);
   const centerY = Math.floor((screenY - bounds.top) * canvas.height / bounds.height);
-  const sampleSize = Math.min(9, canvas.width, canvas.height);
-  const x = clamp(centerX - Math.floor(sampleSize / 2), 0, canvas.width - sampleSize);
-  const y = clamp(canvas.height - centerY - Math.floor(sampleSize / 2) - 1, 0, canvas.height - sampleSize);
+  const size = Math.min(9, canvas.width, canvas.height);
+  const x = clamp(centerX - Math.floor(size / 2), 0, canvas.width - size);
+  const y = clamp(canvas.height - centerY - Math.floor(size / 2) - 1, 0, canvas.height - size);
+  if (!state.buffer) state.buffer = gl.createBuffer();
+  if (!state.buffer) { state.disabled = true; return state.color; }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.readBuffer(gl.BACK);
-  gl.readPixels(x, y, sampleSize, sampleSize, gl.RGBA, gl.UNSIGNED_BYTE, sceneContrastSamples);
-
-  let luminanceSum = 0;
-  const sampleLength = sampleSize * sampleSize * 4;
-  for (let i = 0; i < sampleLength; i += 4) {
-    const r = sceneContrastSamples[i] / 255;
-    const g = sceneContrastSamples[i + 1] / 255;
-    const b = sceneContrastSamples[i + 2] / 255;
-    const linearR = r <= 0.04045 ? r / 12.92 : Math.pow((r + 0.055) / 1.055, 2.4);
-    const linearG = g <= 0.04045 ? g / 12.92 : Math.pow((g + 0.055) / 1.055, 2.4);
-    const linearB = b <= 0.04045 ? b / 12.92 : Math.pow((b + 0.055) / 1.055, 2.4);
-    luminanceSum += 0.2126 * linearR + 0.7152 * linearG + 0.0722 * linearB;
-  }
-
-  return luminanceSum / (sampleSize * sampleSize) > 0.43 ? '#111820' : '#ffffff';
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, state.buffer);
+  gl.bufferData(gl.PIXEL_PACK_BUFFER, size * size * 4, gl.STREAM_READ);
+  gl.readPixels(x, y, size, size, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+  state.sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+  state.size = size;
+  state.lastRequest = performance.now();
+  if (!state.sync) state.disabled = true;
+  // A later frame submits work normally; never force a flush or wait here.
+  return state.color;
 }
 var lastFrameNum = 0;
 
@@ -844,6 +885,73 @@ var weatherStationSamplingBuffers = {
 function readRgbaChannel(data, pixelOffset, channel)
 {
   return pixelOffset < 0 ? 0 : data[pixelOffset + channel];
+}
+
+// Opt-in, asynchronous GPU timing. One non-overlapping query at a time,
+// sampled sparsely; never wait for the GPU or change rendering settings.
+function createGpuPerformanceProfiler(gl, enabled)
+{
+  const names = ['velocity', 'curl', 'vorticity', 'boundary', 'advection', 'pressure', 'lighting',
+                 'precipitation', 'lightning slots', 'ambient blur', 'sky', 'scene', 'bloom', 'post'];
+  const ext = enabled && gl.getExtension('EXT_disjoint_timer_query_webgl2');
+  let next = 0, selected = null, active = null, pending = null, cpuStart = 0;
+  const results = Object.fromEntries(names.map(name => [name, []]));
+  const cpuFrames = [];
+  const cpuSections = {};
+  const cpuStarts = {};
+  const append = (array, value) => { array.push(value); if (array.length > 60) array.shift(); };
+  function poll() {
+    if (!pending || !gl.getQueryParameter(pending.query, gl.QUERY_RESULT_AVAILABLE)) return;
+    const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT);
+    const ms = gl.getQueryParameter(pending.query, gl.QUERY_RESULT) / 1e6;
+    if (!disjoint && Number.isFinite(ms)) append(results[pending.name], ms);
+    gl.deleteQuery(pending.query);
+    pending = null;
+  }
+  return {
+    frame(frame) {
+      if (!enabled) return;
+      cpuStart = performance.now();
+      if (ext) poll();
+      selected = ext && !pending && frame % 30 === 0 ? names[next++ % names.length] : null;
+    },
+    begin(name) {
+      if (name !== selected || active || pending) return;
+      const query = gl.createQuery();
+      if (!query) { selected = null; return; }
+      gl.beginQuery(ext.TIME_ELAPSED_EXT, query);
+      active = {query, name};
+      selected = null;
+    },
+    end(name) {
+      if (!active || active.name !== name) return;
+      gl.endQuery(ext.TIME_ELAPSED_EXT);
+      pending = active;
+      active = null;
+    },
+    cpuBegin(name) { if (enabled) cpuStarts[name] = performance.now(); },
+    cpuEnd(name) {
+      if (!enabled || cpuStarts[name] === undefined) return;
+      if (!cpuSections[name]) cpuSections[name] = [];
+      append(cpuSections[name], performance.now() - cpuStarts[name]);
+      delete cpuStarts[name];
+    },
+    finish() {
+      if (!enabled) return;
+      if (active) this.end(active.name);
+      append(cpuFrames, performance.now() - cpuStart);
+    },
+    report() {
+      const summarize = samples => {
+        if (!samples.length) return null;
+        const sorted = [...samples].sort((a, b) => a - b);
+        return {samples: sorted.length, medianMs: sorted[Math.floor(sorted.length / 2)], maxMs: sorted[sorted.length - 1]};
+      };
+      return {gpuTimerSupported: !!ext, cpuFrame: summarize(cpuFrames),
+              cpuSections: Object.fromEntries(Object.entries(cpuSections).map(([name, samples]) => [name, summarize(samples)])),
+              gpu: Object.fromEntries(names.map(name => [name, summarize(results[name])]))};
+    }
+  };
 }
 
 // global framebuffers for measurements
@@ -1799,7 +1907,6 @@ class Weatherstation
   #skyCondition = 'CLR';
   #weatherIconElement;
   #textColor = '#ffffff';
-  #lastContrastSampleTime = -Infinity;
 
   #netIRpow = 0;
   #solarPower = 0;
@@ -2039,6 +2146,7 @@ class Weatherstation
 
   destroy()
   {
+    disposeSceneContrast(this);
     this.#historyChart.destroy();
     this.#mainDiv.remove();
     let index = weatherStations.indexOf(this);
@@ -2412,11 +2520,7 @@ class Weatherstation
     // if (screenX > 0 && screenX < canvas.width && screenY > 0 && screenY < canvas.height) {
     this.#mainDiv.style.left = screenX + 'px';
     this.#mainDiv.style.top = screenY + 'px';
-    const contrastSampleTime = performance.now();
-    if (contrastSampleTime - this.#lastContrastSampleTime >= 1000) {
-      this.#textColor = getSceneContrastTextColor(screenX + this.#width / 2, screenY + this.#height * 0.4);
-      this.#lastContrastSampleTime = contrastSampleTime;
-    }
+    this.#textColor = getSceneContrastTextColor(screenX + this.#width / 2, screenY + this.#height * 0.4, this);
     this.#stationMarkerLabel.style.color = this.#textColor;
     this.#menuHint.dataset.contrast = this.#textColor == '#111820' ? 'dark' : 'light';
     // this.#canvas.style.left = screenX + 'px';
@@ -5186,6 +5290,19 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     throw new Error('Your browser does not support WebGL2.');
   }
 
+  const gpuProfilerEnabled = typeof location !== 'undefined' && typeof URLSearchParams !== 'undefined' &&
+                             new URLSearchParams(location.search).get('gpuProfile') === '1';
+  const gpuProfiler = createGpuPerformanceProfiler(gl, gpuProfilerEnabled);
+  if (gpuProfilerEnabled) {
+    window.weatherPerformanceReport = () => ({...gpuProfiler.report(),
+      simulation: [sim_res_x, sim_res_y], canvas: [canvas.width, canvas.height],
+      iterationsPerFrame: guiControls.IterPerFrame, zoom: cam.curZoom,
+      hdrQuality: guiControls.hdrQuality, zoomSupersample: previousZoomSupersampleActive,
+      bloom: guiControls.bloomEnabled, volumetric: guiControls.volumetricCloudLighting,
+      precipitation: guiControls.enablePrecipitation, paused: guiControls.paused});
+    console.info('GPU profiling enabled. After at least 15 seconds, run weatherPerformanceReport() in the console.');
+  }
+
   const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
   if (sim_res_x > maxTextureSize || sim_res_y > maxTextureSize) {
     const message = `This device supports simulation textures up to ${maxTextureSize} cells per side. Reduce the resolution and try again.`;
@@ -7489,8 +7606,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.110'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.110')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.111'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.111')
   ]);
 
   const [
@@ -8439,7 +8556,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.110');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.111');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9009,6 +9126,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     // with no visible symptom, which is exactly the failure this guards.
     requestAnimationFrame(draw);
 
+    gpuProfiler.frame(frameNum);
     try {
 
     let motionBlurSimulationSteps = 0;
@@ -9201,7 +9319,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             gl.bindTexture(gl.TEXTURE_2D, wallTexture_0);
             gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_1);
             gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.NONE, gl.COLOR_ATTACHMENT2 ]);
+            if (i === 0) gpuProfiler.begin('velocity');
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            if (i === 0) gpuProfiler.end('velocity');
 
             // calc curl
             gl.useProgram(curlProgram);
@@ -9209,7 +9329,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             gl.bindTexture(gl.TEXTURE_2D, baseTexture_1);
             gl.bindFramebuffer(gl.FRAMEBUFFER, curlFrameBuff);
             gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
+            if (i === 0) gpuProfiler.begin('curl');
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            if (i === 0) gpuProfiler.end('curl');
 
             // calculate vorticity
             gl.useProgram(vorticityProgram);
@@ -9217,7 +9339,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             gl.bindTexture(gl.TEXTURE_2D, curlTexture);
             gl.bindFramebuffer(gl.FRAMEBUFFER, vortForceFrameBuff);
             gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
+            if (i === 0) gpuProfiler.begin('vorticity');
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            if (i === 0) gpuProfiler.end('vorticity');
 
             // apply vorticity, boundary conditions and user input
             gl.useProgram(boundaryProgram);
@@ -9240,7 +9364,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
             gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_0);
             gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2 ]);
+            if (i === 0) gpuProfiler.begin('boundary');
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            if (i === 0) gpuProfiler.end('boundary');
 
             // calc and apply advection
             gl.useProgram(advectionProgram);
@@ -9252,7 +9378,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             gl.bindTexture(gl.TEXTURE_2D, wallTexture_0);
             gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_1);
             gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2 ]);
+            if (i === 0) gpuProfiler.begin('advection');
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            if (i === 0) gpuProfiler.end('advection');
 
             // calc and apply pressure
             gl.useProgram(pressureProgram);
@@ -9262,7 +9390,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
             gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_0);
             gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.NONE, gl.COLOR_ATTACHMENT2 ]);
+            if (i === 0) gpuProfiler.begin('pressure');
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            if (i === 0) gpuProfiler.end('pressure');
 
             // calc light
             gl.useProgram(lightingProgram);
@@ -9284,7 +9414,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             lightEven = !lightEven;
 
             gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1 ]); // calc light
+            if (i === 0) gpuProfiler.begin('lighting');
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            if (i === 0) gpuProfiler.end('lighting');
             ambientLightDirty = true;
 
 
@@ -9338,7 +9470,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, destTF);
               gl.beginTransformFeedback(gl.POINTS);
               gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
+              if (i === 0) gpuProfiler.begin('precipitation');
               gl.drawArrays(gl.POINTS, 0, NUM_DROPLETS);
+              if (i === 0) gpuProfiler.end('precipitation');
               gl.endTransformFeedback();
               gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
 
@@ -9387,7 +9521,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuffs[lightningDst]);
               gl.viewport(0, 0, numLightningSlots, 2);
               gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
+              if (i === 0) gpuProfiler.begin('lightning slots');
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+              if (i === 0) gpuProfiler.end('lightning slots');
               gl.viewport(0, 0, sim_res_x, sim_res_y);
               lightningDataSrc = lightningDst;
               if (manualStrike) {
@@ -9395,7 +9531,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
                 // A synchronous readback only on a user request acknowledges a free
                 // slot; otherwise retry once next frame without dropping the click.
                 gl.readBuffer(gl.COLOR_ATTACHMENT0);
+                gpuProfiler.cpuBegin('manual lightning readback');
                 gl.readPixels(0, 0, numLightningSlots, 1, gl.RGBA, gl.FLOAT, manualSlotReadback);
+                gpuProfiler.cpuEnd('manual lightning readback');
                 let acceptedSlot = -1;
                 for (let slot = 0; slot < numLightningSlots; slot++) {
                   if (Math.abs(manualSlotReadback[slot * 4 + 2] - iterNum) < 0.5) {
@@ -9425,7 +9563,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             }
 
             if (iterNum % 208 == 0) { // ~every 60 in game seconds:  0.00008 *3600 * 208 = 59.9
+              gpuProfiler.cpuBegin('station readback');
               measureWeatherStations();
+              gpuProfiler.cpuEnd('station readback');
             }
             if (!airplaneMode) {
               iterNum++;
@@ -9564,7 +9704,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       } // end of simulation part
 
       if (guiControls.showGraph) {
+        gpuProfiler.cpuBegin('sounding graph');
         soundingGraph.draw(Math.floor(Math.abs(mod(mouseXinSim * sim_res_x, sim_res_x))), Math.floor(mouseYinSim * sim_res_y));
+        gpuProfiler.cpuEnd('sounding graph');
       }
 
     } // END OF NOT SETUP MODE
@@ -9696,6 +9838,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     if (guiControls.displayMode == 'DISP_REAL') {
 
       if (ambientLightDirty) { //  Ambient Light Calculation
+        gpuProfiler.begin('ambient blur');
         gl.bindVertexArray(postProcessingVao);
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, ambientLightFBOs[0].frameBuffer);
@@ -9750,6 +9893,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           gl.disable(gl.BLEND);
         }
         gl.bindVertexArray(fluidVao);
+        gpuProfiler.end('ambient blur');
         ambientLightDirty = false;
       }
 
@@ -9809,7 +9953,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       gl.drawBuffers(hasLightningCoverage ? [gl.COLOR_ATTACHMENT0, gl.NONE, gl.COLOR_ATTACHMENT2] : [gl.COLOR_ATTACHMENT0]);
 
+      gpuProfiler.begin('sky');
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to hdrFramebuffer
+      gpuProfiler.end('sky');
 
       gl.enable(gl.BLEND);
       // Premultiplied alpha: the realistic display premultiplies its surface
@@ -9863,7 +10009,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       else if (hasLightningBloom)
         gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
 
+      gpuProfiler.begin('scene');
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to hdr framebuffer
+      gpuProfiler.end('scene');
       if (hasLightningBloom || hasLightningCoverage)
         gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
 
@@ -9874,6 +10022,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.bindVertexArray(postProcessingVao);
 
       if (guiControls.bloomEnabled) {
+        gpuProfiler.begin('bloom');
         gl.useProgram(isolateBrightPartsProgram);
 
         gl.activeTexture(gl.TEXTURE0);
@@ -9934,6 +10083,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       }
 
       gl.disable(gl.BLEND);
+      gpuProfiler.end('bloom');
       }
 
       if ((guiControls.temporalAAEnabled || guiControls.motionBlurEnabled) && !temporalHistoryTexture)
@@ -10003,7 +10153,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       // No clear here: the post pass writes every fragment of the fullscreen quad.
 
       gl.drawBuffers([ gl.BACK ]);
+      gpuProfiler.begin('post');
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to canvas
+      gpuProfiler.end('post');
 
       if ((guiControls.temporalAAEnabled || guiControls.motionBlurEnabled) && !SETUP_MODE && temporalHistoryTexture) {
         gl.activeTexture(gl.TEXTURE2);
@@ -10185,12 +10337,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to canvas
     }
 
+    gpuProfiler.cpuBegin('station UI and contrast');
     if (displayWeatherStations) {
       for (let i = 0; i < weatherStations.length; i++) {
         weatherStations[i].updateCanvas(); // update weather stations
       }
     }
     updateClockTextContrast();
+    gpuProfiler.cpuEnd('station UI and contrast');
 
     updateDiagnosticOverlays();
     frameNum++;
@@ -10200,6 +10354,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       console.error('draw() failed (consecutive frames: ' + drawFrameErrorStreak + ')', error);
       if (drawFrameErrorStreak == 120)
         showDrawLoopErrorOverlay();
+    } finally {
+      gpuProfiler.finish();
     }
   }
 
@@ -10488,15 +10644,16 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   function updateClockTextContrast()
   {
-    const contrastSampleTime = performance.now();
-    if (!clockEl || clockEl.hidden || contrastSampleTime - lastClockContrastSampleTime < 1000)
-      return;
-
-    const bounds = clockEl.getBoundingClientRect();
-    const textColor = getSceneContrastTextColor(bounds.left + bounds.width * 0.5, bounds.top + bounds.height * 0.5);
-    clockEl.dataset.contrast = textColor == '#ffffff' ? 'light' : 'dark';
-    clockEl.style.setProperty('--clock-text-color', textColor);
-    lastClockContrastSampleTime = contrastSampleTime;
+    if (!clockEl || clockEl.hidden) return;
+    const textColor = getSceneContrastTextColor(() => {
+      const bounds = clockEl.getBoundingClientRect();
+      return {x: bounds.left + bounds.width * 0.5, y: bounds.top + bounds.height * 0.5};
+    }, 0, clockEl);
+    const contrast = textColor == '#ffffff' ? 'light' : 'dark';
+    if (clockEl.dataset.contrast !== contrast) {
+      clockEl.dataset.contrast = contrast;
+      clockEl.style.setProperty('--clock-text-color', textColor);
+    }
   }
 
   function onUpdateTimeOfDaySlider()
@@ -10704,7 +10861,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.110');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.111');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
