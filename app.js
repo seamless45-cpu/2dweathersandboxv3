@@ -222,6 +222,56 @@ function showNewSimulationSetup()
 
 var FPS = 60.0;
 
+// Measure the browser's animation-frame cadence before the simulation starts.
+// A numeric target above this ceiling must not force the simulation down to one
+// step/frame on a lower-refresh screen. This never changes the saved target.
+function frameRateFromIntervals(intervals)
+{
+  const valid = intervals.filter(ms => Number.isFinite(ms) && ms >= 2 && ms <= 100).sort((a, b) => a - b);
+  if (valid.length < 4) return null;
+  // A low percentile avoids occasional skipped startup frames, without letting
+  // a single unusually short interval invent a high refresh rate.
+  return Math.round(1000 / valid[Math.floor((valid.length - 1) * 0.25)]);
+}
+
+function measureAnimationFrameCeiling()
+{
+  if (document.hidden) return Promise.resolve(null);
+  return new Promise(resolve => {
+    let previous = null, pending = null, finished = false;
+    const intervals = [];
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      if (pending !== null) cancelAnimationFrame(pending);
+      resolve(frameRateFromIntervals(intervals));
+    };
+    const sample = timestamp => {
+      if (finished) return;
+      if (previous !== null && timestamp > previous) intervals.push(timestamp - previous);
+      previous = timestamp;
+      if (intervals.length >= 12 || document.hidden) finish();
+      else pending = requestAnimationFrame(sample);
+    };
+    const timeout = setTimeout(finish, 750);
+    pending = requestAnimationFrame(sample);
+  });
+}
+
+function automaticSimulationIterations(current, fps, requestedTarget, frameCeiling)
+{
+  if (requestedTarget === 'Unlocked') return current;
+  const requested = Number(requestedTarget);
+  if (!Number.isFinite(requested) || requested <= 0 || !Number.isFinite(fps) || fps < 0) return current;
+  const target = Number.isFinite(frameCeiling) && frameCeiling > 0 ? Math.min(requested, frameCeiling) : requested;
+  // Frame counters and 59.94 Hz displays fluctuate by a fraction of a frame.
+  // Probe for extra throughput near the achievable target, rather than only
+  // on an exact integer match; reduce the workload when it falls behind.
+  const adjustment = fps >= target - Math.max(1.5, target * 0.025) ? 1 : (fps / target - 1.0) * 5.0;
+  return Math.round(Math.min(50, Math.max(1, current + adjustment)));
+}
+
 
 function mixGeneric(a, b, t, {clamp = false} = {})
 {
@@ -6204,7 +6254,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       'Weather Station Overlays': ['Hides or updates station cards and charts. Hiding them can reduce browser rendering overhead; weather station measurements continue.', 'Low to medium', 'low'],
       'Iterations / Frame': ['Controls how many weather simulation steps run per rendered frame. Fewer steps reduce GPU work per frame but slow simulated-time progress; higher values can reduce frame rate.', 'High, with simulation-speed tradeoff', 'high'],
       'Auto Adjust': ['Automatically changes simulation steps per frame to meet the selected Auto FPS Target. This changes simulation-time throughput, not the result of an individual step. Unlocked leaves the iteration count unchanged and lets the browser run at the display refresh rate.', 'Medium, with simulation-speed tradeoff', 'medium'],
-      'Auto FPS Target': ['Sets the frame-rate goal for Auto Adjust. Unlocked disables iteration auto-adjustment; the browser schedules rendering at the maximum rate supported by the display. Numeric targets may reduce iterations per frame. A 120 FPS target cannot override a lower display refresh rate or rendering workload.', 'Medium, with simulation-speed tradeoff', 'medium'],
+      'Auto FPS Target': ['Sets the frame-rate goal for Auto Adjust. Unlocked disables iteration auto-adjustment; the browser schedules rendering at the maximum rate supported by the display. Numeric targets may reduce iterations per frame. Auto Adjust uses the measured browser frame ceiling when it is below the selected target; the saved target is unchanged.', 'Medium, with simulation-speed tradeoff', 'medium'],
     };
     let performanceHelpHideTimer;
     let performanceTooltip = document.querySelector('.performance-tooltip');
@@ -7439,8 +7489,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.107'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.107')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.108'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.108')
   ]);
 
   const [
@@ -8389,7 +8439,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.107');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.108');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8935,6 +8985,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   for (const station of weatherStations.slice()) // initial measurement may remove stations on solid terrain
     station.measure();
 
+  // Probe while the initial loading screen is still shown and before the
+  // per-frame simulation workload starts, so the probe sees display cadence.
+  const animationFrameCeiling = await measureAnimationFrameCeiling();
+  let lastFpsSampleTime = performance.now();
   setInterval(calcFps, 1000); // log fps
   setInterval(publishWeatherDataIfEnabled, 1000);
   // The first bolt, just after the loading screen has gone. One worker, and it
@@ -10650,7 +10704,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.107');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.108');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
@@ -10687,13 +10741,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     if (isPageHidden()) {
       lastFrameNum = frameNum;
       lastPerformanceIterationNum = iterNum;
+      lastFpsSampleTime = performance.now();
       return;
     }
 
     if (!isPageHidden()) {
-      FPS = frameNum - lastFrameNum;
+      const now = performance.now();
+      const elapsed = Math.max((now - lastFpsSampleTime) / 1000, 0.001);
+      lastFpsSampleTime = now;
+      FPS = (frameNum - lastFrameNum) / elapsed;
       lastFrameNum = frameNum;
-      measuredSimulationStepsPerSecond = iterNum - lastPerformanceIterationNum;
+      measuredSimulationStepsPerSecond = Math.round((iterNum - lastPerformanceIterationNum) / elapsed);
       lastPerformanceIterationNum = iterNum;
       updateCurrentPerformanceDisplay();
       if (clockFpsEl) {
@@ -10707,13 +10765,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         console.log(FPS + ' FPS   ' + guiControls.IterPerFrame + ' Iterations / frame      ' + FPS * guiControls.IterPerFrame + ' Iterations / second');
 
         if (guiControls.auto_IterPerFrame && !airplaneMode) {
-          if (guiControls.autoFpsTarget != 'Unlocked') {
-            const fpsTarget = Number(guiControls.autoFpsTarget);
-            adjIterPerFrame((FPS / fpsTarget - 1.0) * 5.0); // example: ((30 / 60)-1.0) = -0.5
-
-            if (FPS == fpsTarget)
-              adjIterPerFrame(1);
-          }
+          guiControls.IterPerFrame = automaticSimulationIterations(
+            guiControls.IterPerFrame, FPS, guiControls.autoFpsTarget, animationFrameCeiling);
         }
       }
       // calculate total amounts of water and smoke for verification of fluid simulation
