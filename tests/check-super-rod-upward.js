@@ -6,7 +6,7 @@ const root = path.join(__dirname, '..');
 const read = p => fs.readFileSync(path.join(root, p), 'utf8');
 const app = read('app.js');
 const location = read('shaders/fragment/lightningLocationShader.frag');
-const display = read('shaders/fragment/realisticDisplayShader.frag');
+const display = read('shaders/fragment/realisticDisplayShader.frag') + '\n' + read('shaders/fragment/lightningRenderStateShader.frag');
 const common = read('shaders/common.glsl');
 let passed = 0, failed = 0;
 function check(name, ok) { console.log((ok ? 'PASS ' : 'FAIL ') + name); if (ok) passed++; else failed++; }

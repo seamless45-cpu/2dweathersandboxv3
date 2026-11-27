@@ -2,9 +2,9 @@
 const assert = require('assert');
 const fs = require('fs');
 const location = fs.readFileSync('shaders/fragment/lightningLocationShader.frag','utf8');
-const display = fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','utf8');
+const display = fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','utf8') + '\n' + fs.readFileSync('shaders/fragment/lightningRenderStateShader.frag','utf8');
 assert.doesNotMatch(location, /upwardLeaderCloudTarget|isGroundInitiated|findStormCloudTop|result\.w \+=/);
 assert.doesNotMatch(display, /drawUpperAtmosphereLightning|drawAnvilCrawler|displayGroundToCloud|spriteBody/);
-assert.match(display, /if \(abs\(lightningMeta\.y - 5\.0\) < 0\.25\)\s*continue/);
+assert.match(display, /if \(abs\(lightningMeta\.y - 5\.0\) < 0\.25\)\s*return/);
 assert.match(display, /abs\(strikeMeta\.y\) >= 0\.25 && abs\(strikeMeta\.y - 1\.0\) >= 0\.25/);
 console.log('Removed effects cannot spawn or render, including legacy upward slots');

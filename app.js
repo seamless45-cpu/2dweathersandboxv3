@@ -1438,12 +1438,10 @@ function createLightningReadback(gl, values, width)
     poll() {
       if (!sync) return null;
       const status = gl.clientWaitSync(sync, 0, 0);
-      if (status === gl.WAIT_FAILED) {
-        disableAsync();
+      if (status !== gl.WAIT_FAILED && status !== gl.ALREADY_SIGNALED && status !== gl.CONDITION_SATISFIED)
         return null;
-      }
-      if (status !== gl.ALREADY_SIGNALED && status !== gl.CONDITION_SATISFIED)
-        return null;
+      // WAIT_FAILED is exceptional; retrieve the staged snapshot before falling
+      // back to synchronous reads, so an accepted event is not retried twice.
       gl.deleteSync(sync);
       sync = null;
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
@@ -1451,6 +1449,7 @@ function createLightningReadback(gl, values, width)
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
       const result = pending;
       pending = null;
+      if (status === gl.WAIT_FAILED) disableAsync();
       return result;
     },
     request(framebuffer, sample) {
@@ -7608,8 +7607,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.112'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.112')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.113'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.113')
   ]);
 
   const [
@@ -7626,6 +7625,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     boundaryShader,
     lightingShader,
     lightningLocationShader,
+    lightningRenderStateShader,
     setupShader,
     temperatureDisplayShader,
     airQualityDisplayShader,
@@ -7657,6 +7657,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     'boundaryShader.frag',
     'lightingShader.frag',
     'lightningLocationShader.frag',
+    'lightningRenderStateShader.frag',
     'setupShader.frag',
     'temperatureDisplayShader.frag',
     'airQualityDisplayShader.frag',
@@ -7688,6 +7689,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const lightingProgram = createProgram(simVertexShader, lightingShader);
 
   const lightningLocationProgram = createProgram(simVertexShader, lightningLocationShader);
+  const lightningRenderStateProgram = createProgram(simVertexShader, lightningRenderStateShader);
 
   const setupProgram = createProgram(simVertexShader, setupShader);
 
@@ -8125,6 +8127,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const numLightningSlots = 6;
   const START_ITERNUM_INDEX = 2; // matches #define START_ITERNUM in shaders/common.glsl
   const lightningDataTextures = [gl.createTexture(), gl.createTexture()];
+  const lightningRenderStateTexture = gl.createTexture();
   let lightningDataSrc = 0; // index of the slot array that is currently valid
 
   // Static texures:
@@ -8177,6 +8180,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const lightFrameBuff_1 = gl.createFramebuffer();
   precipitationFeedbackFrameBuff = gl.createFramebuffer();
   const lightningDataFrameBuffs = [gl.createFramebuffer(), gl.createFramebuffer()];
+  const lightningRenderStateFrameBuff = gl.createFramebuffer();
 
   let lastSuperboltCheckIteration = 0;
   let lightningReadbackGeneration = 0;
@@ -8349,6 +8353,18 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     // all slots idle
     gl.clearBufferfv(gl.COLOR, 0, zeroColorClearValue);
   }
+
+  // Render-only strike state: two rows of float32 values per slot. The pass
+  // reads the current slot texture and never changes the simulation or slots.
+  gl.bindTexture(gl.TEXTURE_2D, lightningRenderStateTexture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, numLightningSlots, 2, 0, gl.RGBA, gl.FLOAT, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, lightningRenderStateFrameBuff);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, lightningRenderStateTexture, 0);
+  gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
 
   // Load images together so one request does not delay the rest.
   let [
@@ -8565,7 +8581,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.112');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.113');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8845,6 +8861,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'curlTex'), 6);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningTex'), 7);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningDataTex'), 8);
+  gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningRenderStateTex'), 11);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'ambientLightTex'), 9);
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'dryLapse'), dryLapse);
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'cellHeight'), cellHeight);
@@ -8999,6 +9016,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   var destTF;
   let lastRealTimeCycleFrameMs = -1;
   let lastLightningSoundIteration = 0;
+  let lastPlayedLightningSoundIteration = -1;
   let lastLightningSoundCheckIteration = 0;
   let lightningSoundFrame = 0;
   let lastRodCaptureCheckIteration = 0;
@@ -9025,7 +9043,41 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const countedSlotStartIter = new Float64Array(numLightningSlots);
   const lightningDataValues = new Float32Array(numLightningSlots * 2 * 4);
   const lightningReadback = createLightningReadback(gl, lightningDataValues, numLightningSlots);
-  const manualSlotReadback = new Float32Array(numLightningSlots * 4);
+  const manualSlotReadback = new Float32Array(numLightningSlots * 2 * 4);
+  const manualLightningReadback = createLightningReadback(gl, manualSlotReadback, numLightningSlots);
+  let manualLightningReadbackPending = false;
+
+  function acknowledgeManualLightning(sample)
+  {
+    if (!sample) return;
+    manualLightningReadbackPending = false;
+    if (sample.generation !== lightningReadbackGeneration) return;
+    let acceptedSlot = -1;
+    for (let slot = 0; slot < numLightningSlots; slot++) {
+      if (Math.abs(manualSlotReadback[slot * 4 + 2] - sample.iteration) < 0.5) {
+        acceptedSlot = slot;
+        break;
+      }
+    }
+    if (acceptedSlot < 0) return; // all slots were full; retry the queued click
+    if (pendingArtificialLightning[0] === sample.strike) pendingArtificialLightning.shift();
+    artificialLightningStatus.status = pendingArtificialLightning.length ? 'Queued: ' + pendingArtificialLightning.length : 'Ready';
+    manualLightningActiveUntil = Math.max(manualLightningActiveUntil, sample.iteration + 504);
+    const offset = acceptedSlot * 4;
+    const targetX = manualSlotReadback[offset];
+    const manualGroundStrike = ['ordinary_cg', 'positive_cg', 'superbolt', 'hyperbolt'].includes(sample.strike.variant);
+    if (manualGroundStrike && countedSlotStartIter[acceptedSlot] !== sample.iteration &&
+        lightningRods.some(rod => Math.abs(targetX - rod.x) < 1e-4)) {
+      lightningRodCaptures++;
+      countedSlotStartIter[acceptedSlot] = sample.iteration;
+      updateLightningRodStatus();
+    }
+    if (guiControls.sound && soundSystem && sample.iteration > lastPlayedLightningSoundIteration) {
+      soundSystem.soundThunder(targetX, manualSlotReadback[offset + 1], Math.pow(manualSlotReadback[offset + 3], 2.0));
+      lastLightningSoundIteration = Math.max(lastLightningSoundIteration, sample.iteration);
+      lastPlayedLightningSoundIteration = sample.iteration;
+    }
+  }
 
   function hashShakeStep(seed, step)
   {
@@ -9140,6 +9192,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     let motionBlurSimulationSteps = 0;
     let artificialAttemptedThisFrame = false;
+    acknowledgeManualLightning(manualLightningReadback.poll());
     let camPanSpeed = guiControls.camSpeed;
 
     if (rightCtrlPressed) {
@@ -9509,7 +9562,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               const lightningDst = 1 - lightningDataSrc;
               gl.useProgram(lightningLocationProgram);
               gl.uniform1f(getUniformLoc(lightningLocationProgram, 'iterNum'), iterNum);
-              const manualStrike = !artificialAttemptedThisFrame && iterNum > 0 ? pendingArtificialLightning[0] : null;
+              const manualStrike = !artificialAttemptedThisFrame && !manualLightningReadbackPending && iterNum > 0 ? pendingArtificialLightning[0] : null;
               gl.uniform4f(getUniformLoc(lightningLocationProgram, 'artificialStrike'),
                            manualStrike ? manualStrike.x : 0, manualStrike ? manualStrike.y : 0, 2.8, manualStrike ? 1 : 0);
               gl.uniform1f(getUniformLoc(lightningLocationProgram, 'artificialStrikeVariant'),
@@ -9537,35 +9590,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               lightningDataSrc = lightningDst;
               if (manualStrike) {
                 artificialAttemptedThisFrame = true;
-                // A synchronous readback only on a user request acknowledges a free
-                // slot; otherwise retry once next frame without dropping the click.
-                gl.readBuffer(gl.COLOR_ATTACHMENT0);
-                gpuProfiler.cpuBegin('manual lightning readback');
-                gl.readPixels(0, 0, numLightningSlots, 1, gl.RGBA, gl.FLOAT, manualSlotReadback);
-                gpuProfiler.cpuEnd('manual lightning readback');
-                let acceptedSlot = -1;
-                for (let slot = 0; slot < numLightningSlots; slot++) {
-                  if (Math.abs(manualSlotReadback[slot * 4 + 2] - iterNum) < 0.5) {
-                    acceptedSlot = slot;
-                    break;
-                  }
-                }
-                if (acceptedSlot >= 0) {
-                  pendingArtificialLightning.shift();
-                  artificialLightningStatus.status = pendingArtificialLightning.length ? 'Queued: ' + pendingArtificialLightning.length : 'Ready';
-                  manualLightningActiveUntil = iterNum + 504;
-                  const offset = acceptedSlot * 4;
-                  const targetX = manualSlotReadback[offset];
-                  const manualGroundStrike = ['ordinary_cg', 'positive_cg', 'superbolt', 'hyperbolt'].includes(manualStrike.variant);
-                  if (manualGroundStrike && lightningRods.some(rod => Math.abs(targetX - rod.x) < 1e-4)) {
-                    lightningRodCaptures++;
-                    countedSlotStartIter[acceptedSlot] = iterNum;
-                    updateLightningRodStatus();
-                  }
-                  if (guiControls.sound && soundSystem) {
-                    soundSystem.soundThunder(targetX, manualSlotReadback[offset + 1], Math.pow(manualSlotReadback[offset + 3], 2.0));
-                    lastLightningSoundIteration = iterNum;
-                  }
+                // Keep the click queued until its fenced GPU snapshot confirms
+                // whether the slot was accepted. Never issue it twice in flight.
+                const sample = {strike: manualStrike, iteration: iterNum, generation: lightningReadbackGeneration};
+                const request = manualLightningReadback.request(lightningDataFrameBuffs[lightningDataSrc], sample);
+                if (request.accepted) {
+                  manualLightningReadbackPending = !request.result;
+                  acknowledgeManualLightning(request.result);
                 }
               }
 
@@ -9703,9 +9734,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
                 soundSystem.soundThunder(targetX, originY, Math.pow(strikeIntensity, 2.0) * strikeSoundMult);
               }
               lastLightningSoundIteration = newestIteration;
+              lastPlayedLightningSoundIteration = newestIteration;
             }
           }
-        } else if (!guiControls.sound || (!guiControls.enablePrecipitation && iterNum > manualLightningActiveUntil)) {
+        } else if (!guiControls.sound || (!guiControls.enablePrecipitation && iterNum > manualLightningActiveUntil && !manualLightningReadbackPending)) {
           lastLightningSoundIteration = iterNum;
           lastLightningSoundCheckIteration = iterNum;
         }
@@ -9845,6 +9877,19 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
     previousZoomSupersampleActive = zoomSupersampleActive;
     if (guiControls.displayMode == 'DISP_REAL') {
+      // Only twelve fragments compute strike age, lifetime, flicker, intensity
+      // and variant curves; scene pixels consume the resulting state directly.
+      gl.bindVertexArray(fluidVao);
+      gl.disable(gl.BLEND);
+      gl.useProgram(lightningRenderStateProgram);
+      gl.uniform1i(getUniformLoc(lightningRenderStateProgram, 'lightningDataTex'), 0);
+      gl.uniform1f(getUniformLoc(lightningRenderStateProgram, 'iterNum'), iterNum);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, lightningDataTextures[lightningDataSrc]);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, lightningRenderStateFrameBuff);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+      gl.viewport(0, 0, numLightningSlots, 2);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
       if (ambientLightDirty) { //  Ambient Light Calculation
         gpuProfiler.begin('ambient blur');
@@ -10013,6 +10058,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       uploadLightningRodUniforms(realisticDisplayProgram);
       gl.activeTexture(gl.TEXTURE10);
       gl.bindTexture(gl.TEXTURE_2D, rodDataTexture);
+      gl.activeTexture(gl.TEXTURE11);
+      gl.bindTexture(gl.TEXTURE_2D, lightningRenderStateTexture);
       if (hasLightningCoverage)
         gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE, gl.COLOR_ATTACHMENT2, gl.COLOR_ATTACHMENT3]);
       else if (hasLightningBloom)
@@ -10872,7 +10919,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.112');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.113');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

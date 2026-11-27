@@ -23,7 +23,7 @@
 
 'use strict';
 
-const VERSION = '2026-11-16.112';
+const VERSION = '2026-11-16.113';
 
 const APP_CACHE_PREFIX = 'weather-sandbox-';
 const SHELL_CACHE_PREFIX = APP_CACHE_PREFIX + 'shell-';
@@ -64,6 +64,7 @@ const PRECACHE = [
   './shaders/fragment/isolateBrightPartsShader.frag',
   './shaders/fragment/lightingShader.frag',
   './shaders/fragment/lightningLocationShader.frag',
+  './shaders/fragment/lightningRenderStateShader.frag',
   './shaders/fragment/postProcessingShader.frag',
   './shaders/fragment/precipDisplayShader.frag',
   './shaders/fragment/precipitationShader.frag',

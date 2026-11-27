@@ -23,6 +23,7 @@ uniform sampler2D surfaceTextureMap;
 uniform sampler2D curlTex;
 uniform sampler2D lightningTex;        // the bolt: one channel, for a stroke
 uniform sampler2D lightningDataTex;
+uniform sampler2D lightningRenderStateTex;
 
 uniform sampler2D ambientLightTex;
 
@@ -811,50 +812,23 @@ vec4 computeAirColor(vec2 bndFragCoord)
   for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
     if (!inLightningWorldTile())
       break; // no channel, crawler or lightning illumination in repeated tiles
+    // The per-strike timeline is calculated once for each slot in the tiny
+    // lightning state pass, rather than separately for every scene pixel.
+    vec4 strikeState = texelFetch(lightningRenderStateTex, ivec2(slot, 0), 0);
+    if (strikeState.w == 0.0)
+      continue;
     vec4 lightningData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);
-    float lightningStartIterNum = lightningData[START_ITERNUM];
-    if (lightningStartIterNum <= 0.0 || iterNum >= lightningStartIterNum + 2048.0)
-      continue; // empty or certainly expired; avoid metadata and lifetime hashes
-    // The longest supported ordinary parent is under 140 iterations; even the
-    // 8x legacy duration and 100-iteration optical minimum stay below 2048.
-    // Recent strikes still use their exact end calculation below.
     vec4 lightningMeta = texelFetch(lightningDataTex, ivec2(slot, 1), 0);
-    // Artificial (manually clicked) strikes mark their meta.z with the +10
-    // offset; metaRawZ recovers the real height/sentinel, metaArt flags them.
+    vec4 strikeStateExtra = texelFetch(lightningRenderStateTex, ivec2(slot, 1), 0);
     float metaRawZ = artificialMetaRawZ(lightningMeta.z);
-    bool metaArt = artificialMeta(lightningMeta.z);
-    // The parent channel retains its own animation even if an optical effect
-    // keeps the slot alive longer for visibility at high iteration rates.
-    // A loaded legacy upward-leader slot must not be reinterpreted as CC.
-    if (abs(lightningMeta.y - 5.0) < 0.25)
-      continue;
-    if (iterNum < lightningStartIterNum || (metaArt
-        ? iterNum >= lightningSlotEnd(lightningData, lightningMeta)
-        : iterNum >= parentStrikeAnimEnd(lightningData, lightningMeta)))
-      continue;
-
     vec2 lightningPos = lightningData.xy;
-    float lightningTime = metaArt ? (iterNum - lightningStartIterNum) / 20.0 : calcLightningTime(lightningStartIterNum);
-    // Every strike starts directly on the trigger iteration with zero fixed delay.
+    float lightningTime = strikeState.x;
+    float currentLightningIntensity = strikeState.y;
+    float effectiveLightningTime = strikeState.z;
+    float ccIntensityGain = strikeStateExtra.x;
+    float ccTailFade = strikeStateExtra.y;
+    float extCurve = strikeStateExtra.z;
     bool ordinaryCG = lightningData[INTENSITY] > LIGHTNING_IC_MAX_INTENSITY && abs(lightningMeta.y) < 0.25;
-    float currentLightningIntensity = ordinaryCG
-      ? upstreamGroundIntensity(lightningTime, lightningPos, lightningData[INTENSITY])
-      : lightningIntensityOverTime(lightningTime, lightningPos, lightningData[INTENSITY]);
-    if (currentLightningIntensity <= 0.0 && !(ordinaryCG && lightningTime <= 1.0))
-      continue;
-
-    // The two kinds, two channels: a stroke is one channel down the picture, a
-    // flash is a network spreading across the sky (see displayLightning and
-    // displayFlash). The kind is a fact about the strike - its intensity - and it
-    // is also what a lightning rod snaps to.
-    //
-    // A flash is not masked to the cloud it was born in. Its channels leave one deck
-    // and carry on through the clear air to the next, which is what cloud-to-cloud
-    // lightning is, and what a mask on cloud density threw away: every channel was
-    // cut off at its own cloud's edge. What still applies to both kinds is the
-    // cloud's attenuation of the *light* at the end of this function, which is a
-    // filter on how bright a channel seen through a cloud is, not a mask on whether
-    // the channel exists.
     bool isFlash = lightningData[INTENSITY] <= LIGHTNING_IC_MAX_INTENSITY;
     bool isPositiveIC = isFlash && lightningMeta.y >= 3.5;
     bool isExternalPositive = !isFlash && abs(lightningMeta.y - 1.0) < 0.25;
@@ -862,49 +836,8 @@ vec4 computeAirColor(vec2 bndFragCoord)
     bool isPositiveCC = isCloudToCloud && lightningMeta.y >= 2.5;
     bool isSuperbolt = isExternalPositive && lightningMeta.w >= 0.5;
     bool isHyperbolt = isExternalPositive && lightningMeta.w >= 1.5;
-    // Upstream lights its surroundings neutrally, not with a variant tint.
     vec3 lightningIlluminationTint = vec3(1.0);
-    const float superboltBrightnessMult = 12.0;
-    const float superboltDurationShorten = 0.1;
-    const float hyperboltBrightnessMult = 30.0; // 2.5x a superbolt
-    const float hyperboltDurationShorten = 2.624; // 2.924 - 0.3: a 0.3 second lifetime
-    float strokeBrightnessMult = isHyperbolt ? hyperboltBrightnessMult : superboltBrightnessMult;
-    float strokeDurationShorten = isHyperbolt ? hyperboltDurationShorten : superboltDurationShorten;
-    float effectiveLightningTime = lightningTime;
-    float ccIntensityGain = 1.0;
-    float ccTailFade = 1.0;
-    float extCurve = 0.0;
-    // Ordinary ground strokes and IC flashes never use CC/external tail or
-    // intensity calculations. The classification is per strike, so this
-    // coherent branch avoids multiple hashes, flicker curves and powers for
-    // every affected screen fragment without changing any strike timing.
-    if (isExternalPositive || isCloudToCloud) {
-      float repeatPeriod = map_range(random2d(lightningPos), 0., 1., 1.5, 3.0);
-      float flickers = lightningFlickers(lightningData);
-      if (isSuperbolt && lightningTime >= repeatPeriod * flickers + (2.924 - strokeDurationShorten))
-        continue;
-      effectiveLightningTime = isSuperbolt && lightningTime > 0.0
-        ? lightningTime + strokeDurationShorten * smoothstep(0.0, 0.35, lightningTime)
-        : lightningTime;
-      if (isSuperbolt) {
-        currentLightningIntensity = lightningIntensityOverTime(effectiveLightningTime, lightningPos, lightningData[INTENSITY]);
-        if (currentLightningIntensity <= 0.0)
-          continue;
-      }
-      float tailT = max(effectiveLightningTime - repeatPeriod * flickers, 0.0);
-      if (isCloudToCloud) {
-        ccTailFade = pow(smoothstep(2.924, 1.25, tailT), 2.2);
-        ccIntensityGain = (isPositiveCC ? 1.5 : 1.0) * (1.8 / max(pow(lightningData[INTENSITY], 2.0), 0.1));
-      }
-      if (isExternalPositive) {
-        float extTailFade = pow(smoothstep(2.924, 1.15, tailT), 2.4);
-        float extBaseIntensity = clamp(mix(1.8, 3.4, (lightningData[INTENSITY] - 4.6) / 0.8), 1.8, 3.4);
-        float extIntensityGain = pow(extBaseIntensity / max(lightningData[INTENSITY], 1.0), 2.0);
-        extCurve = currentLightningIntensity * extIntensityGain * extTailFade;
-        if (isHyperbolt)
-          extCurve = max(extCurve, firstReturnIntensity(lightningTime, lightningData[INTENSITY], 0.10, 0.26) * extIntensityGain);
-      }
-    }
+    float strokeBrightnessMult = isHyperbolt ? 30.0 : 12.0;
     sampledStrikeCoverage = 0.0;
     vec3 strikeChannel = vec3(0.0);
     if (isExternalPositive) {

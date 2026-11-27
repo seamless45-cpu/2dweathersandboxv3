@@ -7,7 +7,7 @@ const root = path.join(__dirname, '..');
 const read = f => fs.readFileSync(path.join(root, f), 'utf8');
 const app = read('app.js');
 const location = read('shaders/fragment/lightningLocationShader.frag');
-const display = read('shaders/fragment/realisticDisplayShader.frag');
+const display = read('shaders/fragment/realisticDisplayShader.frag') + '\n' + read('shaders/fragment/lightningRenderStateShader.frag');
 const common = read('shaders/common.glsl');
 const cursor = read('shaders/commonDisplay.glsl');
 let passed = 0, failed = 0;
@@ -101,12 +101,12 @@ check('manual strikes use the variant picker with rod capture for the ground-str
   /vec4 artMeta = vec4\(originX, 0\.0, -1\.0, 0\.0\)/.test(location));
 check('full slots cause a retry next frame, not lost clicks or overwritten events',
   /!artificialAttemptedThisFrame[^\n]*pendingArtificialLightning\[0\]/.test(app) &&
-  /if \(acceptedSlot >= 0\)\s*\{\s*pendingArtificialLightning\.shift\(\)/.test(app) &&
+  /if \(acceptedSlot < 0\) return;[\s\S]*?pendingArtificialLightning\[0\] === sample\.strike\) pendingArtificialLightning\.shift\(\)/.test(app) &&
   /slot == freeSlot/.test(location) && /lightningSlotEnd\(data, meta\)/.test(location));
 check('manual strike pass runs when precipitation is disabled and acknowledges once',
   /if \(guiControls.enablePrecipitation \|\| pendingArtificialLightning.length > 0\)/.test(app) &&
-  /gl\.readPixels\(0, 0, numLightningSlots, 1, gl\.RGBA, gl\.FLOAT, manualSlotReadback\)/.test(app) &&
-  /countedSlotStartIter\[acceptedSlot\] = iterNum/.test(app) && /soundSystem\.soundThunder\(targetX, manualSlotReadback/.test(app));
+  /manualLightningReadback\.request\(lightningDataFrameBuffs\[lightningDataSrc\], sample\)/.test(app) &&
+  /countedSlotStartIter\[acceptedSlot\] = sample\.iteration/.test(app) && /soundSystem\.soundThunder\(targetX, manualSlotReadback/.test(app));
 check('artificial channel and rod share the same extended animation clock and lifetime',
   /artificialMeta\(meta\.z\)[\s\S]{0,120}\* 4\.0/.test(common) &&
   /\(iterNum - lightningStartIterNum\) \/ 20\.0/.test(display) &&

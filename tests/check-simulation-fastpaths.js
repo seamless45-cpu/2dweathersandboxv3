@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('assert'),fs=require('fs');
-const adv=fs.readFileSync('shaders/fragment/advectionShader.frag','utf8'),light=fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','utf8'),app=fs.readFileSync('app.js','utf8');
+const adv=fs.readFileSync('shaders/fragment/advectionShader.frag','utf8'),light=fs.readFileSync('shaders/fragment/realisticDisplayShader.frag','utf8') + '\n' + fs.readFileSync('shaders/fragment/lightningRenderStateShader.frag','utf8'),app=fs.readFileSync('app.js','utf8');
 assert.match(adv,/if \(soundingForcing != 0\.0\) \{[\s\S]*?getRealWorldSounding_T/);
 assert.match(adv,/if \(soundingForcing > 0\.9\) \{[\s\S]*?getRealWorldSounding_Vel/);
 assert.match(adv,/if \(globalDrying > 0\.0\)\s*water\[TOTAL\] -= clamp\(globalDrying/);
