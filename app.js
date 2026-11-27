@@ -7607,8 +7607,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.113'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.113')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.114'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.114')
   ]);
 
   const [
@@ -8354,10 +8354,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.clearBufferfv(gl.COLOR, 0, zeroColorClearValue);
   }
 
-  // Render-only strike state: two rows of float32 values per slot. The pass
+  // Render-only strike state: four rows of float32 values per slot. The pass
   // reads the current slot texture and never changes the simulation or slots.
   gl.bindTexture(gl.TEXTURE_2D, lightningRenderStateTexture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, numLightningSlots, 2, 0, gl.RGBA, gl.FLOAT, null);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, numLightningSlots, 4, 0, gl.RGBA, gl.FLOAT, null);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -8581,7 +8581,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.113');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.114');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9877,18 +9877,23 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
     previousZoomSupersampleActive = zoomSupersampleActive;
     if (guiControls.displayMode == 'DISP_REAL') {
-      // Only twelve fragments compute strike age, lifetime, flicker, intensity
+      // Only 24 fragments compute strike age, lifetime, flicker, intensity
       // and variant curves; scene pixels consume the resulting state directly.
       gl.bindVertexArray(fluidVao);
       gl.disable(gl.BLEND);
       gl.useProgram(lightningRenderStateProgram);
       gl.uniform1i(getUniformLoc(lightningRenderStateProgram, 'lightningDataTex'), 0);
       gl.uniform1f(getUniformLoc(lightningRenderStateProgram, 'iterNum'), iterNum);
+      gl.uniform2f(getUniformLoc(lightningRenderStateProgram, 'resolution'), sim_res_x, sim_res_y);
+      gl.uniform2f(getUniformLoc(lightningRenderStateProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+      uploadLightningRodUniforms(lightningRenderStateProgram);
+      gl.activeTexture(gl.TEXTURE10);
+      gl.bindTexture(gl.TEXTURE_2D, rodDataTexture);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, lightningDataTextures[lightningDataSrc]);
       gl.bindFramebuffer(gl.FRAMEBUFFER, lightningRenderStateFrameBuff);
       gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
-      gl.viewport(0, 0, numLightningSlots, 2);
+      gl.viewport(0, 0, numLightningSlots, 4);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
       if (ambientLightDirty) { //  Ambient Light Calculation
@@ -10919,7 +10924,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.113');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.114');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

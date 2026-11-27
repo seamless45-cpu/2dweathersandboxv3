@@ -109,6 +109,7 @@ vec3 rodGlow = vec3(0.0); // the rod's own light (tip corona, strike surge): dra
 // Derivatives captured before any divergent strike, terrain or cloud branches.
 // These describe one actual HDR render-target pixel, including render scale/zoom.
 vec2 screenTexDx, screenTexDy;
+vec4 lightningArcSeeds01, lightningArcSeeds23;
 
 
 const vec3 bareDrySoilCol = pow(vec3(0.85, 0.60, 0.40), vec3(GAMMA));
@@ -642,9 +643,12 @@ vec3 displayExternalLightning(vec2 groundPos, float originX, float lightningTime
   vec2 target = vec2(pxw, pyw);
   float bestT = 0.0;
   float bestD2 = 1e9;
+  // The four seed points are identical for every pixel of this strike.
+  // They were evaluated once in the per-slot state pass, in full float32.
   for (int k = 0; k < 4; k++) {
     float tc = float(k) / 3.0;
-    vec2 diff = evalExtArc(tc, Hw, V) - target;
+    vec2 seedPoint = k == 0 ? lightningArcSeeds01.xy : (k == 1 ? lightningArcSeeds01.zw : (k == 2 ? lightningArcSeeds23.xy : lightningArcSeeds23.zw));
+    vec2 diff = seedPoint - target;
     float d2 = dot(diff, diff);
     if (d2 < bestD2) {
       bestD2 = d2;
@@ -841,6 +845,8 @@ vec4 computeAirColor(vec2 bndFragCoord)
     sampledStrikeCoverage = 0.0;
     vec3 strikeChannel = vec3(0.0);
     if (isExternalPositive) {
+      lightningArcSeeds01 = texelFetch(lightningRenderStateTex, ivec2(slot, 2), 0);
+      lightningArcSeeds23 = texelFetch(lightningRenderStateTex, ivec2(slot, 3), 0);
       strikeChannel += displayExternalLightning(lightningPos, lightningMeta.x, effectiveLightningTime, extCurve,
                                                      upstreamLightningColor,
                                                      lightningTime);

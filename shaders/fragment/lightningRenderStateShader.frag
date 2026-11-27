@@ -3,7 +3,11 @@ precision highp float;
 precision highp sampler2D;
 uniform sampler2D lightningDataTex;
 uniform float iterNum;
-vec2 resolution;
+uniform vec2 resolution;
+uniform vec2 aspectRatios;
+uniform sampler2D rodDataTex;
+uniform int rodCount;
+uniform float rodHeight;
 vec2 texCoord;
 vec2 texelSize;
 float dryLapse;
@@ -53,6 +57,42 @@ float upstreamGroundIntensity(float time, vec2 pos, float intensity)
   float minT = max(T0 - repeatPeriod * flashes, 0.0);
   float T = max(mod(T0, repeatPeriod), minT);
   return max(1.0 / (0.05 + pow(T * 2.0, 3.0)) - 0.005, 0.0) * pow(intensity, 2.0);
+}
+
+
+vec4 rodDataAt(int index)
+{
+  return texelFetch(rodDataTex, ivec2(index, 0), 0);
+}
+// Lower bound in the sorted rod table; no per-fragment scan of distant rods.
+int rodLowerBound(float x)
+{
+  int lo = 0, hi = rodCount;
+  while (lo < hi) {
+    int mid = (lo + hi) / 2;
+    if (rodDataAt(mid).x < x) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+float findCapturedRodTipY(float strikeX)
+{
+  int index = rodLowerBound(strikeX - 1e-5);
+  if (index < rodCount) {
+    vec4 rod = rodDataAt(index);
+    if (abs(strikeX - rod.x) < 1e-5)
+      return rod.y + rodHeight * (rod.z > 0.5 ? 1.8 : 1.0) / max(resolution.y, 1.0);
+  }
+  return -1.0;
+}
+
+vec2 evalExtArc(float t, float Hw, float V)
+{
+  float om = max(1.0 - t, 1e-5);
+  float tc = max(t, 1e-5);
+  float x = Hw * pow(om, 1.3);
+  float y = V * (1.0 - pow(tc, 2.8)) + 0.14 * V * sin(PI * t) * (1.0 - t);
+  return vec2(x, y);
 }
 
 
@@ -155,8 +195,23 @@ void main()
           extCurve = max(extCurve, firstReturnIntensity(lightningTime, lightningData[INTENSITY], 0.10, 0.26) * extIntensityGain);
       }
     }
-    // Two rows keep all strike-wide timeline calculations in float32.
-    stateOutput = int(gl_FragCoord.y) == 0
-      ? vec4(lightningTime, currentLightningIntensity, effectiveLightningTime, 1.0)
-      : vec4(ccIntensityGain, ccTailFade, extCurve, 0.0);
+    // Rows 0–1 retain the exact timeline. Rows 2–3 cache the four coarse
+    // samples of an external CG arc; those samples depend on the strike and
+    // rods, not on the screen pixel performing the nearest-point search.
+    int row = int(gl_FragCoord.y);
+    if (row == 0) {
+      stateOutput = vec4(lightningTime, currentLightningIntensity, effectiveLightningTime, 1.0);
+    } else if (row == 1) {
+      stateOutput = vec4(ccIntensityGain, ccTailFade, extCurve, 0.0);
+    } else if (isExternalPositive) {
+      float rodTipY = findCapturedRodTipY(lightningPos.x);
+      float endY = rodTipY >= 0.0 ? rodTipY : 0.0;
+      float topY = rodTipY >= 0.0 ? max(lightningPos.y, endY + 0.04) : lightningPos.y;
+      float V = max(topY - endY, 0.05);
+      float Hw = (lightningMeta.x - lightningPos.x) * aspectRatios.x;
+      int first = (row - 2) * 2;
+      vec2 p0 = evalExtArc(float(first) / 3.0, Hw, V);
+      vec2 p1 = evalExtArc(float(first + 1) / 3.0, Hw, V);
+      stateOutput = vec4(p0, p1);
+    }
 }
