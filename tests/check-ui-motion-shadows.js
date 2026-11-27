@@ -15,9 +15,9 @@ const themeShadows = [...theme.matchAll(/(?:box|text)-shadow\s*:\s*([^;]+);/g)].
 check('theme depth uses only hard-edged shadows, not blurred shadows', themeShadows.every(value =>
   value.replace(/rgba?\([^)]*\)/g, '#color').split(',').every(shadow => shadow.trim() === 'none' || /^(?:inset\s+)?(?:-?\d+(?:\.\d+)?(?:px)?\s+){2}0(?:px)?(?:\s|$)/.test(shadow.trim()))));
 check('menu keyboard focus retains a visible outline', /\.main-menu-action:focus-visible\s*\{[^}]*outline:\s*2px solid/.test(css));
-check('sci-fi interaction motion is finite and honours reduced motion',
+check('sci-fi interaction motion uses finite JavaScript animations',
   /element\.animate\(keyframes, options\)/.test(fs.readFileSync('sci-fi-ui.js', 'utf8')) &&
-  /prefers-reduced-motion: reduce/.test(theme) && /reducedMotion\.matches/.test(fs.readFileSync('sci-fi-ui.js', 'utf8')) &&
+  !/prefers-reduced-motion/.test(theme + fs.readFileSync('sci-fi-ui.js', 'utf8')) &&
   !/@keyframes|animation[^;]*infinite/.test(theme));
 check('no UI blur or backdrop filtering', !/backdrop-filter|(?:^|[\s:])blur\(/m.test(css + theme));
 check('display-mode announcement remains statically visible and is cleaned up',

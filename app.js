@@ -687,6 +687,7 @@ const guiControls_default = {
   performancePreset : 'Custom',
   // Native-resolution HDR by default; supersampling remains opt-in.
   hdrQuality : '100%',
+  spatialUpscalingEnabled : false, // explicit opt-in to a lower HDR render resolution
   bloomQuality : '100%',
   bloomEnabled : true,
   filmicToneMapping : false,
@@ -988,6 +989,7 @@ const NUM_DROPLETS_DEVIDER = 25; // 25
 
 let hdrFBO;
 let temporalHistoryTexture;
+let motionBlurCaptureTexture;
 let temporalHistoryValid = false;
 let motionBlurHistoryValid = false;
 let motionBlurPreviousView = null;
@@ -1588,7 +1590,7 @@ function createPrecipitationCountReadback(gl, numDroplets, compact)
 function createHdrFBO()
 {
   const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
-  const requested = hdrRenderScale;
+  const requested = hdrRenderScale * (guiControls && guiControls.spatialUpscalingEnabled ? 2 / 3 : 1);
   // texImage2D beyond MAX_TEXTURE_SIZE fails silently and leaves an incomplete
   // framebuffer - which used to leave a black canvas with no message anywhere.
   // Try the requested scale, then step down until the device can render it.
@@ -1606,7 +1608,7 @@ function createHdrFBO()
         hdrFBO.dispose();
       hdrFBO = candidate;
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      if (scale != requested) {
+      if (scale != requested && !(guiControls && guiControls.spatialUpscalingEnabled)) {
         hdrRenderScale = scale;
         const label = renderQualityLabelForScale(scale);
         if (label && guiControls)
@@ -1836,8 +1838,21 @@ function createTemporalHistoryTexture()
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB8, canvas.width, canvas.height, 0, gl.RGB, gl.UNSIGNED_BYTE, null);
   temporalHistoryValid = false;
+  motionBlurHistoryValid = false;
+  if (motionBlurCaptureTexture) { gl.deleteTexture(motionBlurCaptureTexture); motionBlurCaptureTexture = null; }
 }
 
+function createMotionBlurCaptureTexture()
+{
+  motionBlurCaptureTexture = gl.createTexture();
+  if (!motionBlurCaptureTexture) throw new Error('Unable to allocate motion blur capture texture.');
+  gl.bindTexture(gl.TEXTURE_2D, motionBlurCaptureTexture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB8, canvas.width, canvas.height, 0, gl.RGB, gl.UNSIGNED_BYTE, null);
+}
 
 function createAmbientLightFBOs()
 {
@@ -3218,6 +3233,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     currentPerformanceReadouts.simulationRate = measuredSimulationStepsPerSecond + ' steps/s';
     currentPerformanceReadouts.renderQuality = 'HDR ' + guiControls.hdrQuality +
       (zoomHdrFBO && previousZoomSupersampleActive ? ' / Zoom 2x HDR' : '') +
+      (guiControls.spatialUpscalingEnabled ? ' / Spatial Upscaling 67%' : '') +
       ' / Bloom ' + (guiControls.bloomEnabled ? guiControls.bloomQuality : 'Off') +
       (guiControls.superSharpDetail ? ' / 2x Pixel Ratio' : '') +
       (guiControls.filmicToneMapping ? ' / ACES' : '') +
@@ -5710,6 +5726,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       guiControls.performancePreset = 'Balanced';
     for (const setting of ['filmicToneMapping', 'fxaaEnabled', 'volumetricCloudLighting', 'temporalAAEnabled', 'superSharpDetail', 'realTimeCycle', 'motionBlurEnabled'])
       guiControls[setting] = guiControls[setting] === true;
+    guiControls.spatialUpscalingEnabled = guiControls.spatialUpscalingEnabled === true;
     guiControls.motionBlurIntensity = clamp(Number(guiControls.motionBlurIntensity) || 0, 0, 350);
     guiControls.fullscreenMode = isDocumentFullscreen();
     if (!['Unlocked', '30', '60', '90', '120', '144', '165', '240'].includes(guiControls.autoFpsTarget))
@@ -6321,6 +6338,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     const hdrQualityController = performanceFolder.add(guiControls, 'hdrQuality', ['25%', '35%', '50%', '60%', '75%', '85%', '100%', '150%', '200%'])
       .name('HDR Render Scale')
       .onChange(markCustomRenderQuality);
+    performanceFolder.add(guiControls, 'spatialUpscalingEnabled')
+      .name('Spatial Upscaling (67%)')
+      .onChange(() => { temporalHistoryValid = false; motionBlurHistoryValid = false; applyRenderQuality(); });
     const bloomQualityController = performanceFolder.add(guiControls, 'bloomQuality', ['25%', '35%', '50%', '60%', '75%', '85%', '100%'])
       .name('Bloom Quality')
       .onChange(markCustomRenderQuality);
@@ -6406,6 +6426,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     const performanceHelp = {
       'Quality Preset': ['Choose a balanced default or favor image quality/performance. This changes HDR and bloom rendering quality only; weather calculations stay the same.', 'Varies', 'medium'],
+      'Motion Blur': ['Adds a velocity shutter and a previous-frame exposure for scene changes. Extra render work can reduce FPS; lightning may ghost and precipitation particles are not included.', 'High', 'high'],
+      'Motion Blur Strength %': ['Controls the shutter trail length and the weight of the previous unblurred exposure. Zero disables the visible effect.', 'High', 'high'],
+      'Spatial Upscaling (67%)': ['Opt in: renders the scene at 67% of the selected HDR scale per axis and reconstructs it at full canvas resolution. Can soften or lose fine detail. Zoomed-out lightning supersampling takes priority.', 'Variable', 'low'],
       'HDR Render Scale': ['Sets the resolution used to render the HDR scene before it is upscaled. Lower values can improve rendering speed but make details softer.', 'Low', 'low'],
       'Bloom Quality': ['Controls the resolution used for bloom lighting. Lower settings reduce post-processing work and produce softer, less detailed glow.', 'Low', 'low'],
       'Bloom Effects': ['Turns the bloom post-processing passes on or off. Disabling bloom reduces GPU post-processing work and removes the soft glow around bright areas.', 'Medium', 'medium'],
@@ -7655,8 +7678,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.121'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.121')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.122'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.122')
   ]);
 
   const [
@@ -8629,7 +8652,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.121');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.122');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -10240,6 +10263,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'bloomEnabled'), guiControls.bloomEnabled);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'toneMappingEnabled'), guiControls.filmicToneMapping);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'zoomSupersampleEnabled'), zoomSupersampleActive);
+      gl.uniform1i(getUniformLoc(postProcessingProgram, 'spatialUpscalingEnabled'), guiControls.spatialUpscalingEnabled && (sceneHdrFBO.width < canvas.width || sceneHdrFBO.height < canvas.height));
       gl.uniform2f(getUniformLoc(postProcessingProgram, 'canvasTexelSize'), 1.0 / canvas.width, 1.0 / canvas.height);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'fxaaEnabled'), guiControls.fxaaEnabled);
       gl.uniform1i(getUniformLoc(postProcessingProgram, 'temporalAAEnabled'), guiControls.temporalAAEnabled);
@@ -10264,14 +10288,33 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       // No clear here: the post pass writes every fragment of the fullscreen quad.
 
       gl.drawBuffers([ gl.BACK ]);
+      // Capture this frame without temporal effects before drawing the final shutter.
+      // The previous history remains bound on unit 2 for the final pass. This
+      // extra pass is only paid for when motion blur is enabled.
+      if (guiControls.motionBlurEnabled && !SETUP_MODE && temporalHistoryTexture) {
+        gl.activeTexture(gl.TEXTURE7);
+        if (!motionBlurCaptureTexture) createMotionBlurCaptureTexture();
+        gl.uniform1i(getUniformLoc(postProcessingProgram, 'motionBlurEnabled'), false);
+        gl.uniform1i(getUniformLoc(postProcessingProgram, 'temporalAAEnabled'), false);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        gl.bindTexture(gl.TEXTURE_2D, motionBlurCaptureTexture);
+        gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, canvas.width, canvas.height);
+        gl.uniform1i(getUniformLoc(postProcessingProgram, 'motionBlurEnabled'), true);
+        gl.uniform1i(getUniformLoc(postProcessingProgram, 'temporalAAEnabled'), guiControls.temporalAAEnabled);
+      }
       gpuProfiler.begin('post');
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to canvas
       gpuProfiler.end('post');
 
       if ((guiControls.temporalAAEnabled || guiControls.motionBlurEnabled) && !SETUP_MODE && temporalHistoryTexture) {
-        gl.activeTexture(gl.TEXTURE2);
-        gl.bindTexture(gl.TEXTURE_2D, temporalHistoryTexture);
-        gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, canvas.width, canvas.height);
+        if (guiControls.motionBlurEnabled) {
+          // Swap in the unblurred capture; never recursively feed the shutter output back.
+          [temporalHistoryTexture, motionBlurCaptureTexture] = [motionBlurCaptureTexture, temporalHistoryTexture];
+        } else {
+          gl.activeTexture(gl.TEXTURE2);
+          gl.bindTexture(gl.TEXTURE_2D, temporalHistoryTexture);
+          gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, canvas.width, canvas.height);
+        }
         temporalHistoryValid = guiControls.temporalAAEnabled;
         motionBlurHistoryValid = guiControls.motionBlurEnabled;
         motionBlurPreviousView = [renderViewX, renderViewY, cam.curZoom];
@@ -10961,7 +11004,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.121');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.122');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

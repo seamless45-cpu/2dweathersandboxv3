@@ -1,7 +1,7 @@
 'use strict';
 const assert=require('assert'),fs=require('fs');
 const post=fs.readFileSync('shaders/fragment/postProcessingShader.frag','utf8');
-const map=post.slice(post.indexOf('vec3 mappedColor(vec2 uv)'),post.indexOf('\nvoid main()'));
+const map=post.slice(post.indexOf('vec3 sourceMappedColor(vec2 uv)'),post.indexOf('\nvoid main()'));
 assert.match(map,/if \(bloomEnabled\) \{/);
 assert.match(map,/return mapRadiance\(scene \+ bloom\)/);
 assert.match(post,/color \*= exposure;[\s\S]*return clamp\(pow\(/);

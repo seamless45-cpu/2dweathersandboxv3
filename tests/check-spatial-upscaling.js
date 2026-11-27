@@ -1,0 +1,14 @@
+'use strict';
+const assert = require('assert'), fs = require('fs');
+const app = fs.readFileSync('app.js','utf8');
+const post = fs.readFileSync('shaders/fragment/postProcessingShader.frag','utf8');
+assert.match(app, /spatialUpscalingEnabled : false/);
+assert.match(app, /guiControls\.spatialUpscalingEnabled = guiControls\.spatialUpscalingEnabled === true/);
+assert.match(app, /hdrRenderScale \* \(guiControls && guiControls\.spatialUpscalingEnabled \? 2 \/ 3 : 1\)/);
+assert.match(app, /performanceFolder\.add\(guiControls, 'spatialUpscalingEnabled'\)/);
+assert.match(app, /sceneHdrFBO\.width < canvas\.width \|\| sceneHdrFBO\.height < canvas\.height/);
+assert.match(post, /if \(!spatialUpscalingEnabled\) return center;/);
+assert.match(post, /clamp\(center \+ 0\.22 \*/, 'bounded sharpening reconstructs from neighbouring source samples');
+assert.match(app, /\[temporalHistoryTexture, motionBlurCaptureTexture\] = \[motionBlurCaptureTexture, temporalHistoryTexture\]/);
+assert.match(app, /motionBlurCaptureTexture\) \{ gl\.deleteTexture\(motionBlurCaptureTexture\); motionBlurCaptureTexture = null;/);
+console.log('Opt-in spatial upscaling and unblurred shutter capture checks passed.');

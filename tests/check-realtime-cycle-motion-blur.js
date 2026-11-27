@@ -104,7 +104,8 @@ check('motion blur reprojects camera and fluid motion and gathers the current fr
   /vec2 flow = \(previousNdc - ndc\) \* 0\.5;/.test(postShader) &&
   /const int TAPS = 16;/.test(postShader) &&
   /acc \+= mappedColor\(sampleUV\)/.test(postShader) &&
-  !/texture\(historyTex/.test(postShader.slice(postShader.indexOf('if (motionBlurEnabled && motionBlurHistoryValid)'))));
+  /texture\(historyTex, texCoord\)/.test(postShader.slice(postShader.indexOf('if (motionBlurEnabled && motionBlurHistoryValid)'))) &&
+  /temporalHistoryTexture, motionBlurCaptureTexture/.test(appSource));
 
 check('shutter and discontinuous motion are bounded in display pixels',
   /flowLength < 256\.0/.test(postShader) &&

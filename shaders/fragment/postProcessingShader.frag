@@ -24,6 +24,7 @@ uniform sampler2D historyTex;
 uniform vec2 outputTexelSize;
 uniform vec2 canvasTexelSize;
 uniform bool zoomSupersampleEnabled;
+uniform bool spatialUpscalingEnabled;
 uniform bool bloomEnabled;
 uniform bool toneMappingEnabled;
 uniform bool fxaaEnabled;
@@ -83,7 +84,7 @@ vec3 mapRadiance(vec3 color)
   return clamp(pow(max(color, vec3(0.0)), ONE_OVER_GAMMA), 0.0, 1.0);
 }
 
-vec3 mappedColor(vec2 uv)
+vec3 sourceMappedColor(vec2 uv)
 {
   vec3 scene = safeSample(texture(hdrTex, uv).rgb);
   vec3 bloom = vec3(0.0);
@@ -103,6 +104,22 @@ vec3 mappedColor(vec2 uv)
     }
   }
   return mapRadiance(scene + bloom);
+}
+
+// Spatial reconstruction at output resolution, bounded by the local source
+// range to avoid ringing. The source texture is already bilinearly filtered.
+vec3 mappedColor(vec2 uv)
+{
+  vec3 center = sourceMappedColor(uv);
+  if (!spatialUpscalingEnabled) return center;
+  vec2 d = outputTexelSize;
+  vec3 left = sourceMappedColor(uv - vec2(d.x, 0.0));
+  vec3 right = sourceMappedColor(uv + vec2(d.x, 0.0));
+  vec3 down = sourceMappedColor(uv - vec2(0.0, d.y));
+  vec3 up = sourceMappedColor(uv + vec2(0.0, d.y));
+  vec3 low = min(center, min(min(left, right), min(down, up)));
+  vec3 high = max(center, max(max(left, right), max(down, up)));
+  return clamp(center + 0.22 * (4.0 * center - left - right - down - up), low, high);
 }
 
 void main()
@@ -240,6 +257,10 @@ void main()
         outputCol = mix(outputCol, blurred, blend);
       }
     }
+    // Integrate a second unblurred exposure even with a stationary camera.
+    // This captures changing scene content, but is not per-object optical flow.
+    float temporalShutter = strength * 0.5;
+    outputCol = mix(outputCol, texture(historyTex, texCoord).rgb, temporalShutter);
   }
 
   /*

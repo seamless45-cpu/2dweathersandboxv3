@@ -33,9 +33,8 @@
     } catch (_) { /* Blocked or unsupported audio never interrupts controls. */ }
   }
 
-  const reducedMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
   function animate(element, keyframes, options) {
-    if (!element || !element.animate || (reducedMotion && reducedMotion.matches)) return;
+    if (!element || !element.animate) return;
     try { element.animate(keyframes, options); } catch (_) { /* Optional visual enhancement. */ }
   }
   function panelEntrance(element) {

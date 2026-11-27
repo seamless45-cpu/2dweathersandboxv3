@@ -145,9 +145,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   .interface-subtitle, .interface-kicker { font-size: 8px; }
   .main-menu-setup table td { padding: 4px 0; }
 }
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
-}
 .main-menu-setup #startBtn > i { color: #91b8be; font-size: 10px; line-height: 1.6; font-style: normal; }
 html body .dg.ac .dg.main, html body .dg.ac .dg.main * { font-size: 10px !important; }
 
