@@ -2594,7 +2594,7 @@ class Weatherstation
       c.rect(0, 0, this.#width, this.#height - 20);
       c.clip();
       c.translate(0, offsetY);
-      c.font = '600 11px "Plus Jakarta Sans", sans-serif';
+      c.font = '600 11px "Orbitron", sans-serif';
       c.fillStyle = this.#textColor;
       c.shadowColor = 'transparent';
       c.shadowBlur = 0;
@@ -2619,11 +2619,11 @@ class Weatherstation
       c.fillStyle = this.#textColor;
       c.shadowColor = 'transparent';
       c.shadowBlur = 0;
-      c.font = '600 16px "Plus Jakarta Sans", sans-serif';
+      c.font = '600 16px "Orbitron", sans-serif';
       c.fillText(headlineValue, this.#width / 2, contentTop + 25, this.#width - 24);
-      drawFadedText(title, this.#width / 2, contentTop + 41, '600 10px "Plus Jakarta Sans", sans-serif');
+      drawFadedText(title, this.#width / 2, contentTop + 41, '600 10px "Orbitron", sans-serif');
       details.forEach(([label, value], index) => {
-        drawFadedText(label + ': ' + value, this.#width / 2, contentTop + 55 + index * lineHeight, '400 10px "Plus Jakarta Sans", sans-serif');
+        drawFadedText(label + ': ' + value, this.#width / 2, contentTop + 55 + index * lineHeight, '400 10px "Orbitron", sans-serif');
       });
       c.restore();
     };
@@ -4390,7 +4390,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         ctx.lineTo(width / 2 + width * 0.15, runwayIndY);
         ctx.stroke();
         ctx.fillStyle = 'blue';
-        ctx.font = '20px serif';
+        ctx.font = '20px Orbitron, sans-serif';
         ctx.fillText(printDistance(vecToRunway.x), width / 2 - width * 0.15 - 70, runwayIndY - 5);
         ctx.fillText(printDistance(vecToRunway.y + 7.5), width / 2 + width * 0.15, runwayIndY - 5);
         ctx.fillText((vecToRunway.angle() * radToDeg).toFixed(1) + ' °', width / 2 + width * 0.23, runwayIndY - 5);
@@ -4410,7 +4410,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       ctx.strokeStyle = 'white';
       ctx.fillStyle = 'white';
       ctx.stroke();
-      ctx.font = '30px serif';
+      ctx.font = '30px Orbitron, sans-serif';
 
       let unit = ' m'
 
@@ -4465,7 +4465,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       ctx.strokeStyle = 'white';
       ctx.fillStyle = 'white';
       ctx.stroke();
-      ctx.font = '30px serif';
+      ctx.font = '30px Orbitron, sans-serif';
 
       let stallSpeed = 70.0; // m/s
       let overSpeed = 173.0; // m/s
@@ -4537,7 +4537,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       const [veloStr, unitStr] = printVerticalVelocity(trueVel.y);
 
-      ctx.font = '20px serif';
+      ctx.font = '20px Orbitron, sans-serif';
       ctx.fillStyle = 'white';
       ctx.fillText(veloStr, width, mainHeight / 2 + topBarHeight + 6);
       ctx.fillText(unitStr, width + 10, mainHeight / 2 + topBarHeight + 22);
@@ -4547,7 +4547,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       ctx.fillRect(0, 0, this.#instrumentCanvas.width, topBarHeight);
 
       ctx.fillStyle = '#00FFFF';
-      ctx.font = '30px serif';
+      ctx.font = '30px Orbitron, sans-serif';
       ctx.fillText('🌡 ' + printTemp(OAT_C), 0, 40);
 
       ctx.fillStyle = '#FFFF00';
@@ -6575,6 +6575,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     clockEl = document.createElement('div');
     clockEl.className = 'simulation-clock';
+    // The opaque HUD panel guarantees contrast without a GPU readback.
+    clockEl.dataset.contrast = 'light';
     document.body.appendChild(clockEl);
     clockEl.innerHTML = `
       <div class="simulation-clock-primary">
@@ -6692,7 +6694,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
         var scrYpos = map_range(y, sim_res_y, 0, 0, graphBottem);
 
-        c.font = '15px Arial';
+        c.font = '15px Orbitron, sans-serif';
         c.fillStyle = 'white';
 
         if (wallTextureValues[4 * y + 1] != 0) { // if this is fluid cell
@@ -6778,7 +6780,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
           var velocity = rawVelocityTo_ms(Math.sqrt(Math.pow(baseTextureValues[4 * y], 2) + Math.pow(baseTextureValues[4 * y + 1], 2)));
 
-          c.font = '15px Arial';
+          c.font = '15px Orbitron, sans-serif';
           c.fillStyle = 'white';
 
           // c.fillText('Surface: ' + y, 10, scrYpos);
@@ -7653,8 +7655,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.118'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.118')
+    loadSourceFile('shaders/common.glsl?v=2026-11-16.119'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.119')
   ]);
 
   const [
@@ -8627,7 +8629,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.118');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.119');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9843,7 +9845,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       ctx.fillStyle = '#FF0000';
       ctx.fillRect(0, 0, 2, 2);
 
-      ctx.font = '15px Arial';
+      ctx.font = '15px Orbitron, sans-serif';
       ctx.fillStyle = '#00AAFF';
       ctx.fillText('Water: ' + dropletInfo[2].toFixed(2), 0, 15);
       ctx.fillStyle = '#FFFFFF';
@@ -10454,9 +10456,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       }
     }
     gpuProfiler.cpuEnd('station UI');
-    gpuProfiler.cpuBegin('clock contrast');
-    updateClockTextContrast();
-    gpuProfiler.cpuEnd('clock contrast');
     gpuProfiler.cpuEnd('station UI and contrast');
 
     updateDiagnosticOverlays();
@@ -10756,20 +10755,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     clockSolarIconEl.querySelector('[data-solar-icon="sunset"]').hidden = eventName != 'Sunset';
   }
 
-  function updateClockTextContrast()
-  {
-    if (!clockEl || clockEl.hidden) return;
-    const textColor = getSceneContrastTextColor(() => {
-      const bounds = clockEl.getBoundingClientRect();
-      return {x: bounds.left + bounds.width * 0.5, y: bounds.top + bounds.height * 0.5};
-    }, 0, clockEl);
-    const contrast = textColor == '#ffffff' ? 'light' : 'dark';
-    if (clockEl.dataset.contrast !== contrast) {
-      clockEl.dataset.contrast = contrast;
-      clockEl.style.setProperty('--clock-text-color', textColor);
-    }
-  }
-
   function onUpdateTimeOfDaySlider()
   {
     let minutes = (guiControls.timeOfDay % 1) * 60;
@@ -10976,7 +10961,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.118');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.119');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

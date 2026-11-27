@@ -442,6 +442,16 @@ The GitHub Pages site has a canonical URL, indexable descriptive content and a s
 
 `robots.txt` is included for deployments at a domain root. On GitHub Pages project sites, crawlers look for `https://seamless45-cpu.github.io/robots.txt`, not the copy under `/2dweathersandboxv3/`. To advertise this sitemap via robots on GitHub Pages, the owner must place its `Sitemap:` line in the host-root robots file (typically published by the `seamless45-cpu.github.io` site); this project cannot publish that file at the host root. Submitting the sitemap directly does not require that change.
 
+### Interface theme and sounds
+
+The interface uses the locally bundled Orbitron font (SIL Open Font License,
+`resources/fonts/Orbitron-OFL.txt`) and sharp, unblurred sci-fi panels. Short
+synthesized UI cues play only after interaction and follow the existing **Sound**
+setting; disabling sound also silences the interface cues. Reduced-motion
+preferences disable interface animation. Removing UI backdrop filters avoids
+that compositor work, but does not establish that the simulation or lightning
+rendering meets a particular frame rate.
+
 ### Investigating lag on a device
 
 For an opt-in diagnostic session, add `?gpuProfile=1` to the page URL, run a
@@ -458,10 +468,10 @@ which cover their full chains. The first seven simulation values and precipitati
 are **per iteration**, so compare them with the reported iterations per frame.
 The frame interval reports time between frame submissions (including scheduling);
 the CPU frame value is JavaScript submission time, not GPU time or frame interval;
-CPU section maxima can reveal occasional readback stalls. Station UI and clock
-contrast are timed separately; contrast fence polling, layout, read enqueue and
-buffer download have their own CPU sections, making it possible to distinguish
-a GPU readback stall from a browser layout stall. Samples are a bounded,
+CPU section maxima can reveal occasional readback stalls. The opaque clock HUD
+uses fixed light text and no longer samples the GPU for contrast. Weather-station
+contrast still reports fence polling, layout, read enqueue and buffer download
+separately, helping distinguish a GPU readback stall from a browser layout stall. Samples are a bounded,
 sparse snapshot, not a complete trace, and cannot identify every possible cause.
 
 Workloads to investigate include: multiple full-grid simulation passes per
