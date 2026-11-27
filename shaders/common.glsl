@@ -493,6 +493,52 @@ vec4 bilerpWall(sampler2D tex, isampler2D wallTex,
   return mix(mix(a, b, mixAB), mix(c, d, mixCD), mixAB_CD);
 }
 
+// Both fields share the same wall mask and coordinates.
+void bilerpWallPair(sampler2D firstTex, sampler2D secondTex, isampler2D wallTex, vec2 pos,
+                    out vec4 first, out vec4 second)
+{
+  vec2 st = pos - 0.5;    // calc pixel coordinats
+
+  vec2 ipos = vec2(floor(st));
+  vec2 fpos = fract(st);
+
+  vec4 a = texture(firstTex, (ipos + vec2(0.5, 0.5)) / resolution);
+  vec4 b = texture(firstTex, (ipos + vec2(1.5, 0.5)) / resolution);
+  vec4 c = texture(firstTex, (ipos + vec2(0.5, 1.5)) / resolution);
+  vec4 d = texture(firstTex, (ipos + vec2(1.5, 1.5)) / resolution);
+  vec4 a2 = texture(secondTex, (ipos + vec2(0.5, 0.5)) / resolution);
+  vec4 b2 = texture(secondTex, (ipos + vec2(1.5, 0.5)) / resolution);
+  vec4 c2 = texture(secondTex, (ipos + vec2(0.5, 1.5)) / resolution);
+  vec4 d2 = texture(secondTex, (ipos + vec2(1.5, 1.5)) / resolution);
+
+  ivec4 wa = texture(wallTex, (ipos + vec2(0.5, 0.5)) / resolution);
+  ivec4 wb = texture(wallTex, (ipos + vec2(1.5, 0.5)) / resolution);
+  ivec4 wc = texture(wallTex, (ipos + vec2(0.5, 1.5)) / resolution);
+  ivec4 wd = texture(wallTex, (ipos + vec2(1.5, 1.5)) / resolution);
+
+  float mixAB = fpos.x;
+  float mixCD = fpos.x;
+  float mixAB_CD = fpos.y;
+
+  if (wa[DISTANCE] == 0)
+    mixAB = 1.;
+  else if (wb[DISTANCE] == 0)
+    mixAB = 0.;
+
+  if (wc[DISTANCE] == 0)
+    mixCD = 1.;
+  else if (wd[DISTANCE] == 0)
+    mixCD = 0.;
+
+  if (wa[DISTANCE] == 0 && wb[1] == 0)
+    mixAB_CD = 1.;
+  else if (wc[DISTANCE] == 0 && wd[DISTANCE] == 0)
+    mixAB_CD = 0.;
+
+  first = mix(mix(a, b, mixAB), mix(c, d, mixCD), mixAB_CD);
+  second = mix(mix(a2, b2, mixAB), mix(c2, d2, mixCD), mixAB_CD);
+}
+
 #define IR_constant 5.670374419 // ×10−8
 
 float IR_emitted(float T)

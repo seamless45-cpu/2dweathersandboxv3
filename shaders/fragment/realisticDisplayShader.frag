@@ -1001,9 +1001,8 @@ vec4 computeAirColor(vec2 bndFragCoord)
 vec4 getAirColor(vec2 fragCoordIn)
 {
   vec2 bndFragCoord = vec2(fragCoordIn.x, clamp(fragCoordIn.y, 0., resolution.y)); // bound y within range
-  base = bilerpWallVis(baseTex, wallTex, bndFragCoord);
+  bilerpWallVisPair(baseTex, waterTex, wallTex, bndFragCoord, base, water);
   wall = texture(wallTex, bndFragCoord * texelSize);                               // texCoord
-  water = bilerpWallVis(waterTex, wallTex, bndFragCoord);
   lightIntensity = texture(lightTex, bndFragCoord * texelSize)[0] / standardSunBrightness;
   return computeAirColor(bndFragCoord);
 }
@@ -1059,9 +1058,8 @@ void main()
 
   } else {
     vec2 bndFragCoord = vec2(fragCoord.x, clamp(fragCoord.y, 0., resolution.y)); // bound y within range
-    base = bilerpWallVis(baseTex, wallTex, bndFragCoord);
+    bilerpWallVisPair(baseTex, waterTex, wallTex, bndFragCoord, base, water);
     wall = texture(wallTex, bndFragCoord * texelSize);                           // texCoord
-    water = bilerpWallVis(waterTex, wallTex, bndFragCoord);
     lightIntensity = texture(lightTex, bndFragCoord * texelSize)[0] / standardSunBrightness;
 
     shadowLight = minShadowLight;
