@@ -110,6 +110,7 @@ vec3 rodGlow = vec3(0.0); // the rod's own light (tip corona, strike surge): dra
 // These describe one actual HDR render-target pixel, including render scale/zoom.
 vec2 screenTexDx, screenTexDy;
 vec4 lightningArcSeeds01, lightningArcSeeds23;
+vec4 lightningCloudShape, lightningCloudCurve;
 
 
 const vec3 bareDrySoilCol = pow(vec3(0.85, 0.60, 0.40), vec3(GAMMA));
@@ -573,16 +574,12 @@ vec3 displayAdaptedFlash(vec2 pos, float lightningTime, float currentLightningIn
   // A conservative square covers every angle, curve and artwork edge.
   vec2 offset = vec2((texCoord.x - pos.x) * aspectRatios[0], texCoord.y - pos.y);
   if (max(abs(offset.x), abs(offset.y)) > lengthWorld * 1.7) return vec3(0.0);
-  float seed = random2d(vec2(pos.x * 37.7 + pos.y * 13.3, pos.y * 29.1 + 3.17));
-  float shape = random2d(vec2(pos.x * 61.3 + 7.9, pos.y * 41.7 + 5.1));
-  float angle = mix(-0.70, 0.70, seed);
-  float direction = shape < 0.5 ? -1.0 : 1.0;
-  vec2 axis = direction * vec2(cos(angle), sin(angle));
+  vec2 axis = lightningCloudShape.zw;
   vec2 center = vec2(pos.x * aspectRatios[0], pos.y);
   vec2 start = center - axis * lengthWorld * 0.5;
   vec2 end = center + axis * lengthWorld * 0.5;
-  float bow = (seed < 0.5 ? -1.0 : 1.0) * mix(0.65, 1.05, shape);
-  float skew = mix(-0.65, 0.65, seed);
+  float bow = lightningCloudCurve.x;
+  float skew = lightningCloudCurve.y;
   float u, t; vec2 gradX, gradY;
   if (!cloudCurveProjection(start, end, bow, skew, u, t, gradX, gradY)) return vec3(0.0);
   float coverage = adaptedUpstreamArtwork(u, t, gradX, gradY);
@@ -699,11 +696,8 @@ vec3 displayCloudToCloudLightning(vec2 targetPos, vec2 originPos, bool isPositiv
   vec2 pad = vec2(span * 1.1);
   if (any(lessThan(point, min(start, end) - pad)) ||
       any(greaterThan(point, max(start, end) + pad))) return vec3(0.0);
-  float seed = random2d(vec2(originPos.x * 29.1 + originPos.y * 17.7,
-                             targetPos.x * 41.3 + targetPos.y * 13.9));
-  float shape = random2d(vec2(targetPos.y * 61.1 + 11.7, originPos.x * 47.9 + 8.3));
-  float bow = (seed < 0.5 ? -1.0 : 1.0) * mix(0.65, 1.05, shape);
-  float skew = mix(-0.65, 0.65, seed);
+  float bow = lightningCloudCurve.x;
+  float skew = lightningCloudCurve.y;
   float u, t; vec2 gradX, gradY;
   if (!cloudCurveProjection(start, end, bow, skew, u, t, gradX, gradY)) return vec3(0.0);
   float pixVal = adaptedUpstreamArtwork(u, t, gradX, gradY);
@@ -843,6 +837,10 @@ vec4 computeAirColor(vec2 bndFragCoord)
     vec3 lightningIlluminationTint = vec3(1.0);
     float strokeBrightnessMult = isHyperbolt ? 30.0 : 12.0;
     sampledStrikeCoverage = 0.0;
+    if (isFlash || isCloudToCloud) {
+      lightningCloudShape = texelFetch(lightningRenderStateTex, ivec2(slot, 2), 0);
+      lightningCloudCurve = texelFetch(lightningRenderStateTex, ivec2(slot, 3), 0);
+    }
     vec3 strikeChannel = vec3(0.0);
     if (isExternalPositive) {
       lightningArcSeeds01 = texelFetch(lightningRenderStateTex, ivec2(slot, 2), 0);
@@ -884,43 +882,48 @@ vec4 computeAirColor(vec2 bndFragCoord)
     if (lightningBloomEnabled)
       lightningBloomLight += strikePeak * upstreamLightningColor;
 
-    // The light a strike throws on the clouds around it.
-    float lightningOnLight;
-    if (isFlash) {
-      // A flash lights the whole slab it lives in, not a point below itself: its
-      // lobe is centred on the strike, reaches twice as far and is twice as bright,
-      // because what a player sees of an intra-cloud flash from outside the cloud is
-      // mostly this - the deck glowing from the inside - with the network on top.
-      vec2 flashDist = vec2((lightningPos.x - texCoord.x) * aspectRatios[0], texCoord.y - lightningPos.y);
-      lightningOnLight = lightningOnLightBrightness * 2.0 / (pow(length(flashDist) * 0.5, 2.) + 0.03 * lightningHeightScale());
-      if (isPositiveIC)
-        lightningOnLight *= 1.5;
-    } else if (isCloudToCloud) {
-      vec2 ccTargetDist = vec2((lightningPos.x - texCoord.x) * aspectRatios[0],
-                               texCoord.y - metaRawZ);
-      lightningOnLight = lightningOnLightBrightness * 1.4 / (pow(length(ccTargetDist) * 0.5, 2.) + 0.03 * lightningHeightScale()) * ccIntensityGain * ccTailFade;
-      float ccOriginDx = lightningMeta.x - texCoord.x;
-      vec2 ccOriginDist = vec2(ccOriginDx * aspectRatios[0], texCoord.y - lightningPos.y);
-      float ccMidDx = 0.5 * (lightningPos.x + lightningMeta.x) - texCoord.x;
-      vec2 ccMidDist = vec2(ccMidDx * aspectRatios[0], texCoord.y - 0.5 * (lightningPos.y + metaRawZ));
-      onLight += lightningIlluminationTint * (lightningOnLightBrightness * 1.4 / (pow(length(ccOriginDist) * 0.5, 2.) + 0.03 * lightningHeightScale()) * ccIntensityGain * ccTailFade * currentLightningIntensity);
-      onLight += lightningIlluminationTint * (lightningOnLightBrightness * 0.9 / (pow(length(ccMidDist) * 0.55, 2.) + 0.035 * lightningHeightScale()) * ccIntensityGain * ccTailFade * currentLightningIntensity);
-    } else {
-      // The ground lobe remains in the same world tile as the strike.
-      float cgDx = lightningPos.x - texCoord.x;
-      vec2 dist = vec2(cgDx, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1 * lightningHeightScale()), 0.));
-      dist.x *= aspectRatios[0];
-      lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03 * lightningHeightScale());
-    }
-    lightningOnLight *= isExternalPositive ? extCurve : currentLightningIntensity;
-    if (isSuperbolt)
-      lightningOnLight *= strokeBrightnessMult;
-    onLight += lightningIlluminationTint * lightningOnLight;
-    if (isExternalPositive) {
+    // Transparent, unobstructed air has no surface for this illumination to
+    // light. Keep the channel and bloom above, and retain lighting anywhere a
+    // later terrain, vegetation or rod overlay can make the pixel opaque.
+    if (opacity != 0.0 || wall[VERT_DISTANCE] < 10 || rodCount > 0) {
+      // The light a strike throws on the clouds around it.
+      float lightningOnLight;
+      if (isFlash) {
+        // A flash lights the whole slab it lives in, not a point below itself: its
+        // lobe is centred on the strike, reaches twice as far and is twice as bright,
+        // because what a player sees of an intra-cloud flash from outside the cloud is
+        // mostly this - the deck glowing from the inside - with the network on top.
+        vec2 flashDist = vec2((lightningPos.x - texCoord.x) * aspectRatios[0], texCoord.y - lightningPos.y);
+        lightningOnLight = lightningOnLightBrightness * 2.0 / (pow(length(flashDist) * 0.5, 2.) + 0.03 * lightningHeightScale());
+        if (isPositiveIC)
+          lightningOnLight *= 1.5;
+      } else if (isCloudToCloud) {
+        vec2 ccTargetDist = vec2((lightningPos.x - texCoord.x) * aspectRatios[0],
+                                 texCoord.y - metaRawZ);
+        lightningOnLight = lightningOnLightBrightness * 1.4 / (pow(length(ccTargetDist) * 0.5, 2.) + 0.03 * lightningHeightScale()) * ccIntensityGain * ccTailFade;
+        float ccOriginDx = lightningMeta.x - texCoord.x;
+        vec2 ccOriginDist = vec2(ccOriginDx * aspectRatios[0], texCoord.y - lightningPos.y);
+        float ccMidDx = 0.5 * (lightningPos.x + lightningMeta.x) - texCoord.x;
+        vec2 ccMidDist = vec2(ccMidDx * aspectRatios[0], texCoord.y - 0.5 * (lightningPos.y + metaRawZ));
+        onLight += lightningIlluminationTint * (lightningOnLightBrightness * 1.4 / (pow(length(ccOriginDist) * 0.5, 2.) + 0.03 * lightningHeightScale()) * ccIntensityGain * ccTailFade * currentLightningIntensity);
+        onLight += lightningIlluminationTint * (lightningOnLightBrightness * 0.9 / (pow(length(ccMidDist) * 0.55, 2.) + 0.035 * lightningHeightScale()) * ccIntensityGain * ccTailFade * currentLightningIntensity);
+      } else {
+        // The ground lobe remains in the same world tile as the strike.
+        float cgDx = lightningPos.x - texCoord.x;
+        vec2 dist = vec2(cgDx, max((abs(lightningPos.y / 2. - texCoord.y) - 0.1 * lightningHeightScale()), 0.));
+        dist.x *= aspectRatios[0];
+        lightningOnLight = lightningOnLightBrightness / (pow(length(dist), 2.) + 0.03 * lightningHeightScale());
+      }
+      lightningOnLight *= isExternalPositive ? extCurve : currentLightningIntensity;
+      if (isSuperbolt)
+        lightningOnLight *= strokeBrightnessMult;
       onLight += lightningIlluminationTint * lightningOnLight;
-      float originDx = lightningMeta.x - texCoord.x;
-      vec2 originDist = vec2(originDx * aspectRatios[0], texCoord.y - lightningPos.y);
-      onLight += lightningIlluminationTint * (lightningOnLightBrightness * 2.0 / (pow(length(originDist) * 0.7, 2.) + 0.03 * lightningHeightScale()) * extCurve * (isSuperbolt ? strokeBrightnessMult : 1.0));
+      if (isExternalPositive) {
+        onLight += lightningIlluminationTint * lightningOnLight;
+        float originDx = lightningMeta.x - texCoord.x;
+        vec2 originDist = vec2(originDx * aspectRatios[0], texCoord.y - lightningPos.y);
+        onLight += lightningIlluminationTint * (lightningOnLightBrightness * 2.0 / (pow(length(originDist) * 0.7, 2.) + 0.03 * lightningHeightScale()) * extCurve * (isSuperbolt ? strokeBrightnessMult : 1.0));
+      }
     }
   }
 
