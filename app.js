@@ -602,6 +602,9 @@ var gl;
 
 var clockEl;
 var clockFpsEl;
+var clockSolarSunriseIconEl = null;   // cached: querySelector used to run twice every frame
+var clockSolarSunsetIconEl = null;
+var lastClockTextKey = '';            // DOM clock only re-renders when visible text changes
 
 var simDateTime;
 
@@ -699,6 +702,7 @@ const guiControls_default = {
   superSharpDetail : false,
   fullscreenMode : false,
   cameraShakeEnabled : true,
+  complexChargeSeparation : false, // Physics > Complex Charge Separation: off by default, the legacy cloud-density trigger is in charge
   showWeatherStations : true,
   shareWeatherDataToLan : false,
   sound : true,
@@ -884,14 +888,6 @@ const rainGaugeBucketCapacityMm = 0.2;
 const rainGaugeRateWindowMinutes = 10;
 const rainGaugeMeasurableIntervalMm = 0.01;
 const stationCloudCoverRadiusCells = 10;
-var weatherStationSamplingBuffers = {
-  base : new Float32Array(0),
-  water : new Float32Array(0),
-  light : new Float32Array(0),
-  cloudWater : new Float32Array(0),
-  cloudWalls : new Int8Array(0),
-  rainRegions : []
-};
 
 function readRgbaChannel(data, pixelOffset, channel)
 {
@@ -903,7 +899,7 @@ function readRgbaChannel(data, pixelOffset, channel)
 function createGpuPerformanceProfiler(gl, enabled, focus)
 {
   const names = ['velocity', 'curl', 'vorticity', 'boundary', 'advection', 'pressure', 'lighting',
-                 'precipitation', 'lightning slots', 'lightning render state', 'ambient blur', 'sky', 'scene', 'bloom', 'post'];
+                 'precipitation', 'charge separation', 'lightning slots', 'lightning render state', 'ambient blur', 'sky', 'scene', 'bloom', 'post'];
   const ext = enabled && gl.getExtension('EXT_disjoint_timer_query_webgl2');
   const resultNames = [...names, 'simulation batch'];
   const scheduledNames = focus === 'simulation' ? ['simulation batch'] : (focus && names.includes(focus) ? [focus] : names);
@@ -1035,18 +1031,40 @@ function getUniformLoc(program, name)
 
 function clamp(num, min, max) { return Math.min(Math.max(num, min), max); }
 
+// Cached display rect for the canvas. getBoundingClientRect() forces a
+// synchronous layout flush, and the frame loop used to call it (through
+// getCanvasDisplayWidth/Height) a dozen times per frame — every weather
+// station redraw, every screenToSim/simToScreen, every diagnostic overlay.
+// The canvas is a fixed full-viewport layer, so its rect only changes when
+// the window resizes; invalidate on resize/scroll/fullscreen instead.
+var canvasDisplayRectCache = null;
+function invalidateCanvasDisplayRectCache()
+{
+  canvasDisplayRectCache = null;
+}
 function getCanvasDisplayRect()
 {
   if (canvas) {
+    if (canvasDisplayRectCache)
+      return canvasDisplayRectCache;
     const rect = canvas.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0)
+    if (rect.width > 0 && rect.height > 0) {
+      canvasDisplayRectCache = rect;
       return rect;
-    if (canvas.clientWidth > 0 && canvas.clientHeight > 0)
-      return {width : canvas.clientWidth, height : canvas.clientHeight};
+    }
+    if (canvas.clientWidth > 0 && canvas.clientHeight > 0) {
+      canvasDisplayRectCache = { width : canvas.clientWidth, height : canvas.clientHeight,
+                                 left : 0, top : 0, right : canvas.clientWidth, bottom : canvas.clientHeight };
+      return canvasDisplayRectCache;
+    }
   }
   return {
     width : Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1),
-    height : Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1)
+    height : Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1),
+    left : 0,
+    top : 0,
+    right : Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1),
+    bottom : Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1)
   };
 }
 
@@ -1953,6 +1971,7 @@ class Weatherstation
   #skyCondition = 'CLR';
   #weatherIconElement;
   #textColor = '#ffffff';
+  #lastCanvasPaintMs = 0; // station canvases repaint at ~10 Hz, not every frame
 
   #netIRpow = 0;
   #solarPower = 0;
@@ -2554,8 +2573,10 @@ class Weatherstation
 
   #scrollMenu(deltaY)
   {
-    if (deltaY !== 0)
+    if (deltaY !== 0) {
       this.#menuPage = 1 - this.#menuPage;
+      this.#lastCanvasPaintMs = 0; // flip pages immediately, don't wait out the repaint throttle
+    }
   }
 
   updateCanvas()
@@ -2569,6 +2590,15 @@ class Weatherstation
     this.#textColor = getSceneContrastTextColor(screenX + this.#width / 2, screenY + this.#height * 0.4, this);
     this.#stationMarkerLabel.style.color = this.#textColor;
     this.#menuHint.dataset.contrast = this.#textColor == '#111820' ? 'dark' : 'light';
+
+    // The marker position above has to track the camera every frame, but the
+    // canvas repaint below (clearRect + text + layout of ~a dozen fillText
+    // calls per station) does not need to run more often than the values it
+    // shows — the station data itself is measured about once per second.
+    const nowMs = performance.now();
+    if (this.#lastCanvasPaintMs && nowMs - this.#lastCanvasPaintMs < 100)
+      return;
+    this.#lastCanvasPaintMs = nowMs;
     // this.#canvas.style.left = screenX + 'px';
     // this.#canvas.style.top = screenY + 'px';
     let c = this.#c;
@@ -2694,6 +2724,24 @@ let lightningRodsVersion = 0;
 let lightningRodCaptures = 0;
 const SUPER_LIGHTNING_ROD_REACH_MULT = 2.5;
 const lightningRodStatus = { placed : '0 (0 hits)' };
+
+// Complex charge separation system (Physics folder). Created once inside
+// mainScript; null when the module or its shader could not be loaded, in
+// which case the Physics toggle refuses to engage and reports it. Off by
+// default — the legacy cloud-density lightning trigger stays in charge.
+var chargeSeparationSystem = null;
+var chargeSeparationStatus = { text : 'Legacy (cloud-density)' };
+
+function updateChargeSeparationStatus()
+{
+  if (!chargeSeparationSystem) {
+    chargeSeparationStatus.text = 'Unavailable (module failed to load)';
+    return;
+  }
+  chargeSeparationStatus.text = guiControls && guiControls.complexChargeSeparation
+    ? 'Charge separation (non-inductive)'
+    : 'Legacy (cloud-density)';
+}
 
 function updateLightningRodStatus()
 {
@@ -3293,7 +3341,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
     }
 
-    const canvasBounds = canvas.getBoundingClientRect();
+    const now = performance.now();
+    if (now - lastCapeHoverUpdateTime < 150)
+      return; // throttle first: no layout reads or shader reads between updates
+    lastCapeHoverUpdateTime = now;
+
+    const canvasBounds = getCanvasDisplayRect(); // cached rect: no forced layout
     const displayWidth = Math.max(1, canvasBounds.width);
     const displayHeight = Math.max(1, canvasBounds.height);
     const pointerOverCanvas = canvas.matches(':hover') && mouseX >= 0 && mouseX <= displayWidth &&
@@ -3302,11 +3355,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       capeHoverTooltip.hidden = true;
       return;
     }
-
-    const now = performance.now();
-    if (now - lastCapeHoverUpdateTime < 150)
-      return;
-    lastCapeHoverUpdateTime = now;
 
     let column = Math.floor(mouseXinSim * sim_res_x);
     column = guiControls.wrapHorizontally
@@ -6183,6 +6231,31 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     precipitation_folder.add(guiControls, 'inactiveDroplets', 0, NUM_DROPLETS).listen().name('Inactive Droplets');
 
 
+    // --- Physics folder: complex charge separation (off by default) --------
+    // Non-inductive graupel–ice charging. When off, the legacy cloud-density
+    // lightning trigger is in charge. The toggle refuses to engage if the
+    // system could not be created (shader/module failed to load).
+    var physics_folder = datGui.addFolder('Physics');
+    const chargeSeparationController = physics_folder
+      .add(guiControls, 'complexChargeSeparation')
+      .name('Complex Charge Separation')
+      .listen()
+      .onChange(function() {
+        if (guiControls.complexChargeSeparation && !chargeSeparationSystem) {
+          guiControls.complexChargeSeparation = false;
+          chargeSeparationController.updateDisplay();
+        }
+        updateChargeSeparationStatus();
+      });
+    const chargeSeparationToggleElement = chargeSeparationController.domElement;
+    if (chargeSeparationToggleElement)
+      chargeSeparationToggleElement.title = 'Non-inductive graupel–ice charging (Takahashi): lightning fires where strong updrafts, supercooled liquid water and ice coexist, charged by graupel–crystal collisions and the reversal temperature. Off (the default) keeps the legacy cloud-density trigger.';
+    const chargeSeparationStatusController = physics_folder.add(chargeSeparationStatus, 'text').name('Lightning Source').listen();
+    const chargeSeparationStatusInput = chargeSeparationStatusController.domElement.querySelector('input');
+    if (chargeSeparationStatusInput)
+      chargeSeparationStatusInput.readOnly = true;
+
+
     var display_folder = datGui.addFolder('Display');
 
     displayModeController = display_folder
@@ -6653,6 +6726,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     clockSolarCountdownEl = clockEl.querySelector('.simulation-clock-solar-countdown');
     clockSolarIconEl = clockEl.querySelector('.simulation-clock-event-icon');
     clockFpsEl = clockEl.querySelector('.simulation-clock-fps-value');
+    clockSolarSunriseIconEl = clockSolarIconEl ? clockSolarIconEl.querySelector('[data-solar-icon="sunrise"]') : null;
+    clockSolarSunsetIconEl = clockSolarIconEl ? clockSolarIconEl.querySelector('[data-solar-icon="sunset"]') : null;
 
     diagnosticLegend = document.createElement('div');
     diagnosticLegend.className = 'diagnostic-legend';
@@ -6976,6 +7051,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   function syncCanvasAspect()
   {
+    invalidateCanvasDisplayRectCache();
     const displayWidth = getCanvasDisplayWidth();
     const displayHeight = getCanvasDisplayHeight();
     canvas_aspect = displayWidth / displayHeight;
@@ -7069,7 +7145,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   };
 
   window.addEventListener('resize', scheduleCanvasResize);
+  window.addEventListener('resize', invalidateCanvasDisplayRectCache);
+  window.addEventListener('scroll', invalidateCanvasDisplayRectCache, true);
   window.visualViewport?.addEventListener('resize', scheduleCanvasResize);
+  window.visualViewport?.addEventListener('resize', invalidateCanvasDisplayRectCache);
   document.addEventListener('fullscreenchange', syncFullscreenControl);
   document.addEventListener('webkitfullscreenchange', syncFullscreenControl);
   if (typeof ResizeObserver !== 'undefined')
@@ -7191,7 +7270,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   }, {passive : false});
 
   window.addEventListener('mousemove', function(event) {
-    var rect = canvas.getBoundingClientRect();
+    var rect = getCanvasDisplayRect();
     mouseX = event.clientX - rect.left;
 
     if (!((guiControls.tool == 'TOOL_WALL_SEA' || guiControls.tool == 'TOOL_SUPER_LAKE') && leftMousePressed)) // lock y pos while drawing lake / sea
@@ -7698,8 +7777,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-16.124'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-16.124')
+    loadSourceFile('shaders/common.glsl?v=2026-11-28.1'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-28.1')
   ]);
 
   const [
@@ -7767,6 +7846,15 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     'precipitationShader.vert',
     'precipitationShader.frag'
   ].map(name => loadShader(name)));
+
+  // Complex charge separation (Physics folder). Fetched separately and never
+  // fatally: if the file (or its driver module) is missing, the simulation
+  // still starts and the Physics > Complex Charge Separation toggle refuses
+  // to engage instead of breaking startup.
+  const chargeSeparationShaderSource = await loadSourceFile('physics/chargeSeparationShader.frag?v=2026-11-28.1').catch(function(error) {
+    console.warn('Complex charge separation unavailable: ' + (error && error.message ? error.message : error));
+    return null;
+  });
 
 
   // create programs
@@ -8672,7 +8760,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-16.124');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-28.1');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -8798,6 +8886,40 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   }
 
   cellHeight = guiControls.simHeight / sim_res_y; // in meters
+
+  // Complex charge separation system (Physics > Complex Charge Separation).
+  // Created once for the whole session; it only runs while the toggle is on
+  // (off by default). Fails soft on any error: the toggle refuses to engage
+  // and the legacy trigger keeps working.
+  chargeSeparationSystem = null;
+  if (chargeSeparationShaderSource) {
+    var chargeSeparationModule = (typeof ComplexChargeSeparation !== 'undefined') ? ComplexChargeSeparation
+      : (typeof window !== 'undefined' && window.ComplexChargeSeparation) || null;
+    if (chargeSeparationModule && typeof chargeSeparationModule.createSystem === 'function') {
+      try {
+        chargeSeparationSystem = chargeSeparationModule.createSystem({
+          gl : gl,
+          vertexShader : simVertexShader,
+          fragSource : chargeSeparationShaderSource,
+          simResX : sim_res_x,
+          simResY : sim_res_y,
+          cellHeightM : cellHeight,
+          dryLapse : dryLapse,
+          secondsPerIteration : timePerIteration * 3600.0,
+          timePerIterationHours : timePerIteration,
+          compactFeedback : compactPrecipitationFeedback
+        });
+      } catch (error) {
+        console.warn('Complex charge separation could not be initialized; the Physics toggle stays off.', error);
+        chargeSeparationSystem = null;
+      }
+    } else {
+      console.warn('physics/chargeSeparation.js did not register window.ComplexChargeSeparation; the Physics toggle stays off.');
+    }
+  }
+  if (!chargeSeparationSystem && guiControls.complexChargeSeparation)
+    guiControls.complexChargeSeparation = false; // saved as on, but unavailable this session
+  updateChargeSeparationStatus();
 
   // Upload the initial temperature profile and the real-world sounding as a
   // float texture (504 x 4, one row per profile) instead of uniform arrays.
@@ -9012,6 +9134,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'lightningDataTex'), 1);
   gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'waterTex'), 2);
   gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'baseTex'), 3);
+  // complex charge separation: the 1×1 strike feedback lives on unit 5
+  gl.uniform1i(gl.getUniformLocation(lightningLocationProgram, 'chargeFeedbackTex'), 5);
+  gl.uniform1f(gl.getUniformLocation(lightningLocationProgram, 'complexChargeSeparationGate'), 0.0); // set per iteration in the sim loop
   gl.uniform1f(gl.getUniformLocation(lightningLocationProgram, 'dryLapse'), dryLapse);
   gl.uniform1f(gl.getUniformLocation(lightningLocationProgram, 'simHeightMeters'), guiControls.simHeight);
   gl.uniform2f(gl.getUniformLocation(lightningLocationProgram, 'resolution'), sim_res_x, sim_res_y);
@@ -9602,8 +9727,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               gl.useProgram(precipitationProgram);
               gl.uniform1f(getUniformLoc(precipitationProgram, 'iterNum'), iterNum);
               // cloud-density lightning is owned by the precipitation shader
-              // (lightningCloudDensityThreshold / lightningChanceMultiplier)
-              gl.uniform1f(getUniformLoc(precipitationProgram, 'legacyLightningGate'), 1.0);
+              // (lightningCloudDensityThreshold / lightningChanceMultiplier);
+              // the charge separation model closes that gate and owns strikes
+              // when its toggle is on (Physics folder)
+              gl.uniform1f(getUniformLoc(precipitationProgram, 'legacyLightningGate'),
+                           (guiControls.complexChargeSeparation && chargeSeparationSystem) ? 0.0 : 1.0);
               // Precipitation tool: release droplets inside the brush even without
               // cloud cover, so painting the tool makes it rain/snow there. Ctrl
               // erases the painted precipitation field instead.
@@ -9650,8 +9778,23 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
             }
 
+            // Complex charge separation (Physics folder). Runs after the
+            // precipitation pass and before the slot manager, so flashes it
+            // initiates are visible in the same iteration. Skipped entirely
+            // (zero cost, zero behavior change) while the toggle is off.
+            if (guiControls.complexChargeSeparation && chargeSeparationSystem) {
+              if (i === 0) gpuProfiler.begin('charge separation');
+              chargeSeparationSystem.step({
+                baseTex : baseTexture_1,
+                waterTex : waterTexture_1,
+                wrapHorizontally : guiControls.wrapHorizontally
+              });
+              if (i === 0) gpuProfiler.end('charge separation');
+            }
+
             // The slot pass also runs for manually queued strikes when rain is off.
-            if (guiControls.enablePrecipitation || pendingArtificialLightning.length > 0) {
+            if (guiControls.enablePrecipitation || pendingArtificialLightning.length > 0 ||
+                (guiControls.complexChargeSeparation && chargeSeparationSystem)) {
               // Strike slot manager: a new strike takes a free slot and every
               // running strike keeps its own until its animation is over, so
               // strikes never cut each other short. Ping-pong the slot array.
@@ -9660,6 +9803,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               const lightningDst = 1 - lightningDataSrc;
               gl.useProgram(lightningLocationProgram);
               gl.uniform1f(getUniformLoc(lightningLocationProgram, 'iterNum'), iterNum);
+              gl.uniform1f(getUniformLoc(lightningLocationProgram, 'complexChargeSeparationGate'),
+                           (guiControls.complexChargeSeparation && chargeSeparationSystem) ? 1.0 : 0.0);
               const manualStrike = !artificialAttemptedThisFrame && !manualLightningReadbackPending && iterNum > 0 ? pendingArtificialLightning[0] : null;
               gl.uniform4f(getUniformLoc(lightningLocationProgram, 'artificialStrike'),
                            manualStrike ? manualStrike.x : 0, manualStrike ? manualStrike.y : 0, 2.8, manualStrike ? 1 : 0);
@@ -9677,6 +9822,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
               gl.bindTexture(gl.TEXTURE_2D, baseTexture_1);
               gl.activeTexture(gl.TEXTURE4);
               gl.bindTexture(gl.TEXTURE_2D, rodDataTexture);
+              // unit 5: charge separation strike feedback (1×1). Bound always; the
+              // gate uniform decides whether the slot manager reads it.
+              gl.activeTexture(gl.TEXTURE5);
+              gl.bindTexture(gl.TEXTURE_2D, chargeSeparationSystem ? chargeSeparationSystem.feedbackTexture : precipitationFeedbackTexture);
 
               gl.bindFramebuffer(gl.FRAMEBUFFER, lightningDataFrameBuffs[lightningDst]);
               gl.viewport(0, 0, numLightningSlots, 2);
@@ -9731,6 +9880,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         const rodCaptureCheckDue = lightningRods.length > 0 && (guiControls.enablePrecipitation || iterNum <= manualLightningActiveUntil) &&
                                    iterNum != lastRodCaptureCheckIteration &&
                                    (rodCaptureFrame++ % 12) === 0;
+        gpuProfiler.cpuBegin('station readback poll');
+        pollWeatherStationReadback(); // fence-polled; never blocks
+        gpuProfiler.cpuEnd('station readback poll');
         gpuProfiler.cpuBegin('lightning readback poll');
         let completedLightning = lightningReadback.poll();
         gpuProfiler.cpuEnd('lightning readback poll');
@@ -10575,14 +10727,19 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   //////////////////////////////////////////////////////// functions:
 
-  function measureWeatherStations()
-  {
-    const stations = weatherStations.slice();
-    if (stations.length == 0) {
-      clearRainGaugeAccumulation();
-      return stations;
-    }
+  // Asynchronous weather-station sampling -------------------------------
+  // gl.readPixels is synchronous: it waits until the GPU has executed
+  // everything queued before it, which used to hitch the frame when the
+  // stations sampled from inside the iteration batch. Each sample now goes
+  // into PIXEL_PACK_BUFFERs behind a fence; pollWeatherStationReadback()
+  // harvests it on a later frame once the fence signaled. Stations keep the
+  // previous measurement until the new one lands — invisible at one sample
+  // per ~60 in-game seconds. If pack buffers are unavailable the sampler
+  // falls back to the original synchronous reads.
+  var weatherStationReadback = { sync : null, batch : null, syncCapable : true };
 
+  function computeStationSamplingGeometry(stations)
+  {
     let minStationX = sim_res_x - 1;
     let maxStationX = 0;
     let minStationY = sim_res_y - 1;
@@ -10600,21 +10757,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     const width = xEnd - xStart + 1;
     const height = yEnd - yStart + 1;
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_0);
-    gl.readBuffer(gl.COLOR_ATTACHMENT0);
-    const stationDataLength = width * height * 4;
-    if (weatherStationSamplingBuffers.base.length < stationDataLength) {
-      weatherStationSamplingBuffers.base = new Float32Array(stationDataLength);
-      weatherStationSamplingBuffers.water = new Float32Array(stationDataLength);
-      weatherStationSamplingBuffers.light = new Float32Array(stationDataLength);
-    }
-    const baseData = weatherStationSamplingBuffers.base;
-    gl.readPixels(xStart, yStart, width, height, gl.RGBA, gl.FLOAT, baseData);
-
-    gl.readBuffer(gl.COLOR_ATTACHMENT1);
-    const waterData = weatherStationSamplingBuffers.water;
-    gl.readPixels(xStart, yStart, width, height, gl.RGBA, gl.FLOAT, waterData);
-
     const cloudRadius = stationCloudCoverRadiusCells;
     let cloudXStart = Math.max(0, minStationX - cloudRadius);
     let cloudXEnd = Math.min(sim_res_x - 1, maxStationX + cloudRadius);
@@ -10625,28 +10767,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       cloudXEnd = sim_res_x - 1;
     }
     const cloudWidth = cloudXEnd - cloudXStart + 1;
-    const cloudDataLength = cloudWidth * sim_res_y * 4;
-    if (weatherStationSamplingBuffers.cloudWater.length < cloudDataLength) {
-      weatherStationSamplingBuffers.cloudWater = new Float32Array(cloudDataLength);
-      weatherStationSamplingBuffers.cloudWalls = new Int8Array(cloudDataLength);
-    }
-    const cloudWaterData = weatherStationSamplingBuffers.cloudWater;
-    gl.readPixels(cloudXStart, 0, cloudWidth, sim_res_y, gl.RGBA, gl.FLOAT, cloudWaterData);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, wallFrameBuff);
-    gl.readBuffer(gl.COLOR_ATTACHMENT2);
-    const cloudWallData = weatherStationSamplingBuffers.cloudWalls;
-    gl.readPixels(cloudXStart, 0, cloudWidth, sim_res_y, gl.RGBA_INTEGER, gl.BYTE, cloudWallData);
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, lightFrameBuff_0);
-    gl.readBuffer(gl.COLOR_ATTACHMENT0);
-    const lightData = weatherStationSamplingBuffers.light;
-    gl.readPixels(xStart, yStart, width, height, gl.RGBA, gl.FLOAT, lightData);
-
+    // Rain gauges: each station's surroundings, merged into non-overlapping
+    // regions so the readback is one pass per region instead of per station.
     const rainRadius = guiControls.wrapHorizontally
       ? Math.min(Math.ceil(2500 / cellHeight), Math.floor((sim_res_x - 1) / 2))
       : Math.max(1, Math.ceil(2500 / cellHeight));
     const rainRegions = [];
-    const stationRainRegions = new Map();
     if (guiControls.enablePrecipitation) {
       for (const station of stations) {
         const stationX = station.getXpos();
@@ -10680,43 +10807,208 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         }
         rainRegions.push(box);
       }
+    }
 
+    return { stations, xStart, yStart, width, height, yEnd,
+             cloudXStart, cloudWidth, rainRegions };
+  }
+
+  function abortStationBatch(batch)
+  {
+    for (const pack of batch.packs)
+      gl.deleteBuffer(pack.pbo);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    weatherStationReadback.syncCapable = false; // one failure is enough: sample synchronously from now on
+    return false;
+  }
+
+  // Enqueue every read of a sample into pack buffers and fence them. Returns
+  // false when a buffer cannot be created (the caller then samples
+  // synchronously instead).
+  function tryEnqueueWeatherStationReadback(geometry)
+  {
+    const batch = Object.assign({ packs : [] }, geometry);
+    const addPack = (array) => {
+      const pbo = gl.createBuffer();
+      if (!pbo) return false;
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo);
+      gl.bufferData(gl.PIXEL_PACK_BUFFER, array.byteLength, gl.STREAM_READ);
+      batch.packs.push({ array, pbo });
+      return true;
+    };
+    const enqueueRead = (array, framebuffer, attachment, format, type, x, y, w, h) => {
+      if (!addPack(array)) return false;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+      gl.readBuffer(attachment);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, batch.packs[batch.packs.length - 1].pbo);
+      gl.readPixels(x, y, w, h, format, type, 0);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      return true;
+    };
+
+    const stationDataLength = geometry.width * geometry.height * 4;
+    const baseData = new Float32Array(stationDataLength);
+    const waterData = new Float32Array(stationDataLength);
+    const lightData = new Float32Array(stationDataLength);
+    if (!enqueueRead(baseData, frameBuff_0, gl.COLOR_ATTACHMENT0, gl.RGBA, gl.FLOAT,
+                     geometry.xStart, geometry.yStart, geometry.width, geometry.height)) return abortStationBatch(batch);
+    if (!enqueueRead(waterData, frameBuff_0, gl.COLOR_ATTACHMENT1, gl.RGBA, gl.FLOAT,
+                     geometry.xStart, geometry.yStart, geometry.width, geometry.height)) return abortStationBatch(batch);
+
+    const cloudDataLength = geometry.cloudWidth * sim_res_y * 4;
+    const cloudWaterData = new Float32Array(cloudDataLength);
+    const cloudWallData = new Int8Array(cloudDataLength);
+    // overhead-cloud channel: the water texture's cloud component, like the
+    // synchronous sampler (water attachment of frameBuff_0)
+    if (!enqueueRead(cloudWaterData, frameBuff_0, gl.COLOR_ATTACHMENT1, gl.RGBA, gl.FLOAT,
+                     geometry.cloudXStart, 0, geometry.cloudWidth, sim_res_y)) return abortStationBatch(batch);
+    if (!enqueueRead(cloudWallData, wallFrameBuff, gl.COLOR_ATTACHMENT2, gl.RGBA_INTEGER, gl.BYTE,
+                     geometry.cloudXStart, 0, geometry.cloudWidth, sim_res_y)) return abortStationBatch(batch);
+
+    if (!enqueueRead(lightData, lightFrameBuff_0, gl.COLOR_ATTACHMENT0, gl.RGBA, gl.FLOAT,
+                     geometry.xStart, geometry.yStart, geometry.width, geometry.height)) return abortStationBatch(batch);
+
+    for (const region of geometry.rainRegions) {
+      const width = region.xEnd - region.xStart + 1;
+      const height = region.yEnd - region.yStart + 1;
+      const rainReadChannels = compactPrecipitationFeedback ? 4 : 1;
+      const dataLength = width * height * rainReadChannels;
+      const regionData = new Float32Array(dataLength);
+      if (!addPack(regionData)) return abortStationBatch(batch);
       gl.bindFramebuffer(gl.FRAMEBUFFER, precipitationFeedbackFrameBuff);
       gl.readBuffer(gl.COLOR_ATTACHMENT2);
-      for (let regionIndex = 0; regionIndex < rainRegions.length; regionIndex++) {
-        const region = rainRegions[regionIndex];
-        const width = region.xEnd - region.xStart + 1;
-        const height = region.yEnd - region.yStart + 1;
-        const rainReadChannels = compactPrecipitationFeedback ? 4 : 1;
-        const dataLength = width * height * rainReadChannels;
-        const prefixLength = height * (width + 1);
-        let buffers = weatherStationSamplingBuffers.rainRegions[regionIndex];
-        if (!buffers || buffers.data.length < dataLength || buffers.prefixes.length < prefixLength) {
-          buffers = {
-            data : new Float32Array(dataLength),
-            prefixes : new Float64Array(prefixLength)
-          };
-          weatherStationSamplingBuffers.rainRegions[regionIndex] = buffers;
-        }
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, batch.packs[batch.packs.length - 1].pbo);
+      gl.readPixels(region.xStart, region.yStart, width, height,
+                    compactPrecipitationFeedback ? gl.RGBA : gl.RED, gl.FLOAT, 0);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      region.data = regionData;
+      region.width = width;
+      region.height = height;
+    }
 
-        gl.readPixels(region.xStart, region.yStart, width, height, compactPrecipitationFeedback ? gl.RGBA : gl.RED, gl.FLOAT, buffers.data);
-        for (let y = 0; y < height; y++) {
-          const rowStart = y * (width + 1);
-          const dataStart = y * width;
-          buffers.prefixes[rowStart] = 0;
-          for (let x = 0; x < width; x++) {
-            buffers.prefixes[rowStart + x + 1] = buffers.prefixes[rowStart + x] + buffers.data[(dataStart + x) * rainReadChannels];
-          }
-        }
-        region.prefixes = buffers.prefixes;
-        region.width = width;
-        region.height = height;
-        for (const station of region.stations) {
-          stationRainRegions.set(station, region);
-        }
-      }
+    batch.baseData = baseData;
+    batch.waterData = waterData;
+    batch.lightData = lightData;
+    batch.cloudWaterData = cloudWaterData;
+    batch.cloudWallData = cloudWallData;
+
+    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    if (!sync) return abortStationBatch(batch);
+    batch.sync = sync;
+    weatherStationReadback.batch = batch;
+    gl.flush();
+    clearRainGaugeAccumulation(); // queue-ordered after the reads, like the synchronous sampler
+    return true;
+  }
+
+  // Synchronous fallback, used only when pack buffers cannot be allocated.
+  function measureWeatherStationsSync(geometry)
+  {
+    const { stations, xStart, yStart, width, height, yEnd, cloudXStart, cloudWidth, rainRegions } = geometry;
+    const stationDataLength = width * height * 4;
+    const baseData = new Float32Array(stationDataLength);
+    const waterData = new Float32Array(stationDataLength);
+    const lightData = new Float32Array(stationDataLength);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_0);
+    gl.readBuffer(gl.COLOR_ATTACHMENT0);
+    gl.readPixels(xStart, yStart, width, height, gl.RGBA, gl.FLOAT, baseData);
+    gl.readBuffer(gl.COLOR_ATTACHMENT1);
+    gl.readPixels(xStart, yStart, width, height, gl.RGBA, gl.FLOAT, waterData);
+
+    const cloudDataLength = cloudWidth * sim_res_y * 4;
+    const cloudWaterData = new Float32Array(cloudDataLength);
+    const cloudWallData = new Int8Array(cloudDataLength);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_0);
+    gl.readBuffer(gl.COLOR_ATTACHMENT1);
+    gl.readPixels(cloudXStart, 0, cloudWidth, sim_res_y, gl.RGBA, gl.FLOAT, cloudWaterData);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, wallFrameBuff);
+    gl.readBuffer(gl.COLOR_ATTACHMENT2);
+    gl.readPixels(cloudXStart, 0, cloudWidth, sim_res_y, gl.RGBA_INTEGER, gl.BYTE, cloudWallData);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, lightFrameBuff_0);
+    gl.readBuffer(gl.COLOR_ATTACHMENT0);
+    gl.readPixels(xStart, yStart, width, height, gl.RGBA, gl.FLOAT, lightData);
+
+    for (const region of rainRegions) {
+      const width = region.xEnd - region.xStart + 1;
+      const height = region.yEnd - region.yStart + 1;
+      const rainReadChannels = compactPrecipitationFeedback ? 4 : 1;
+      const dataLength = width * height * rainReadChannels;
+      region.data = new Float32Array(dataLength);
+      region.width = width;
+      region.height = height;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, precipitationFeedbackFrameBuff);
+      gl.readBuffer(gl.COLOR_ATTACHMENT2);
+      gl.readPixels(region.xStart, region.yStart, width, height,
+                    compactPrecipitationFeedback ? gl.RGBA : gl.RED, gl.FLOAT, region.data);
     }
     clearRainGaugeAccumulation();
+
+    processWeatherStationSample({ stations, xStart, yStart, width, height, yEnd,
+                                  cloudXStart, cloudWidth, rainRegions,
+                                  baseData, waterData, lightData, cloudWaterData, cloudWallData });
+    return stations;
+  }
+
+  // Harvest an in-flight sample once its fence signaled. Called from the
+  // per-frame loop and from measureWeatherStations itself. Never blocks.
+  function pollWeatherStationReadback()
+  {
+    const pending = weatherStationReadback.batch;
+    if (!pending)
+      return true;
+    const status = gl.clientWaitSync(pending.sync, 0, 0);
+    if (status === gl.WAIT_FAILED) {
+      for (const pack of pending.packs)
+        gl.deleteBuffer(pack.pbo);
+      gl.deleteSync(pending.sync);
+      weatherStationReadback.batch = null;
+      weatherStationReadback.syncCapable = false;
+      return true; // treat as drained; the next sample goes synchronous
+    }
+    if (status !== gl.ALREADY_SIGNALED && status !== gl.CONDITION_SATISFIED)
+      return false; // still in flight
+
+    for (const pack of pending.packs) {
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pack.pbo);
+      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pack.array);
+      gl.deleteBuffer(pack.pbo);
+    }
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    gl.deleteSync(pending.sync);
+    weatherStationReadback.batch = null;
+
+    processWeatherStationSample(pending);
+    return true;
+  }
+
+  // CPU half of the sample: rain-rate prefixes and the station callbacks.
+  // Runs on the frame the fence signaled, with the harvested data.
+  function processWeatherStationSample(sample)
+  {
+    const { stations, xStart, yStart, width, height, yEnd, cloudXStart, cloudWidth, rainRegions } = sample;
+
+    // rain-rate prefix sums, one per region
+    const stationRainRegions = new Map();
+    for (let regionIndex = 0; regionIndex < rainRegions.length; regionIndex++) {
+      const region = rainRegions[regionIndex];
+      const regionWidth = region.width;
+      const regionHeight = region.height;
+      const rainReadChannels = compactPrecipitationFeedback ? 4 : 1;
+      const prefixLength = regionHeight * (regionWidth + 1);
+      const prefixes = new Float64Array(prefixLength);
+      for (let y = 0; y < regionHeight; y++) {
+        const rowStart = y * (regionWidth + 1);
+        const dataStart = y * regionWidth;
+        prefixes[rowStart] = 0;
+        for (let x = 0; x < regionWidth; x++) {
+          prefixes[rowStart + x + 1] = prefixes[rowStart + x] + region.data[(dataStart + x) * rainReadChannels];
+        }
+      }
+      region.prefixes = prefixes;
+      for (const station of region.stations)
+        stationRainRegions.set(station, region);
+    }
 
     function pixelOffset(stationX, stationY)
     {
@@ -10731,19 +11023,34 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       const stationX = station.getXpos();
       const stationY = station.getYpos();
       station.measure({
-        baseData,
-        waterData,
-        lightData,
+        baseData : sample.baseData,
+        waterData : sample.waterData,
+        lightData : sample.lightData,
         baseRow0Offset : pixelOffset(stationX, stationY - 1),
         baseRow1Offset : pixelOffset(stationX, stationY),
         baseRow2Offset : pixelOffset(stationX, stationY + 1)
       });
-      station.calculateOverheadClouds(cloudWaterData, cloudWallData, cloudWidth, sim_res_y,
+      station.calculateOverheadClouds(sample.cloudWaterData, sample.cloudWallData, cloudWidth, sim_res_y,
                                       stationX - cloudXStart, stationY, cellHeight);
       station.measureRain(stationRainRegions.get(station) || null);
     }
+  }
 
-    return stations;
+  function measureWeatherStations()
+  {
+    pollWeatherStationReadback(); // harvest an in-flight sample if the fence signaled
+    if (weatherStationReadback.batch)
+      return weatherStations.slice(); // previous sample still settling; gauges keep their data
+
+    const stations = weatherStations.slice();
+    if (stations.length == 0) {
+      clearRainGaugeAccumulation();
+      return stations;
+    }
+    const geometry = computeStationSamplingGeometry(stations);
+    if (weatherStationReadback.syncCapable && tryEnqueueWeatherStationReadback(geometry))
+      return stations; // sample in flight; pollWeatherStationReadback() harvests it
+    return measureWeatherStationsSync(geometry);
   }
 
   function clearRainGaugeAccumulation()
@@ -10819,19 +11126,34 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
     }
 
-    clockEl.hidden = false;
-    clockTimeEl.textContent = formatClockTime(simDateTime);
-    clockDateEl.textContent = simDateTime.toLocaleDateString('en-US', {
+    clockEl.hidden = false; // in case the day/night toggle hid it in the meantime
+
+    // updateSunlight() calls this every frame; the visible strings change at
+    // most once per sim-minute, so only touch the DOM when they do.
+    const timeString = formatClockTime(simDateTime);
+    const dateString = simDateTime.toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric'
     });
-    clockRunningForEl.textContent = formatElapsedTime(simElapsedMilliseconds);
+    const runningString = formatElapsedTime(simElapsedMilliseconds);
+    const cheapKey = timeString + '|' + dateString + '|' + runningString;
+    if (cheapKey === lastClockTextKey)
+      return; // nothing visible could have changed: not even the sun event
+    lastClockTextKey = cheapKey;
+    clockTimeEl.textContent = timeString;
+    clockDateEl.textContent = dateString;
+    clockRunningForEl.textContent = runningString;
 
     const {eventName, eventTime} = getNextSolarEvent();
     clockSolarEventEl.textContent = eventTime ? formatClockTime(eventTime) : `No ${eventName.toLowerCase()} today`;
     clockSolarCountdownEl.textContent = eventTime ? `in ${formatElapsedTime(eventTime - simDateTime)}` : '';
-    clockSolarIconEl.querySelector('[data-solar-icon="sunrise"]').hidden = eventName != 'Sunrise';
-    clockSolarIconEl.querySelector('[data-solar-icon="sunset"]').hidden = eventName != 'Sunset';
+    if (clockSolarSunriseIconEl && clockSolarSunsetIconEl) {
+      clockSolarSunriseIconEl.hidden = eventName != 'Sunrise';
+      clockSolarSunsetIconEl.hidden = eventName != 'Sunset';
+    } else {
+      clockSolarIconEl.querySelector('[data-solar-icon="sunrise"]').hidden = eventName != 'Sunrise';
+      clockSolarIconEl.querySelector('[data-solar-icon="sunset"]').hidden = eventName != 'Sunset';
+    }
   }
 
   function onUpdateTimeOfDaySlider()
@@ -11040,7 +11362,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-16.124');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-28.1');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
@@ -11098,8 +11420,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       }
 
       if (!guiControls.paused) {
-        console.log(FPS + ' FPS   ' + guiControls.IterPerFrame + ' Iterations / frame      ' + FPS * guiControls.IterPerFrame + ' Iterations / second');
-
         if (guiControls.auto_IterPerFrame && !airplaneMode) {
           guiControls.IterPerFrame = automaticSimulationIterations(
             guiControls.IterPerFrame, FPS, guiControls.autoFpsTarget, animationFrameCeiling);

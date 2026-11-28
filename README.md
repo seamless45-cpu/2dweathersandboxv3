@@ -128,6 +128,14 @@ Precipitation is simulated using discrete particles but can be viualized as both
 
 Weather stations estimate cloud cover from a batched sample of the liquid cloud-water column above each station, using a 21-cell-wide viewing cone (10 cells to either side). Cloud fraction uses the same optical-density relationship as the renderer, and solid terrain/building cells are excluded from the sky scan. Station cards have separate Weather and Rain pages; scroll up or down over a station to switch between them. Their cards stay a fixed screen size while zooming, but remain anchored to their simulation locations. The current temperature and rain rate are shown prominently without labels in adaptive high-contrast text. The station icon and regular weather readings are on the Weather page, while precipitation totals, duration, peak rate, and sky conditions are on the Rain page. A hover hint indicates the scroll interaction, and card text is clipped at the edges. Station labels and the simulation clock sample the scene periodically and switch between light and dark text for contrast. The icon assets and license notice are in `resources/icons/weather`. Rain totals use liquid precipitation deposited at the surface within the station's existing 2.5 km sampling radius. A GPU-side accumulator retains deposition between station samples; the 0.2 mm tipping bucket reports rate over a simulation-time-based rolling window. Rain duration tracks intervals with at least 0.01 mm of deposited rain, while the rain icon requires a bucket tip. Totals retain sampled deposition. Deposition mass is model-calibrated rather than expressed in kilograms, so millimeter conversion uses the same calibration as soil-water accumulation.
 
+## Physics
+
+The **Physics** folder (options menu) holds physical-model switches, separate from the visual and quality settings. It currently contains one toggle, **Complex Charge Separation**, which is **off by default**; the legacy cloud-density lightning trigger is in charge until you turn it on.
+
+When enabled, lightning is no longer initiated by a random freezing-droplet roll. A reduced model of non-inductive graupel–ice electrification runs on the GPU once per simulation iteration and tracks, per cell, the charge carried by small ice crystals (lofted by the updraft) and by graupel (settling), plus a "breakdown reservoir" that accumulates the electrical work the separation does. Charge follows the Takahashi sign regime: graupel charges negatively below a liquid-water-dependent reversal temperature and positively above it, which reproduces the classic thunderstorm tripole (positive anvil over negative mid-levels) and its inverted warm-core counterpart. A cell flashes when its reservoir reaches the breakdown threshold and it has recovered from its previous flash; flash intensity scales with the collision power at breakdown, so strong storms fire harder, more often and with more cloud-to-ground strokes than weak convection. Lightning originates in the charged cell, not at a freezing droplet.
+
+The model is real physics at sandbox fidelity — not a reskin of the legacy trigger — and it fails soft: if the charge module or its shader cannot be created, the toggle refuses to engage and the legacy trigger keeps running. Turn it off again to return to the legacy behaviour; saved settings carry the choice like any other option. See `physics/README.md` for the model outline and the files involved.
+
 ## Sharing weather-station data on a LAN
 The **Exclusive Features** menu includes **Share Weather Data to LAN**. To use it, run `python lan_weather_server.py` from this project folder on the computer running the simulation, then open the app on that computer (either `http://127.0.0.1:8000/` from this helper or a local development server such as `http://127.0.0.1:5500/`) and enable sharing. The helper's publishing API is always at `http://127.0.0.1:8000`; the server prints the LAN URL for the JSON endpoint:
 
@@ -519,6 +527,18 @@ by GPU and workload; this does not guarantee that rendering is no longer the
 bottleneck.
 The lighting pass also skips the fire-colour conversion when smoke produces
 exactly zero fire light; smoky and burning cells retain the same calculation.
+
+Per-frame overhead outside the GPU passes has been cut as well: the wall clock
+no longer forces layout or DOM writes when its visible text has not changed, the
+per-second FPS log to the console is gone, mousemove handlers use a cached canvas
+rect instead of `getBoundingClientRect()`, and weather-station cards repaint at
+10 Hz rather than every frame (interactive changes repaint immediately). The
+weather-station sampler no longer stalls the frame with synchronous
+`gl.readPixels` calls: each sample is issued into pack buffers behind a fence and
+harvested once the fence signals (see the comment in `app.js`), with an automatic
+synchronous fallback if pack buffers cannot be allocated. A `station readback
+poll` is included in the opt-in profile report. These changes remove CPU-side
+jitter; the GPU workload is unchanged.
 
 Lightning rendering computes each slot's lifetime, flicker, intensity and
 variant-specific curves once in a small GPU state pass, rather than repeating

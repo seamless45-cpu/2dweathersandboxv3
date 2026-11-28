@@ -28,8 +28,9 @@ assert.match(app,/gl\.uniform1f\(gl\.getUniformLocation\(precipitationProgram, '
 assert.match(precip,/compactFeedback \? 1\.0 : iterNum/);
 assert.match(precip,/compactFeedback \? vec4\(2\.0, 2\.0, 0\.0, 1\.0\)/);
 assert.match(location,/compactFeedback \? 1\.0 : max\(iterNum, 1\.0\)/);
-assert.match(app,/compactPrecipitationFeedback \? gl.RGBA : gl.RED, gl.FLOAT, buffers.data/);
-assert.match(app,/buffers\.data\[\(dataStart \+ x\) \* rainReadChannels\]/);
+assert.match(app,/compactPrecipitationFeedback \? gl.RGBA : gl.RED, gl.FLOAT, 0\);/);
+assert.match(app,/enqueueRead\(cloudWallData, wallFrameBuff, gl.COLOR_ATTACHMENT2/);
+assert.match(app,/region\.data\[\(dataStart \+ x\) \* rainReadChannels\]/);
 assert.match(app,/getParameter\(gl\.ALIASED_POINT_SIZE_RANGE\)/);
 assert.match(precip,/float pntSurface = pntSize \* pntSize/);
 assert.match(app,/gl\.pixelStorei\(gl\.UNPACK_ALIGNMENT, 1\);\s*gl\.texImage2D\([\s\S]*?artwork\.data\);\s*gl\.pixelStorei\(gl\.UNPACK_ALIGNMENT, 4\)/);

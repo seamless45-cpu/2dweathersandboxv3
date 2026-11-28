@@ -104,7 +104,7 @@ check('full slots cause a retry next frame, not lost clicks or overwritten event
   /if \(acceptedSlot < 0\) return;[\s\S]*?pendingArtificialLightning\[0\] === sample\.strike\) pendingArtificialLightning\.shift\(\)/.test(app) &&
   /slot == freeSlot/.test(location) && /lightningSlotEnd\(data, meta\)/.test(location));
 check('manual strike pass runs when precipitation is disabled and acknowledges once',
-  /if \(guiControls.enablePrecipitation \|\| pendingArtificialLightning.length > 0\)/.test(app) &&
+  /if \(guiControls.enablePrecipitation \|\| pendingArtificialLightning.length > 0 \|\|[\s\S]{0,80}complexChargeSeparation && chargeSeparationSystem\)/.test(app) &&
   /manualLightningReadback\.request\(lightningDataFrameBuffs\[lightningDataSrc\], sample\)/.test(app) &&
   /countedSlotStartIter\[acceptedSlot\] = sample\.iteration/.test(app) && /soundSystem\.soundThunder\(targetX, manualSlotReadback/.test(app));
 check('artificial channel and rod share the same extended animation clock and lifetime',
