@@ -27,6 +27,10 @@ const vm = require('vm');
 
 const ROOT = path.join(__dirname, '..');
 const APP_JS = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+// The Physics driver module is loaded by index.html before app.js; run it in
+// the same context so startup also exercises the charge separation system's
+// creation path (textures, programmes, the 1×1 feedback), not just app.js.
+const PHYSICS_JS = fs.readFileSync(path.join(ROOT, 'physics/chargeSeparation.js'), 'utf8');
 
 let pass = 0;
 let fail = 0;
@@ -425,6 +429,7 @@ function runStartup(phase) {
 
   vm.createContext(sandbox);
   try {
+    vm.runInContext(PHYSICS_JS, sandbox, { filename: 'physics/chargeSeparation.js' });
     vm.runInContext(APP_JS, sandbox, { filename: 'app.js' });
   } catch (error) {
     spy.consoleErrorCalls.push('app.js threw at parse time: ' + (error && error.message));
@@ -454,9 +459,9 @@ function assertStartupCompleted(name, result) {
   // ---------------------------------------------------------
   const A = await runStartup();
   assertStartupCompleted('happy path', A);
-  const shadersAndCommon = A.spy.fetchCalls.filter((url) => url.indexOf('shaders/') === 0 || url.indexOf('/shaders/') >= 0);
-  check('happy path: all 33 shader and include files were requested',
-        new Set(shadersAndCommon).size === 33,
+  const shadersAndCommon = A.spy.fetchCalls.filter((url) => url.indexOf('shaders/') === 0 || url.indexOf('/shaders/') >= 0 || url.indexOf('physics/') === 0 || url.indexOf('/physics/') >= 0);
+  check('happy path: all 34 shader and include files were requested',
+        new Set(shadersAndCommon).size === 34,
         'got ' + new Set(shadersAndCommon).size);
   check('happy path: no file needed a retry', [...A.spy.fetchAttempts.values()].every((n) => n === 1));
   for (const image of ['resources/img/noise_texture.jpg', 'resources/img/surfaceTextureMap-2048.png',

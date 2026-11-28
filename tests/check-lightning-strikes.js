@@ -534,7 +534,7 @@ check('a storm strong enough to freeze strikes immediately with no fixed cooldow
 check('the strike count recovered from the summed feedback texel is not capped',
   !/clamp\(round\(incomingRaw\[START_ITERNUM\]/.test(locationShader) &&
   !/64\.0\).*strikeCount/.test(locationShader) &&
-  /float strikeCount = max\(round\(incomingRaw\[START_ITERNUM\] \/ \(compactFeedback \? 1\.0 : max\(iterNum, 1\.0\)\)\), 1\.0\);/.test(locationShader),
+  /float strikeCount = max\(round\(incomingRaw\[START_ITERNUM\] \/ \((chargeArmed \|\| )?compactFeedback \? 1\.0 : max\(iterNum, 1\.0\)\)\), 1\.0\);/.test(locationShader),
   'a cap turns a dense storm into a storm with no lightning at all');
 
 check('evaporating droplets splatting vapor into (1, 0) cannot book phantom zero-intensity strikes',

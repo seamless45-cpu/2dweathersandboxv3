@@ -23,7 +23,7 @@
 
 'use strict';
 
-const VERSION = '2026-11-16.124';
+const VERSION = '2026-11-28.1';
 
 const APP_CACHE_PREFIX = 'weather-sandbox-';
 const SHELL_CACHE_PREFIX = APP_CACHE_PREFIX + 'shell-';
@@ -52,6 +52,9 @@ const PRECACHE = [
   './resources/fonts/orbitron-variable.ttf',
   './lightningGenerator.js',
   './upstreamLightningGenerator.js',
+  './physics/chargeSeparation.js',
+  './physics/chargeSeparationShader.frag',
+  './physics/README.md',
   './libraries/chart.js',
   './libraries/chartjs-adapter-date-fns.js',
   './libraries/dat.gui.min.js',

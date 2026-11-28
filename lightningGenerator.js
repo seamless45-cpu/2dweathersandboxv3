@@ -2,7 +2,7 @@
  * leader intensity. Both come from Niels747's artwork; no unused second bolt
  * is generated. The legacy network API remains for offline compatibility. */
 if (typeof importScripts === 'function')
-  importScripts('./upstreamLightningGenerator.js?v=2026-11-16.113');
+  importScripts('./upstreamLightningGenerator.js?v=2026-11-28.1');
 
 onmessage = (event) => {
   const msg = event.data || {};

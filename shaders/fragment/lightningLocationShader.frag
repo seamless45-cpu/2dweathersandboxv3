@@ -26,6 +26,15 @@ uniform bool compactFeedback; // half-float feedback encodes count directly
 uniform float artificialStrikeVariant; // which kind of event a manual click queues (see app.js)
 uniform float simHeightMeters; // simulation height in meters, for physical strike ranges
 
+// Complex charge separation (physics/, Physics > Complex Charge Separation).
+// When the gate is armed, the charge model owns lightning initiation: the
+// legacy cloud-density trigger is already closed (its gate lives in the
+// precipitation shader), and here the charge feedback replaces the droplet
+// feedback as the strike source. The charge feedback is always count-encoded
+// (one additive entry per initiating cell), in either float format.
+uniform sampler2D chargeFeedbackTex;
+uniform float complexChargeSeparationGate; // 1.0 => the charge model owns strikes
+
 #include "common.glsl"
 
 // Lightning rods (placed with the Lightning Rod tool in app.js). rodPositions[].x
@@ -318,7 +327,12 @@ void main()
   // every iteration, so anything in it was formed this iteration - and the count is
   // only used to average the position and the intensity.
   vec4 incomingRaw = texelFetch(precipFeedbackTex, ivec2(1, 0), 0);
-  float strikeCount = max(round(incomingRaw[START_ITERNUM] / (compactFeedback ? 1.0 : max(iterNum, 1.0))), 1.0);
+  bool chargeArmed = complexChargeSeparationGate > 0.5;
+  // When the charge model is armed it is the only natural strike source;
+  // its feedback is count-encoded regardless of the droplet encoding.
+  if (chargeArmed)
+    incomingRaw = texelFetch(chargeFeedbackTex, ivec2(0, 0), 0);
+  float strikeCount = max(round(incomingRaw[START_ITERNUM] / (chargeArmed || compactFeedback ? 1.0 : max(iterNum, 1.0))), 1.0);
   vec4 incoming = vec4(incomingRaw.xy / strikeCount,
                        iterNum,
                        incomingRaw[INTENSITY] / strikeCount);
@@ -326,6 +340,8 @@ void main()
   // Evaporating droplets near the bottom-left corner can splat small positive VAPOR
   // (channel 2 == START_ITERNUM) into (1, 0), leaving INTENSITY at 0; require both
   // channels so phantom zero-intensity vapor splats never hijack a lightning slot.
+  // (The charge feedback writes counts, not iterations, and requires the same two
+  // channels for the same reason: an empty texel is all zeroes.)
   bool hasNewStrike = incomingRaw[START_ITERNUM] >= 0.5 && incomingRaw[INTENSITY] >= 0.5;
   bool isArtificial = artificialStrike.w > 0.5;
   if (isArtificial) {

@@ -280,6 +280,7 @@ function walk(dir, out) {
 }
 
 for (const file of walk('shaders', [])) required.add(file);
+for (const file of walk('physics', [])) required.add(file);
 for (const file of walk('libraries', [])) required.add(file);
 for (const file of walk('resources/fonts', [])) {
   if (file.endsWith('.woff2')) required.add(file);
