@@ -455,12 +455,18 @@ The GitHub Pages site has a canonical URL, indexable descriptive content and a s
 ### Interface theme and sounds
 
 The interface uses the locally bundled Orbitron font (SIL Open Font License,
-`resources/fonts/Orbitron-OFL.txt`) and sharp, unblurred sci-fi panels. Short UI cues use locally bundled [Kenney UI Audio](https://github.com/Calinou/kenney-ui-audio) samples
-(CC0; see `resources/sounds/ui/LICENSE.txt`). They play only after interaction and follow
+`resources/fonts/Orbitron-OFL.txt`) and sharp, unblurred sci-fi panels. The simulation
+controls live in a full-width command deck pinned to the bottom of the screen: category
+tabs span the top of the bar and the open category's controls flow in a responsive grid
+below it. Short UI cues are synthesized at build time by `tools/generate-ui-sounds.js`
+(activate chirps, a confirm sweep, a toggle relay, slider data pips and a denial buzz;
+see `resources/sounds/ui/*.wav`). They play only after interaction and follow
 the existing **Sound** setting; disabling sound also silences the interface cues.
-Interface animations use finite JavaScript effects. Removing UI backdrop filters avoids
-that compositor work, but does not establish that the simulation or lightning
-rendering meets a particular frame rate.
+Interface motion uses finite JavaScript effects (staggered control reveals, click
+feedback, deny shakes) plus CSS ambient animations on the boot screen and the deck
+scan line; `prefers-reduced-motion` disables the ambient loops. Removing UI backdrop
+filters avoids that compositor work, but does not establish that the simulation or
+lightning rendering meets a particular frame rate.
 
 ### What the realistic pass spends, and what was removed
 
