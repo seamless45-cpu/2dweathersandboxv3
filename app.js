@@ -7788,8 +7788,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-28.2'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-28.2')
+    loadSourceFile('shaders/common.glsl?v=2026-11-28.3'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-28.3')
   ]);
 
   const [
@@ -7807,6 +7807,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightingShader,
     lightningLocationShader,
     lightningRenderStateShader,
+    lightningActiveShader,
     setupShader,
     temperatureDisplayShader,
     airQualityDisplayShader,
@@ -7839,6 +7840,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     'lightingShader.frag',
     'lightningLocationShader.frag',
     'lightningRenderStateShader.frag',
+    'lightningActiveShader.frag',
     'setupShader.frag',
     'temperatureDisplayShader.frag',
     'airQualityDisplayShader.frag',
@@ -7862,7 +7864,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   // fatally: if the file (or its driver module) is missing, the simulation
   // still starts and the Physics > Complex Charge Separation toggle refuses
   // to engage instead of breaking startup.
-  const chargeSeparationShaderSource = await loadSourceFile('physics/chargeSeparationShader.frag?v=2026-11-28.2').catch(function(error) {
+  const chargeSeparationShaderSource = await loadSourceFile('physics/chargeSeparationShader.frag?v=2026-11-28.3').catch(function(error) {
     console.warn('Complex charge separation unavailable: ' + (error && error.message ? error.message : error));
     return null;
   });
@@ -7880,6 +7882,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   const lightningLocationProgram = createProgram(simVertexShader, lightningLocationShader);
   const lightningRenderStateProgram = createProgram(simVertexShader, lightningRenderStateShader);
+  const lightningActiveProgram = createProgram(simVertexShader, lightningActiveShader);
 
   const setupProgram = createProgram(simVertexShader, setupShader);
 
@@ -8371,6 +8374,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   precipitationFeedbackFrameBuff = gl.createFramebuffer();
   const lightningDataFrameBuffs = [gl.createFramebuffer(), gl.createFramebuffer()];
   const lightningRenderStateFrameBuff = gl.createFramebuffer();
+  const lightningActiveFrameBuff = gl.createFramebuffer();
+  // 1 x 1 "is any strike animating right now?" flag, refreshed by a tiny pass
+  // after the render-state pass each frame. The full-screen scene shader
+  // samples it to skip the six-tap per-pixel slot scan when the sky is quiet.
+  // Initialised to 255 (active) so the first frames behave exactly like the
+  // unconditional scan until the flag pass runs.
+  const lightningActiveTexture = gl.createTexture();
 
   let lastSuperboltCheckIteration = 0;
   let lightningReadbackGeneration = 0;
@@ -8554,6 +8564,16 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.bindFramebuffer(gl.FRAMEBUFFER, lightningRenderStateFrameBuff);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, lightningRenderStateTexture, 0);
+  gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+
+  gl.bindTexture(gl.TEXTURE_2D, lightningActiveTexture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 0, 0, 255]));
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, lightningActiveFrameBuff);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, lightningActiveTexture, 0);
   gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
 
   // Load images together so one request does not delay the rest.
@@ -8771,7 +8791,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-28.2');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-28.3');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -9086,6 +9106,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningTex'), 7);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningDataTex'), 8);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningRenderStateTex'), 11);
+  gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningActiveTex'), 12);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'ambientLightTex'), 9);
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'dryLapse'), dryLapse);
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'cellHeight'), cellHeight);
@@ -10168,6 +10189,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       gpuProfiler.end('lightning render state');
 
+      // Fold the six slot states into a 1 x 1 flag the full-screen scene pass
+      // can test with a single texelFetch instead of scanning every slot per
+      // pixel. Cheap (six taps on a 1 x 1 target) and exact.
+      gl.useProgram(lightningActiveProgram);
+      gl.uniform1i(getUniformLoc(lightningActiveProgram, 'lightningRenderStateTex'), 0);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, lightningRenderStateTexture);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, lightningActiveFrameBuff);
+      gl.viewport(0, 0, 1, 1);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
       if (ambientLightDirty) { //  Ambient Light Calculation
         gpuProfiler.begin('ambient blur');
         gl.bindVertexArray(postProcessingVao);
@@ -10337,6 +10369,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.bindTexture(gl.TEXTURE_2D, rodDataTexture);
       gl.activeTexture(gl.TEXTURE11);
       gl.bindTexture(gl.TEXTURE_2D, lightningRenderStateTexture);
+      gl.activeTexture(gl.TEXTURE12);
+      gl.bindTexture(gl.TEXTURE_2D, lightningActiveTexture);
       if (hasLightningCoverage)
         gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE, gl.COLOR_ATTACHMENT2, gl.COLOR_ATTACHMENT3]);
       else if (hasLightningBloom)
@@ -11373,7 +11407,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-28.2');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-28.3');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

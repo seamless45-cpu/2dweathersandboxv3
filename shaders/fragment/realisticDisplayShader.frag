@@ -24,6 +24,7 @@ uniform sampler2D curlTex;
 uniform sampler2D lightningTex;        // the bolt: one channel, for a stroke
 uniform sampler2D lightningDataTex;
 uniform sampler2D lightningRenderStateTex;
+uniform sampler2D lightningActiveTex; // 1 x 1 flag from the render-state pass: is any slot animating?
 
 uniform sampler2D ambientLightTex;
 
@@ -105,6 +106,10 @@ vec3 lightningEmission = vec3(0.0);
 float shadowLight;
 
 vec3 onLight; // extra light that lights up objects, just like sunlight and shadowlight
+// Whether any strike slot is animating this frame. Read once per fragment from
+// the tiny flag texture, so the per-pixel scan of all six slots is skipped
+// entirely when the sky is quiet.
+bool lightningStrikeActive = true;
 vec3 rodGlow = vec3(0.0); // the rod's own light (tip corona, strike surge): drawn over whatever stands in front of it
 // Derivatives captured before any divergent strike, terrain or cloud branches.
 // These describe one actual HDR render-target pixel, including render scale/zoom.
@@ -807,7 +812,8 @@ vec4 computeAirColor(vec2 bndFragCoord)
   // Slots are independent, so a new strike never truncates a running one.
   vec3 lightningBoltLight = vec3(0.0); // special discharge channels
   vec3 upstreamGroundLight = vec3(0.0); // ordinary CG retains upstream radiance
-  for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
+  // Quiet sky: six texelFetches across every scene pixel saved for free.
+  for (int slot = 0; lightningStrikeActive && slot < LIGHTNING_SLOTS; slot++) {
     if (!inLightningWorldTile())
       break; // no channel, crawler or lightning illumination in repeated tiles
     // The per-strike timeline is calculated once for each slot in the tiny
@@ -945,8 +951,7 @@ vec4 computeAirColor(vec2 bndFragCoord)
 vec4 getAirColor(vec2 fragCoordIn)
 {
   vec2 bndFragCoord = vec2(fragCoordIn.x, clamp(fragCoordIn.y, 0., resolution.y)); // bound y within range
-  bilerpWallVisPair(baseTex, waterTex, wallTex, bndFragCoord, base, water);
-  wall = texture(wallTex, bndFragCoord * texelSize);                               // texCoord
+  bilerpWallVisPair(baseTex, waterTex, wallTex, bndFragCoord, base, water, wall);
   lightIntensity = texture(lightTex, bndFragCoord * texelSize)[0] / standardSunBrightness;
   return computeAirColor(bndFragCoord);
 }
@@ -968,6 +973,7 @@ void main()
   lightningEmission = vec3(0.0);
   onLight = vec3(0.0);
   rodGlow = vec3(0.0);
+  lightningStrikeActive = texelFetch(lightningActiveTex, ivec2(0, 0), 0).r > 0.5;
   // Precise per-pixel terrain coverage for the flash: how much solid geometry
   // stands in front of this fragment, from the same wall data the silhouette is
   // drawn from - 1 deep inside solid ground, 0 in open air, and the foliage/
@@ -1002,8 +1008,7 @@ void main()
 
   } else {
     vec2 bndFragCoord = vec2(fragCoord.x, clamp(fragCoord.y, 0., resolution.y)); // bound y within range
-    bilerpWallVisPair(baseTex, waterTex, wallTex, bndFragCoord, base, water);
-    wall = texture(wallTex, bndFragCoord * texelSize);                           // texCoord
+    bilerpWallVisPair(baseTex, waterTex, wallTex, bndFragCoord, base, water, wall);
     lightIntensity = texture(lightTex, bndFragCoord * texelSize)[0] / standardSunBrightness;
 
     shadowLight = minShadowLight;
@@ -1352,7 +1357,7 @@ void main()
 
     // A captured strike energizes only the canonical mast, never a repeated copy.
     float strikeGlow = 0.0;
-    for (int slot = 0; slot < LIGHTNING_SLOTS; slot++) {
+    for (int slot = 0; lightningStrikeActive && slot < LIGHTNING_SLOTS; slot++) {
       if (!inLightningWorldTile() || abs(texCoord.x - rod.x) > 0.5)
         break;
       vec4 strikeData = texelFetch(lightningDataTex, ivec2(slot, 0), 0);

@@ -57,7 +57,7 @@ check('both IC entry points delegate to the clipped shared renderer',
   /displayAdaptedFlash\(pos, lightningTime, currentLightningIntensity, true\)/.test(display));
 const events = chunk(display, 'vec3 lightningBoltLight = vec3(0.0)', 'vec3 visibleLightning = displayLightningRadiance(lightningBoltLight');
 check('all channel dispatch and associated illumination are inside the clipped event loop',
-  /for \(int slot = 0; slot < LIGHTNING_SLOTS; slot\+\+\) \{\s*if \(!inLightningWorldTile\(\)\)\s*break;/.test(events) &&
+  /for \(int slot = 0; (lightningStrikeActive && )?slot < LIGHTNING_SLOTS; slot\+\+\) \{\s*if \(!inLightningWorldTile\(\)\)\s*break;/.test(events) &&
   ['displayLightning', 'displayFlash', 'displayPositiveFlash', 'displayExternalLightning', 'displayCloudToCloudLightning'].every(name => events.includes(name + '(')) &&
   !/fract\(texCoord\.x\)|mod\(texCoord\.x/.test(events) && events.includes('onLight +='));
 check('rod capture flashes are clipped but ordinary rod and terrain wrapping remain',

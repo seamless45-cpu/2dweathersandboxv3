@@ -462,6 +462,22 @@ Interface animations use finite JavaScript effects. Removing UI backdrop filters
 that compositor work, but does not establish that the simulation or lightning
 rendering meets a particular frame rate.
 
+### What the realistic pass spends, and what was removed
+
+With default settings the per-frame workload is dominated by (1) the full-screen
+realistic display pass at the selected HDR scale, (2) the simulation iterations
+per frame (auto-adjusted toward the Auto FPS Target), (3) the full-pyramid
+ambient-light blur, and (4) bloom at its selected scale. Two pure-waste fixes
+removed cost without changing the picture: a quiet-sky guard means the display
+pass no longer scans all six lightning slots per pixel when no strike is
+animating (a 1x1 flag written by the tiny render-state pass gates both the
+per-pixel slot scan and the lightning-rod glow loop), and the wall lookup for
+the scene uses the same four taps the wall-aware bilinear already fetches
+instead of a fifth tap. Neither change is visible; both scale with pixel count.
+Volumetric cloud lighting, the 100% HDR/bloom default and the simulation
+iteration count are all intentional, adjustable settings rather than waste:
+Quality and Balanced presets exist for weaker GPUs.
+
 ### Investigating lag on a device
 
 For an investigation of lightning-related lag specifically, open the same page

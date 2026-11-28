@@ -233,9 +233,12 @@ vec4 bilerpWallVis(sampler2D tex, isampler2D wallTex, vec2 pos)
   return mix(mix(a, b, mixAB), mix(c, d, mixCD), mixAB_CD);
 }
 
-// Both fields share the same wall mask and coordinates.
+// Both fields share the same wall mask and coordinates. `nearestWall` receives
+// the wall cell a NEAREST fetch at `pos` would return (texel floor of the
+// position, wrap modes applied to the four taps), so callers do not need their
+// own isampler2D fetch for it.
 void bilerpWallVisPair(sampler2D firstTex, sampler2D secondTex, isampler2D wallTex, vec2 pos,
-                    out vec4 first, out vec4 second)
+                    out vec4 first, out vec4 second, out ivec4 nearestWall)
 {
   vec2 st = pos - vec2(0.5); // calc pixel coordinats
 
@@ -312,4 +315,6 @@ void bilerpWallVisPair(sampler2D firstTex, sampler2D secondTex, isampler2D wallT
 
   first = mix(mix(a, b, mixAB), mix(c, d, mixCD), mixAB_CD);
   second = mix(mix(a2, b2, mixAB), mix(c2, d2, mixCD), mixAB_CD);
+  nearestWall = fpos.x < 0.5 ? (fpos.y < 0.5 ? wa : wc)
+                             : (fpos.y < 0.5 ? wb : wd);
 }
