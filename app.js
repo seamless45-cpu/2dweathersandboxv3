@@ -691,6 +691,10 @@ const guiControls_default = {
   // Native-resolution HDR by default; supersampling remains opt-in.
   hdrQuality : '100%',
   spatialUpscalingEnabled : false, // explicit opt-in to a lower HDR render resolution
+  // Zoomed-out 2x HDR renders the scene at 2x canvas size below ~0.75 zoom (4x the scene
+  // pixels, plus a 2x coverage re-render — the lightning looks sharper but the fill cost
+  // quadruples). Off by default: opt in if your GPU can take it.
+  zoomSupersampleEnabled : false,
   bloomQuality : '100%',
   bloomEnabled : true,
   filmicToneMapping : false,
@@ -1668,7 +1672,7 @@ let zoomHdrFailedSize = '';
 let previousZoomSupersampleActive = false;
 function selectZoomHdrFBO(zoom, enabled)
 {
-  zoomHdrWanted = enabled && (zoomHdrWanted ? zoom < 0.85 : zoom < 0.75);
+  zoomHdrWanted = enabled && guiControls.zoomSupersampleEnabled && (zoomHdrWanted ? zoom < 0.85 : zoom < 0.75);
   const useExtra = zoomHdrWanted && hdrRenderScale < 2.0 && !guiControls.superSharpDetail;
   if (!useExtra) {
     if (zoomHdrFBO) zoomHdrFBO.dispose();
@@ -5795,6 +5799,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     for (const setting of ['filmicToneMapping', 'fxaaEnabled', 'volumetricCloudLighting', 'temporalAAEnabled', 'superSharpDetail', 'realTimeCycle', 'motionBlurEnabled'])
       guiControls[setting] = guiControls[setting] === true;
     guiControls.spatialUpscalingEnabled = guiControls.spatialUpscalingEnabled === true;
+    guiControls.zoomSupersampleEnabled = guiControls.zoomSupersampleEnabled === true;
     guiControls.motionBlurIntensity = clamp(Number(guiControls.motionBlurIntensity) || 0, 0, 350);
     guiControls.fullscreenMode = isDocumentFullscreen();
     if (!['Unlocked', '30', '60', '90', '120', '144', '165', '240'].includes(guiControls.autoFpsTarget))
@@ -6434,6 +6439,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     performanceFolder.add(guiControls, 'spatialUpscalingEnabled')
       .name('Spatial Upscaling (67%)')
       .onChange(() => { temporalHistoryValid = false; motionBlurHistoryValid = false; applyRenderQuality(); });
+    const zoomSupersampleController = performanceFolder.add(guiControls, 'zoomSupersampleEnabled')
+      .name('Zoomed-Out 2x HDR (Lightning Detail)')
+      .onChange(() => { temporalHistoryValid = false; motionBlurHistoryValid = false; });
+    const zoomSupersampleToggleElement = zoomSupersampleController.domElement;
+    if (zoomSupersampleToggleElement)
+      zoomSupersampleToggleElement.title = 'Render the scene at 2x canvas size (4x the pixels, plus a 2x lightning-coverage re-render) whenever the camera is zoomed out below ~0.75. Sharper distant lightning, but a large GPU load — this was the main cause of zoomed-out lag. Off by default.';
     const bloomQualityController = performanceFolder.add(guiControls, 'bloomQuality', ['25%', '35%', '50%', '60%', '75%', '85%', '100%'])
       .name('Bloom Quality')
       .onChange(markCustomRenderQuality);
@@ -7777,8 +7788,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-28.1'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-28.1')
+    loadSourceFile('shaders/common.glsl?v=2026-11-28.2'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-28.2')
   ]);
 
   const [
@@ -7851,7 +7862,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   // fatally: if the file (or its driver module) is missing, the simulation
   // still starts and the Physics > Complex Charge Separation toggle refuses
   // to engage instead of breaking startup.
-  const chargeSeparationShaderSource = await loadSourceFile('physics/chargeSeparationShader.frag?v=2026-11-28.1').catch(function(error) {
+  const chargeSeparationShaderSource = await loadSourceFile('physics/chargeSeparationShader.frag?v=2026-11-28.2').catch(function(error) {
     console.warn('Complex charge separation unavailable: ' + (error && error.message ? error.message : error));
     return null;
   });
@@ -8760,7 +8771,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-28.1');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-28.2');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -11362,7 +11373,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-28.1');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-28.2');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
