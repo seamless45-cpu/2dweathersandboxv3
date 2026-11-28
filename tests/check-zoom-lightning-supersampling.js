@@ -5,7 +5,7 @@ const src=app.slice(app.indexOf('let zoomHdrFBO = null;'),app.indexOf('// Option
 let made=0,disposed=0,complete=true,max=4096;
 class FakeFBO {constructor(w,h){made++;this.width=w;this.height=h;this.frameBuffer={};}dispose(){disposed++;}}
 const gl={MAX_TEXTURE_SIZE:1,FRAMEBUFFER:2,FRAMEBUFFER_COMPLETE:3,RGBA16F:4,RGBA:5,HALF_FLOAT:6,LINEAR:7,getParameter:()=>max,bindFramebuffer:()=>{},checkFramebufferStatus:()=>complete?3:9};
-const guiControls={hdrQuality:'100%',superSharpDetail:false},hdrFBO={width:400,height:300},canvas={width:400,height:300};
+const guiControls={hdrQuality:'100%',superSharpDetail:false,zoomSupersampleEnabled:true},hdrFBO={width:400,height:300},canvas={width:400,height:300};
 const c={FBO:FakeFBO,gl,canvas,guiControls,hdrFBO,hdrRenderScale:1,console:{warn:()=>{}}};vm.createContext(c);vm.runInContext(src,c);
 assert.strictEqual(c.selectZoomHdrFBO(1,true),hdrFBO);
 const high=c.selectZoomHdrFBO(.70,true);assert.notStrictEqual(high,hdrFBO);assert.equal(high.width,800);assert.equal(high.height,600);assert.equal(made,1);
@@ -20,6 +20,11 @@ canvas.width=400;canvas.height=300;guiControls.superSharpDetail=true;assert.stri
 guiControls.superSharpDetail=false;c.hdrRenderScale=2;assert.strictEqual(c.selectZoomHdrFBO(.6,true),hdrFBO);assert.equal(made,3);c.hdrRenderScale=1;
 assert.equal(guiControls.hdrQuality,'100%');assert.equal(c.hdrRenderScale,1);
 assert.match(app,/sceneHdrFBO = selectZoomHdrFBO\(cam\.curZoom/);
+assert.match(app,/zoomSupersampleEnabled : false/);
+assert.match(app,/zoomSupersampleEnabled && \(zoomHdrWanted/);
+guiControls.zoomSupersampleEnabled=false;
+assert.strictEqual(c.selectZoomHdrFBO(.6,true),hdrFBO); // toggle off: no 2x scene, no lag
+guiControls.zoomSupersampleEnabled=true;
 assert.match(app,/previousZoomSupersampleActive/);
 assert.match(app,/const zoomSupersampleActive = sceneHdrFBO\.width >= canvas\.width \* 2 && sceneHdrFBO\.height >= canvas\.height \* 2/);
 assert.doesNotMatch(app,/const zoomSupersampleActive = zoomHdrWanted/);
