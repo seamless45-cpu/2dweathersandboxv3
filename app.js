@@ -818,7 +818,7 @@ function getSceneContrastTextColor(screenX, screenY, owner)
     return '#ffffff';
   let state = sceneContrastStates.get(owner);
   if (!state || state.gl !== gl) {
-    state = {gl, buffer: null, sync: null, size: 0, color: '#ffffff', lastRequest: -Infinity, disabled: false};
+    state = {gl, buffer: null, sync: null, size: 0, allocatedSize: 0, color: '#ffffff', lastRequest: -Infinity, disabled: false};
     sceneContrastStates.set(owner, state);
   }
   if (state.sync) {
@@ -868,10 +868,17 @@ function getSceneContrastTextColor(screenX, screenY, owner)
   const y = clamp(canvas.height - centerY - Math.floor(size / 2) - 1, 0, canvas.height - size);
   if (!state.buffer) state.buffer = gl.createBuffer();
   if (!state.buffer) { state.disabled = true; return state.color; }
+  // Allocate the pack buffer once and re-specify it only if the sample size
+  // ever changes: calling bufferData every sample orphaned the storage and
+  // made the driver discard the readback shadow copy it built for us.
+  const packBytes = size * size * 4;
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, state.buffer);
+  if (state.allocatedSize !== packBytes) {
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, packBytes, gl.STREAM_READ);
+    state.allocatedSize = packBytes;
+  }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.readBuffer(gl.BACK);
-  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, state.buffer);
-  gl.bufferData(gl.PIXEL_PACK_BUFFER, size * size * 4, gl.STREAM_READ);
   sceneContrastProfiler?.cpuBegin('contrast read enqueue');
   gl.readPixels(x, y, size, size, gl.RGBA, gl.UNSIGNED_BYTE, 0);
   sceneContrastProfiler?.cpuEnd('contrast read enqueue');
@@ -7788,8 +7795,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-28.3'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-28.3')
+    loadSourceFile('shaders/common.glsl?v=2026-11-28.4'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-28.4')
   ]);
 
   const [
@@ -7864,7 +7871,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   // fatally: if the file (or its driver module) is missing, the simulation
   // still starts and the Physics > Complex Charge Separation toggle refuses
   // to engage instead of breaking startup.
-  const chargeSeparationShaderSource = await loadSourceFile('physics/chargeSeparationShader.frag?v=2026-11-28.3').catch(function(error) {
+  const chargeSeparationShaderSource = await loadSourceFile('physics/chargeSeparationShader.frag?v=2026-11-28.4').catch(function(error) {
     console.warn('Complex charge separation unavailable: ' + (error && error.message ? error.message : error));
     return null;
   });
@@ -8791,7 +8798,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-28.3');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-28.4');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -11407,7 +11414,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-28.3');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-28.4');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }
