@@ -2987,19 +2987,40 @@ class LoadingBar
     this.#screen.setAttribute('aria-valuemin', '0');
     this.#screen.setAttribute('aria-valuemax', '100');
     this.#screen.innerHTML = `
+      <div class="ls-corner ls-corner-tl" aria-hidden="true"></div>
+      <div class="ls-corner ls-corner-tr" aria-hidden="true"></div>
+      <div class="ls-corner ls-corner-bl" aria-hidden="true"></div>
+      <div class="ls-corner ls-corner-br" aria-hidden="true"></div>
+      <div class="ls-radar" aria-hidden="true">
+        <i class="ls-ring ls-ring-1"></i>
+        <i class="ls-ring ls-ring-2"></i>
+        <i class="ls-ring ls-ring-3"></i>
+        <span class="ls-sweep"></span>
+        <span class="ls-blip ls-blip-1"></span>
+        <span class="ls-blip ls-blip-2"></span>
+        <span class="ls-blip ls-blip-3"></span>
+      </div>
       <div class="loading-brand">
+        <div class="ls-kicker"><span class="ls-kicker-dot"></span>ATMOSPHERIC SYSTEMS // BOOT SEQUENCE</div>
         <svg class="loading-bolt" viewBox="0 0 24 24" aria-hidden="true">
           <path fill="#ffd76a" d="M13 2 L5 13 h4 L8 24 L19.5 10 h-4.5 L17 2 Z"></path>
         </svg>
-        <div class="loading-title">2D Weather Sandbox</div>
+        <div class="loading-title">2D WEATHER <span>SANDBOX</span></div>
         <div class="loading-tagline">Particle microphysics &middot; cloud dynamics &middot; emergent lightning —
           every storm grows out of the fluid physics</div>
       </div>
-      <div class="loading-progress">
-        <span class="loading-percentage"></span>
-        <span class="loading-complete">Complete</span>
+      <div class="ls-console">
+        <div class="loading-progress">
+          <span class="loading-percentage"></span>
+          <span class="loading-complete">Complete</span>
+        </div>
+        <div class="loading-bar-track"><div class="loading-bar-fill"></div></div>
+        <div class="ls-telemetry" aria-hidden="true">
+          <span>SYS.CHK <b>OK</b></span>
+          <span>GPU.LINK <b class="ls-blink">ESTABLISHED</b></span>
+          <span>VORTEX.FIELD <b class="ls-blink ls-blink-2">CALIBRATING</b></span>
+        </div>
       </div>
-      <div class="loading-bar-track"><div class="loading-bar-fill"></div></div>
       <div class="loading-task"></div>
     `;
     this.#progress = this.#screen.querySelector('.loading-percentage');
@@ -7795,8 +7816,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-28.4'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-28.4')
+    loadSourceFile('shaders/common.glsl?v=2026-11-28.5'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-28.5')
   ]);
 
   const [
@@ -7871,7 +7892,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   // fatally: if the file (or its driver module) is missing, the simulation
   // still starts and the Physics > Complex Charge Separation toggle refuses
   // to engage instead of breaking startup.
-  const chargeSeparationShaderSource = await loadSourceFile('physics/chargeSeparationShader.frag?v=2026-11-28.4').catch(function(error) {
+  const chargeSeparationShaderSource = await loadSourceFile('physics/chargeSeparationShader.frag?v=2026-11-28.5').catch(function(error) {
     console.warn('Complex charge separation unavailable: ' + (error && error.message ? error.message : error));
     return null;
   });
@@ -8798,7 +8819,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-28.4');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-28.5');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -11414,7 +11435,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-28.4');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-28.5');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

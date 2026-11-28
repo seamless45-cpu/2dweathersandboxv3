@@ -1,12 +1,15 @@
-/* Locally bundled Kenney interface samples and finite Web Animations.
+/* Locally synthesized sci-fi interface cues and finite Web Animations.
  * All sounds start from user interaction and follow the simulation's Sound setting. */
 (() => {
   'use strict';
   const soundFiles = {
-    activate: 'resources/sounds/ui/click1.wav',
-    toggle: 'resources/sounds/ui/switch6.wav',
-    slider: 'resources/sounds/ui/rollover2.wav'
+    activate: 'resources/sounds/ui/activate.wav',
+    confirm: 'resources/sounds/ui/confirm.wav',
+    toggle: 'resources/sounds/ui/toggle.wav',
+    slider: 'resources/sounds/ui/slider.wav',
+    denial: 'resources/sounds/ui/denial.wav'
   };
+  const soundVolumes = { activate: 0.3, confirm: 0.34, toggle: 0.28, slider: 0.16, denial: 0.32 };
   const sounds = Object.create(null);
   let lastSliderCue = -Infinity;
   if (typeof Chart !== 'undefined' && Chart.defaults && Chart.defaults.font)
@@ -26,7 +29,7 @@
     if (!soundEnabled()) { stopSounds(); return; }
     try {
       const sound = sounds[kind] || (sounds[kind] = new Audio(soundFiles[kind]));
-      sound.volume = kind === 'slider' ? 0.18 : 0.3;
+      sound.volume = soundVolumes[kind] || 0.3;
       sound.currentTime = 0;
       const playing = sound.play();
       if (playing && typeof playing.catch === 'function') playing.catch(() => {});
@@ -45,6 +48,28 @@
     animate(element, [{ filter: 'brightness(1)' }, { filter: 'brightness(1.5)', offset: 0.35 },
       { filter: 'brightness(1)' }], { duration: 200, easing: 'ease-out' });
   }
+  function denyFeedback(element) {
+    animate(element, [{ transform: 'translateX(0)' }, { transform: 'translateX(-4px)', offset: 0.2 },
+      { transform: 'translateX(4px)', offset: 0.4 }, { transform: 'translateX(-3px)', offset: 0.6 },
+      { transform: 'translateX(3px)', offset: 0.8 }, { transform: 'translateX(0)' }],
+      { duration: 240, easing: 'ease-in-out' });
+  }
+  /* Controller rows of a freshly opened deck category rise in with a short stagger. */
+  function cascadeReveal(folder) {
+    const inner = folder.querySelector(':scope > .dg > ul');
+    if (!inner || inner.classList.contains('closed')) return;
+    const rows = inner.querySelectorAll(':scope > li:not(.title)');
+    const limit = Math.min(rows.length, 14);
+    for (let i = 0; i < limit; i++) {
+      animate(rows[i], [{ opacity: 0, transform: 'translateY(9px)' },
+        { opacity: 1, transform: 'translateY(0)' }],
+        { duration: 210, delay: i * 28, easing: 'ease-out', fill: 'backwards' });
+    }
+  }
+  function isDisabled(control) {
+    return control.disabled || control.getAttribute('aria-disabled') === 'true' ||
+      (control.disabled === undefined && control.classList && control.classList.contains('disabled'));
+  }
   function startMotion() {
     const menu = document.getElementById('mainMenuContent');
     panelEntrance(document.getElementById('mainMenuChoice'));
@@ -62,15 +87,26 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startMotion, { once: true });
   else startMotion();
 
+  const controlSelector = 'button, input[type="button"], a, .dg li.title, .dg .close-button, .sim-option-item';
   document.addEventListener('click', event => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target || target.closest('#mainCanvas, #graphCanvas, #dropletInfoCanvas')) return;
     if (target.closest('input[type="checkbox"], input[type="range"], select, .dg .slider')) return;
-    const control = target.closest('button, input[type="button"], a, .dg li.title, .dg .close-button');
-    if (control && !control.disabled && control.getAttribute('aria-disabled') !== 'true') {
+    // Folder tabs: flash the tab and cascade-reveal the newly opened controls.
+    const title = target.closest('.dg li.title');
+    if (title && !isDisabled(title)) {
       cue('activate');
-      controlFeedback(control);
+      controlFeedback(title);
+      const folder = title.closest('li.folder');
+      if (folder) cascadeReveal(folder);
+      return;
     }
+    const control = target.closest(controlSelector);
+    if (!control) return;
+    if (isDisabled(control)) { cue('denial'); denyFeedback(control); return; }
+    if (control.matches('.main-menu-submit')) { cue('confirm'); controlFeedback(control); return; }
+    cue('activate');
+    controlFeedback(control);
   });
   document.addEventListener('change', event => {
     const target = event.target;
