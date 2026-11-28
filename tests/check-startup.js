@@ -460,8 +460,8 @@ function assertStartupCompleted(name, result) {
   const A = await runStartup();
   assertStartupCompleted('happy path', A);
   const shadersAndCommon = A.spy.fetchCalls.filter((url) => url.indexOf('shaders/') === 0 || url.indexOf('/shaders/') >= 0 || url.indexOf('physics/') === 0 || url.indexOf('/physics/') >= 0);
-  check('happy path: all 34 shader and include files were requested',
-        new Set(shadersAndCommon).size === 34,
+  check('happy path: all 35 shader and include files were requested',
+        new Set(shadersAndCommon).size === 35,
         'got ' + new Set(shadersAndCommon).size);
   check('happy path: no file needed a retry', [...A.spy.fetchAttempts.values()].every((n) => n === 1));
   for (const image of ['resources/img/noise_texture.jpg', 'resources/img/surfaceTextureMap-2048.png',
