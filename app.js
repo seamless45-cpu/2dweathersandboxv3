@@ -3124,7 +3124,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   updateLightningRodStatus();
   const artificialLightningStatus = { status : 'Ready' };
 
-  let sliderGradientObserver;
   let cleanupOptionLists;
   let loadedShaderCount = 0;
   const totalShaderCount = 30;
@@ -5594,12 +5593,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.uniform1f(gl.getUniformLocation(postProcessingProgram, 'exposure'), guiControls.exposure);
   }
 
-  function updateSliderGradient(foreground)
-  {
-    foreground.style.backgroundImage = 'none';
-    foreground.style.backgroundColor = '#ffffff';
-  }
-
   // Keep dat.GUI's select as the value/controller adapter, but present our own
   // in-page listbox rather than opening an OS/browser-native option popup.
   function setupInSimOptionLists(gui)
@@ -5800,8 +5793,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   {
     if (cleanupOptionLists)
       cleanupOptionLists();
-    if (sliderGradientObserver)
-      sliderGradientObserver.disconnect();
 
     datGui = new dat.GUI();
     guiControls = { ...guiControls_default, ...JSON.parse(strGuiControls) }; // load settings object
@@ -6700,19 +6691,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     cleanupOptionLists = setupInSimOptionLists(datGui);
 
-    const sliderForegrounds = datGui.domElement.querySelectorAll('.slider-fg');
-    sliderForegrounds.forEach(updateSliderGradient);
-    sliderGradientObserver = new MutationObserver(function(mutations) {
-      mutations.forEach(function(mutation) {
-        if (mutation.target.matches('.slider-fg'))
-          updateSliderGradient(mutation.target);
-      });
-    });
-    sliderGradientObserver.observe(datGui.domElement, {
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['style']
-    });
+    // Slider fills are styled by sci-fi-ui.css (segmented cyan); no inline override needed.
   }
 
   // guiControls.paused = true; // pause before first iteration for debugging
@@ -7816,8 +7795,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   // load shaders
   var [commonSource, commonDisplaySource] = await Promise.all([
-    loadSourceFile('shaders/common.glsl?v=2026-11-28.5'),
-    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-28.5')
+    loadSourceFile('shaders/common.glsl?v=2026-11-28.8'),
+    loadSourceFile('shaders/commonDisplay.glsl?v=2026-11-28.8')
   ]);
 
   const [
@@ -7892,7 +7871,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   // fatally: if the file (or its driver module) is missing, the simulation
   // still starts and the Physics > Complex Charge Separation toggle refuses
   // to engage instead of breaking startup.
-  const chargeSeparationShaderSource = await loadSourceFile('physics/chargeSeparationShader.frag?v=2026-11-28.5').catch(function(error) {
+  const chargeSeparationShaderSource = await loadSourceFile('physics/chargeSeparationShader.frag?v=2026-11-28.8').catch(function(error) {
     console.warn('Complex charge separation unavailable: ' + (error && error.message ? error.message : error));
     return null;
   });
@@ -8819,7 +8798,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     lightningTextureLastStart = performance.now();
     lightningTextureWorkerBusy = true;
 
-    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-28.5');
+    const lightningGeneratorWorker = new Worker('./lightningGenerator.js?v=2026-11-28.8');
     const stop = () => {
       lightningGeneratorWorker.terminate();
       lightningTextureWorkerBusy = false;
@@ -11435,7 +11414,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // version tag: browsers otherwise happily serve a stale .vert/.frag from
     // cache after the sources change (e.g. the cloud-density lightning tuning)
-    var shaderSource = await loadSourceFile(filename + '?v=2026-11-28.5');
+    var shaderSource = await loadSourceFile(filename + '?v=2026-11-28.8');
     if (shaderSource.includes('#include "common.glsl"')) {
       shaderSource = shaderSource.replace('#include "common.glsl"', commonSource);
     }

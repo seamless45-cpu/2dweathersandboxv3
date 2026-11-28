@@ -29,19 +29,19 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="Weather Sandbox" />
-    <link rel="apple-touch-icon" sizes="180x180" href="resources/icons/app/apple-touch-icon.png?v=2026-11-28.5" />
-    <link rel="icon" type="image/png" sizes="192x192" href="resources/icons/app/icon-192.png?v=2026-11-28.5" />
+    <link rel="apple-touch-icon" sizes="180x180" href="resources/icons/app/apple-touch-icon.png?v=2026-11-28.8" />
+    <link rel="icon" type="image/png" sizes="192x192" href="resources/icons/app/icon-192.png?v=2026-11-28.8" />
     <script type="text/javascript" src="libraries/dat.gui.min.js"></script>
     <script type="text/javascript" src="libraries/pako.min.js"></script>
     <script type="text/javascript" src="libraries/chart.js"></script>
     <script type="text/javascript" src="libraries/chartjs-adapter-date-fns.js"></script>
     <!-- Complex charge separation system (Physics folder). Defines window.ComplexChargeSeparation;
          inert until the Physics > Complex Charge Separation toggle is enabled (off by default). -->
-    <script type="text/javascript" src="physics/chargeSeparation.js?v=2026-11-28.5"></script>
-    <script type="text/javascript" src="app.js?v=2026-11-28.5"></script>
+    <script type="text/javascript" src="physics/chargeSeparation.js?v=2026-11-28.8"></script>
+    <script type="text/javascript" src="app.js?v=2026-11-28.8"></script>
     <script type="text/javascript" src="pwa.js"></script>
-    <script defer src="sci-fi-ui.js?v=2026-11-28.5"></script>
-    <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=2026-11-28.5">
+    <script defer src="sci-fi-ui.js?v=2026-11-28.8"></script>
+    <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=2026-11-28.8">
     <style>
         #dg-new-constructor { box-shadow: none; }
 
@@ -108,6 +108,19 @@
         @media (prefers-reduced-motion: reduce) {
             .loading-screen, .loading-screen *, .dg.ac .dg.main::after {
                 animation: none !important;
+            }
+            .interface-status-dot, .interface-kicker, .main-menu-prompt::before, .main-menu-prompt::after,
+            .tips h2::after, .controls h2::after, .support h1::after, .example-files h3::after,
+            .simulation-clock::before, .weather-station, .weather-station .scroller, .weather-station-marker img,
+            .display-mode-toast.is-visible, .diagnostic-legend:not([hidden]), .sim-option-menu,
+            .dg.ac .dg.main > ul:not(:has(> li.folder > .dg > ul:not(.closed)))::after,
+            #deckReopenBtn, #deckReopenBtn::after {
+                animation: none !important;
+            }
+            .main-menu-action, .main-menu-submit, .main-menu-setup input[type="range"]::-webkit-slider-thumb,
+            .main-menu-setup input[type="range"]::-moz-range-thumb, .sim-option-item, .dg.ac .dg.main li.title,
+            .tips, .controls, .support, .example-files, .weather-station-menu-hint, .display-mode-toast {
+                transition: none !important;
             }
         }
 
@@ -1803,7 +1816,7 @@
         }
 
     </style>
-    <link rel="stylesheet" href="sci-fi-ui.css?v=2026-11-28.5" />
+    <link rel="stylesheet" href="sci-fi-ui.css?v=2026-11-28.8" />
 </head>
 
 <body id="body" onload="updateSetupSliders();">
